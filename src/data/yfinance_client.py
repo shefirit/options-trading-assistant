@@ -65,11 +65,24 @@ def _fast_last_price(t) -> Optional[float]:
             return None
 
 
-def is_available() -> bool:
-    """True if yfinance is installed and Yahoo is reachable right now."""
+def is_available(timeout: float = 8.0) -> bool:
+    """True if yfinance is installed and Yahoo is reachable right now.
+
+    Runs with a hard timeout so a slow/blocked network (common on cloud hosts)
+    can never hang the app's startup - it just falls back to demo data instead.
+    """
+    import concurrent.futures
+
+    def _check() -> bool:
+        try:
+            import yfinance as yf  # noqa: F401
+            return _fast_last_price(_ticker("SPY")) is not None
+        except Exception:
+            return False
+
     try:
-        import yfinance as yf  # noqa: F401
-        return _fast_last_price(_ticker("SPY")) is not None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_check).result(timeout=timeout)
     except Exception:
         return False
 
