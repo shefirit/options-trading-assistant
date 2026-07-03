@@ -8,12 +8,7 @@ secondaryBackgroundColor = "#FFFFFF"  # cards, sidebar, inputs
 textColor = "#0F172A"                 # slate ink - very high contrast
 font = "sans serif"
 
-[server]
-# Keep the app running even if the browser tab closes; reconnect by reopening
-# http://localhost:8501 . (run_app.bat opens the browser for you.)
-headless = false
-runOnSave = true
-fileWatcherType = "auto"
-
-[browser]
-gatherUsageStats = false
+# Note: no [server] settings here on purpose. The hosted app needs to run
+# headless (no browser on the server), and run_app.bat opens the browser
+# locally via command-line flags instead. Forcing headless=false here breaks
+# the cloud server.
