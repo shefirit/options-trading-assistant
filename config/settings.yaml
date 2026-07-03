@@ -81,7 +81,3 @@ google_sheet:
   spreadsheet_id: "1soKk5HrlYQqNJi98fBVWYDGSPhCIGUMrK8RyI8yW5RA"
   worksheet_gid: 2063471337
   credentials_file: "google_credentials.json"   # you place this file in the project folder
-
-# Path to your existing Excel trade tracker (kept for reference - the app does NOT write to it).
-excel_tracker:
-  path: "C:/Users/rshef/OneDrive/Desktop/תוכנית-מסחר-והשקעות-שנתית-פוזיטיבי.xlsx"
