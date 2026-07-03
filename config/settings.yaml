@@ -1,0 +1,87 @@
+# ============================================================
+#  Global settings - your account, targets, and risk limits.
+#  Edit these numbers as your plan changes. Everything in the
+#  app reads from this file, so you never touch the code.
+# ============================================================
+
+account:
+  starting_capital: 100000      # dollars you began with
+  platform: "thinkorswim PaperMoney"
+
+# Your income goals (from your Notion hub).
+targets:
+  weekly: 808
+  monthly: 3500
+  year_one_end_balance: 142000
+
+# Hard risk limits the app will warn you about.
+risk_limits:
+  monthly_bp_limit: 50000       # do not use more than this in buying power per month
+  position_delta_red_flag: 90   # if a position's net delta passes this, it is a red flag
+
+# Underlyings the app is allowed to scan, grouped by option style.
+# European-style = cash settled, no early assignment (good for credit spreads).
+# US-style = you can be assigned early; you must own 100 real shares for covered calls.
+underlyings:
+  european_style:               # for credit spreads / iron condors
+    - SPX      # S&P 500 - your usual go-to (just an example, not the only choice)
+    - NDX      # Nasdaq 100
+    - RUT      # Russell 2000
+    - XSP      # Mini S&P 500 (smaller version of SPX)
+  us_style:                     # ETFs for covered calls, PMCC, cash secured puts
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+  # Default list the "Premium finder" compares (you can change it in the app).
+  # A mix of calm ETFs and livelier stocks so you can see the premium range.
+  premium_watchlist:
+    - SPY
+    - QQQ
+    - IWM
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMD
+    - TSLA
+    - AMZN
+    - META
+    - GOOGL
+    - AVGO
+
+  # Quality, liquid, big-volume stocks with solid fundamentals and deep options
+  # markets. Used for cash secured puts, covered calls, and PMCC (US-style).
+  # These are examples of strong, well-known companies - not trade advice.
+  stocks:
+    - AAPL   # Apple
+    - MSFT   # Microsoft
+    - NVDA   # Nvidia
+    - AMZN   # Amazon
+    - GOOGL  # Alphabet (Google)
+    - META   # Meta
+    - AVGO   # Broadcom
+    - JPM    # JPMorgan
+    - V      # Visa
+    - COST   # Costco
+    - HD     # Home Depot
+    - WMT    # Walmart
+    - KO     # Coca-Cola
+    - PG     # Procter & Gamble
+    - JNJ    # Johnson & Johnson
+
+# The Notion hub this app mirrors.
+notion:
+  hub_url: "https://app.notion.com/p/38803e90e032812d8958c92992c269ed"
+
+# Your Google Sheet trade log. The "Log this trade" button writes here once you
+# finish the one-time setup in src/logging_tools/sheets_logger.py. Until then it
+# saves to a local backup file automatically.
+google_sheet:
+  enabled: true
+  spreadsheet_id: "1soKk5HrlYQqNJi98fBVWYDGSPhCIGUMrK8RyI8yW5RA"
+  worksheet_gid: 2063471337
+  credentials_file: "google_credentials.json"   # you place this file in the project folder
+
+# Path to your existing Excel trade tracker (kept for reference - the app does NOT write to it).
+excel_tracker:
+  path: "C:/Users/rshef/OneDrive/Desktop/תוכנית-מסחר-והשקעות-שנתית-פוזיטיבי.xlsx"

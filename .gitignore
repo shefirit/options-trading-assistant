@@ -1,0 +1,24 @@
+# Secrets - NEVER commit these
+.env
+token.json
+*.token
+google_credentials.json
+google_sheet_webhook.txt
+trade_log.xlsx
+.streamlit/secrets.toml
+streamlit.log
+run_test.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

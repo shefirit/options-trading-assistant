@@ -1,0 +1,26 @@
+# ============================================================
+#  Big scheduled market events that tend to move prices and
+#  volatility. The app warns you when one lands inside your
+#  trade window (so you can avoid selling premium right into it).
+#
+#  These are EDITABLE. Please verify the FOMC dates against the
+#  official schedule at federalreserve.gov/monetarypolicy and
+#  update if needed. Options expiration and the monthly jobs
+#  report are figured out automatically (3rd Friday / 1st Friday).
+# ============================================================
+
+# Federal Reserve interest-rate decisions (the announcement day).
+# 2026 schedule - VERIFY at federalreserve.gov.
+fomc_decisions:
+  - 2026-01-28
+  - 2026-03-18
+  - 2026-04-29
+  - 2026-06-17
+  - 2026-07-29
+  - 2026-09-16
+  - 2026-10-28
+  - 2026-12-09
+
+# Optional: add other dates you care about (CPI, big conferences, etc.)
+# Format:  - { date: 2026-07-15, label: "CPI inflation report" }
+custom_events: []

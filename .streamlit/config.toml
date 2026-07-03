@@ -1,0 +1,19 @@
+# Modern, clean design system. Cool near-white canvas, white cards,
+# slate ink text, and a single indigo accent. High contrast for accessibility.
+[theme]
+base = "light"
+primaryColor = "#4F46E5"              # indigo accent - buttons, slider, focus
+backgroundColor = "#F8F9FC"           # cool near-white canvas
+secondaryBackgroundColor = "#FFFFFF"  # cards, sidebar, inputs
+textColor = "#0F172A"                 # slate ink - very high contrast
+font = "sans serif"
+
+[server]
+# Keep the app running even if the browser tab closes; reconnect by reopening
+# http://localhost:8501 . (run_app.bat opens the browser for you.)
+headless = false
+runOnSave = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false

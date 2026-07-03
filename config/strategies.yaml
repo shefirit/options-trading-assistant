@@ -1,0 +1,253 @@
+# ============================================================
+#  Your 8 strategies - the single source of truth for the rules.
+#  This mirrors your Notion SOP. When a rule changes (say you
+#  tighten the short-leg delta to 0.08), change it HERE only.
+#  The scanner and the checklist both read from this file.
+#
+#  Field guide (plain English):
+#    short_leg_delta_max : biggest delta allowed on the option you SELL
+#                          (delta is roughly the chance it finishes in the money)
+#    dte_target/min/max  : days to expiration you want at entry
+#    profit_target_pct   : close when you have kept this % of the credit
+#    stop_loss_multiple  : close if the loss reaches this many times the credit
+#    time_exit_dte       : close no matter what once this many days are left
+#    short_call_delta     : the delta you sell covered calls at
+#  Notes:
+#    "long"  leg  = the option you BUY  (shows as +qty in thinkorswim)
+#    "short" leg  = the option you SELL (shows as -qty in thinkorswim)
+# ============================================================
+
+strategies:
+
+  # ---------------- CREDIT SPREADS ----------------
+  put_credit_spread:
+    name: "Put Credit Spread (Bull Put Spread)"
+    family: credit_spread
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Beginner"
+    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk. SPX is the usual pick, but any of them works.
+    plain_english: "You SELL a put below the current price and BUY a cheaper put further below as protection. You collect cash (a credit) and win as long as price stays above your short put."
+    tos_hint: "Short put shows as -1, long put shows as +1. Net credit shows in green."
+    notion_url: "https://app.notion.com/p/38803e90e03281199d80d4c1fbc5056d"
+    legs:
+      - role: short_put
+        action: sell
+        option_type: put
+      - role: long_put
+        action: buy
+        option_type: put
+    entry:
+      short_leg_delta_max: 0.10
+      dte_target: 30
+      dte_min: 21
+      dte_max: 44
+    exit:
+      profit_target_pct: 50
+      stop_loss_multiple: 2.0
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: vertical_width   # (width - credit) * 100 * contracts
+
+  call_credit_spread:
+    name: "Call Credit Spread (Bear Call Spread)"
+    family: credit_spread
+    market_outlook: "Neutral / Bearish"
+    difficulty: "Beginner"
+    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk.
+    plain_english: "You SELL a call above the current price and BUY a cheaper call further above as protection. You collect cash and win as long as price stays below your short call."
+    tos_hint: "Short call shows as -1, long call shows as +1. Net credit shows in green."
+    notion_url: "https://app.notion.com/p/38803e90e032814ebbfce1dc07dfdfac"
+    legs:
+      - role: short_call
+        action: sell
+        option_type: call
+      - role: long_call
+        action: buy
+        option_type: call
+    entry:
+      short_leg_delta_max: 0.10
+      dte_target: 30
+      dte_min: 21
+      dte_max: 44
+    exit:
+      profit_target_pct: 50
+      stop_loss_multiple: 2.0
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: vertical_width
+
+  iron_condor:
+    name: "Iron Condor"
+    family: credit_spread
+    market_outlook: "Neutral (no big moves)"
+    difficulty: "Intermediate"
+    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk.
+    plain_english: "A put credit spread AND a call credit spread at the same time. You collect cash from both sides and win if price stays inside your range."
+    tos_hint: "Four legs: -1 short put, +1 long put, -1 short call, +1 long call. One net credit."
+    notion_url: "https://app.notion.com/p/38803e90e03281498abfd46c0efe70db"
+    legs:
+      - role: long_put
+        action: buy
+        option_type: put
+      - role: short_put
+        action: sell
+        option_type: put
+      - role: short_call
+        action: sell
+        option_type: call
+      - role: long_call
+        action: buy
+        option_type: call
+    entry:
+      short_leg_delta_max: 0.10   # applies to BOTH short legs
+      dte_target: 30
+      dte_min: 21
+      dte_max: 44
+    exit:
+      profit_target_pct: 50
+      stop_loss_multiple: 2.0
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: vertical_width   # widest single side - condor risk is one side at a time
+
+  # ---------------- CASH SECURED PUT ----------------
+  cash_secured_put:
+    name: "Cash Secured Put (CSP)"
+    family: single_leg
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "You SELL a put and set aside the cash to buy 100 shares if assigned. You get paid to agree to buy the stock at a discount."
+    tos_hint: "Short put shows as -1. Cash needed = strike x 100 per contract."
+    notion_url: "https://app.notion.com/p/38803e90e0328119965ef6c5189e060b"
+    legs:
+      - role: short_put
+        action: sell
+        option_type: put
+    entry:
+      short_leg_delta_max: 0.30   # CSPs are commonly sold nearer 0.30 to actually get assigned the shares
+      dte_target: 30
+      dte_min: 21
+      dte_max: 44
+    exit:
+      profit_target_pct: 50
+      stop_loss_multiple: 2.0
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
+
+  # ---------------- POOR MAN'S COVERED CALL ----------------
+  poor_mans_covered_call:
+    name: "Poor Man's Covered Call (PMCC)"
+    family: diagonal
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Intermediate"
+    underlying_style: us
+    plain_english: "Instead of buying 100 shares, you BUY a deep long-dated call (LEAPS) as a stock substitute, then SELL short-dated calls against it for income."
+    tos_hint: "Long LEAPS call shows as +1 (far expiration), short call shows as -1 (near expiration)."
+    notion_url: "https://app.notion.com/p/38803e90e0328176a77cc474cbe78f2a"
+    legs:
+      - role: long_call_leaps
+        action: buy
+        option_type: call
+      - role: short_call
+        action: sell
+        option_type: call
+    entry:
+      long_leg_delta_min: 0.80    # deep in the money LEAPS acts like the stock
+      short_call_delta: 0.30      # sell the short call at delta 0.30
+      short_call_dte_target: 30
+      leaps_dte_min: 180          # long call should be far out (6+ months)
+    exit:
+      profit_target_pct: 50       # applies to the short call
+      time_exit_dte: 21           # for the short call
+    sizing:
+      max_loss_basis: debit       # cost of LEAPS minus credit collected
+
+  # ---------------- COVERED CALLS (own 100 real shares) ----------------
+  covered_call_model_1:
+    name: "Covered Call - Model 1: Absolute Protection (Collar)"
+    family: covered_call
+    market_outlook: "Neutral / Slightly Bearish"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "Own 100 shares, BUY a long-dated put for full downside protection, and SELL a monthly call for income. Safest model - you sleep well."
+    tos_hint: "You own 100 shares (+100), long put +1, short call -1."
+    notion_url: "https://app.notion.com/p/38803e90e0328188a612f56ba6d3d0f8"
+    requires_shares: true
+    legs:
+      - role: long_put_protection
+        action: buy
+        option_type: put
+      - role: short_call
+        action: sell
+        option_type: call
+    entry:
+      short_call_delta: 0.30
+      short_call_dte_target: 21
+      protection: "Buy a 2-year ATM put (~$3,000). Sell it after 1 year (~$1,200-$1,700 left) and buy a fresh 2-year put. Net cost ~$1,500/year."
+    exit:
+      profit_target_pct: 50       # for the short call
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: shares_plus_protection
+
+  covered_call_model_2:
+    name: "Covered Call - Model 2: Classic Spread"
+    family: covered_call
+    market_outlook: "Neutral"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "Own 100 shares, protect with a put spread (cheaper than a full put) instead of a single put, and SELL a monthly call for income. Balanced cost and protection."
+    tos_hint: "You own 100 shares (+100), a put spread for protection, short call -1."
+    notion_url: "https://app.notion.com/p/38803e90e03281929691e2dba36d2791"
+    requires_shares: true
+    legs:
+      - role: long_put_protection
+        action: buy
+        option_type: put
+      - role: short_put_offset
+        action: sell
+        option_type: put
+      - role: short_call
+        action: sell
+        option_type: call
+    entry:
+      short_call_delta: 0.30
+      short_call_dte_target: 21
+    exit:
+      profit_target_pct: 50
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: shares_plus_protection
+
+  covered_call_model_3:
+    name: "Covered Call - Model 3: Zero Cost Ratio"
+    family: covered_call
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Intermediate (advanced - active daily management)"
+    underlying_style: us
+    plain_english: "Own 100 shares, BUY 1 put and SELL 2 puts below it so protection costs about nothing, and SELL a monthly call. WARNING: below the two short puts, losses accelerate fast."
+    tos_hint: "You own 100 shares (+100), long put +1, two short puts -2, short call -1."
+    notion_url: "https://app.notion.com/p/38803e90e032819c8a9fc1c868fbb43f"
+    requires_shares: true
+    warning: "Advanced only. Below the two short put strikes, losses accelerate rapidly. Requires active daily management - not for beginners."
+    legs:
+      - role: long_put_protection
+        action: buy
+        option_type: put
+      - role: short_put_ratio
+        action: sell
+        option_type: put
+        quantity: 2
+      - role: short_call
+        action: sell
+        option_type: call
+    entry:
+      short_call_delta: 0.30
+      short_call_dte_target: 21
+    exit:
+      profit_target_pct: 50
+      time_exit_dte: 21
+    sizing:
+      max_loss_basis: ratio_risk
