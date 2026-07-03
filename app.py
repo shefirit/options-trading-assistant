@@ -198,30 +198,55 @@ def _trading_verdict(ctx, events):
 
 
 def _step_market(provider, ctx) -> None:
+    import datetime as dt
+
+    from src.data import market_calendar as cal
     from src.data.market_context import daily_sentiment
+
+    today = dt.date.today()
+    market_open = cal.is_market_open(today)
 
     tiles = provider.get_market_tiles()
     cols = st.columns(len(tiles))
     changes = []
+    price_label = "Last close" if not market_open else None
     for col, t in zip(cols, tiles):
         price = f"{t['price']:,.0f}" if t["price"] else "n/a"
-        delta = f"{t['change_pct']:+.2f}%" if t["change_pct"] is not None else None
+        # When the market is closed there is no "today's move", so hide the % delta.
+        delta = None if not market_open else (
+            f"{t['change_pct']:+.2f}%" if t["change_pct"] is not None else None)
+        label = t["symbol"] if t["symbol"] != "VIX" else "VIX (fear)"
         if t["symbol"] == "VIX":
-            col.metric("VIX (fear)", price, delta, delta_color="inverse")
+            col.metric(label, price, delta, delta_color="inverse")
         else:
-            col.metric(t["symbol"], price, delta)
+            col.metric(label, price, delta)
             changes.append(t["change_pct"])
+    if price_label:
+        st.caption(f"Showing the **last close** - the market is closed today.")
 
     events = provider.get_macro_events(trade_dte=35)
-    headline, tone, why = _trading_verdict(ctx, events)
 
     # The verdict - the whole point of Step 1.
     st.write("")
     with st.container(border=True):
-        icon = {"green": "✅", "amber": "⚠️", "red": "🛑"}[tone]
-        st.markdown(theme.chip(f"{icon}  {headline}", tone), unsafe_allow_html=True)
-        st.markdown(f"<div style='margin-top:10px;font-size:1.05rem'>{why}</div>",
-                    unsafe_allow_html=True)
+        if not market_open:
+            reason = cal.closed_reason(today) or "a non-trading day"
+            nxt = cal.next_market_open(today)
+            nxt_str = f"{nxt:%A}, {nxt:%B} {nxt.day}"
+            st.markdown(theme.chip("🛑  U.S. market closed today", "red"),
+                        unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='margin-top:10px;font-size:1.05rem'>Today is <b>{reason}</b>, "
+                f"so the market is closed - no trading and no new prices (the numbers above are "
+                f"the last close). Markets reopen <b>{nxt_str}</b>. Nothing to do today; come "
+                f"back when it's open and I'll read the conditions for you.</div>",
+                unsafe_allow_html=True)
+        else:
+            headline, tone, why = _trading_verdict(ctx, events)
+            icon = {"green": "✅", "amber": "⚠️", "red": "🛑"}[tone]
+            st.markdown(theme.chip(f"{icon}  {headline}", tone), unsafe_allow_html=True)
+            st.markdown(f"<div style='margin-top:10px;font-size:1.05rem'>{why}</div>",
+                        unsafe_allow_html=True)
 
     # Supporting read: today's mood, the trend, and the next event.
     sent_label, sent_note = daily_sentiment(changes, ctx.vix)

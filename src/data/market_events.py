@@ -127,10 +127,15 @@ def upcoming_events(
         raw.append(Event(date=date, days_away=days, label=label, kind=kind, note=note,
                          in_window=days <= window_days))
 
+    from src.data import market_calendar
+
     opex = next_opex(today)
+    # If the usual day is a market holiday, these shift to the trading day before
+    # (expiration moves to Thursday; the jobs report is released a day early).
+    opex = market_calendar.adjust_back_if_closed(opex)
     add(opex, "Monthly options expiration" + (" (triple witching)" if is_triple_witching(opex) else ""),
         "opex", "Pinning and bigger moves are common around expiration.")
-    add(next_jobs_report(today), "Monthly jobs report", "jobs",
+    add(market_calendar.adjust_back_if_closed(next_jobs_report(today)), "Monthly jobs report", "jobs",
         "Can jolt the market at 8:30am that morning.")
     for d in _fomc_dates():
         add(d, "Fed interest-rate decision (FOMC)", "fomc",
