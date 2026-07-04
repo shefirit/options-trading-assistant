@@ -29,10 +29,21 @@ underlyings:
     - RUT      # Russell 2000
     - XSP      # Mini S&P 500 (smaller version of SPX)
   us_style:                     # ETFs for covered calls, PMCC, cash secured puts
-    - SPY
-    - QQQ
-    - IWM
-    - DIA
+    - SPY      # S&P 500
+    - QQQ      # Nasdaq 100
+    - IWM      # Russell 2000
+    - DIA      # Dow 30
+    # High-liquidity additions (non-leveraged, beginner-appropriate):
+    - GLD      # Gold
+    - SLV      # Silver
+    - TLT      # 20-year Treasuries (bonds)
+    - EEM      # Emerging markets
+    - EFA      # Developed international
+    - XLF      # Financials sector
+    - XLE      # Energy sector
+    - XLK      # Technology sector
+    - XLV      # Healthcare sector
+    - SMH      # Semiconductors
   # Default list the "Premium finder" compares (you can change it in the app).
   # A mix of calm ETFs and livelier stocks so you can see the premium range.
   premium_watchlist:

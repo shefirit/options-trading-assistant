@@ -39,6 +39,11 @@ _DEMO_FILES = {
     "RUT": "spx_chain.json", "XSP": "spx_chain.json",
     "SPY": "spy_chain.json", "QQQ": "spy_chain.json",
     "IWM": "spy_chain.json", "DIA": "spy_chain.json",
+    # Added liquid ETFs share the ETF sample chain when offline (real data in live mode).
+    "GLD": "spy_chain.json", "SLV": "spy_chain.json", "TLT": "spy_chain.json",
+    "EEM": "spy_chain.json", "EFA": "spy_chain.json", "XLF": "spy_chain.json",
+    "XLE": "spy_chain.json", "XLK": "spy_chain.json", "XLV": "spy_chain.json",
+    "SMH": "spy_chain.json",
 }
 
 
