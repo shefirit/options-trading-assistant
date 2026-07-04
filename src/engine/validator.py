@@ -60,12 +60,13 @@ def validate_trade(
 
     # 3. Timing (days to expiration).
     if "dte_min" in entry and "dte_max" in entry:
-        dte_min = int(entry["dte_min"])
-        # US-style stocks/ETFs enter nearer 45 (avoid the early-assignment zone);
-        # European indices (SPX/NDX...) may enter as early as 21.
-        if "dte_min_us_style" in entry and not is_european_style(trade.underlying):
-            dte_min = int(entry["dte_min_us_style"])
-        results.append(rules.check_dte_range(trade, dte_min, int(entry["dte_max"])))
+        dte_min, dte_max = int(entry["dte_min"]), int(entry["dte_max"])
+        # US-style stocks/ETFs use their own window (avoid the ~21-DTE early-assignment
+        # zone, but still reach the ~monthly expiration); indices may enter as early as 21.
+        if not is_european_style(trade.underlying):
+            dte_min = int(entry.get("dte_min_us_style", dte_min))
+            dte_max = int(entry.get("dte_max_us_style", dte_max))
+        results.append(rules.check_dte_range(trade, dte_min, dte_max))
     elif "short_call_dte_target" in entry:
         results.append(rules.check_dte_target(trade, int(entry["short_call_dte_target"])))
     elif "dte_target" in entry:

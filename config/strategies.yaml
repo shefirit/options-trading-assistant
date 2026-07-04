@@ -41,7 +41,8 @@ strategies:
       dte_target: 45              # SOP: 45 DTE preferred
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
-      dte_min_us_style: 35        # SOP: stocks/ETFs avoid the 21-DTE early-assignment zone
+      dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
+      dte_max_us_style: 49        # but still catch the real ~monthly expiration (chains cluster near 34/48)
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -70,7 +71,8 @@ strategies:
       dte_target: 45              # SOP: ~45 DTE
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
-      dte_min_us_style: 35        # SOP: stocks/ETFs avoid the 21-DTE early-assignment zone
+      dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
+      dte_max_us_style: 49        # but still catch the real ~monthly expiration (chains cluster near 34/48)
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -105,7 +107,8 @@ strategies:
       dte_target: 45              # SOP: 45 DTE preferred
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
-      dte_min_us_style: 40        # SOP: stocks/ETFs enter near 45 only (early-assignment)
+      dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
+      dte_max_us_style: 49        # but still catch the real ~monthly expiration
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
