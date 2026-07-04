@@ -13,6 +13,9 @@ Accessibility targets (WCAG AA):
 
 from __future__ import annotations
 
+import html as _html
+import re as _re
+
 import streamlit as st
 
 # ---------------- palette (Fresh Growth) ----------------
@@ -21,7 +24,7 @@ ACCENT_DARK = "#0A6042"   # hover / pressed
 ACCENT_BRIGHT = "#10B981" # decorative only (chart lines, small fills) - never text
 INK = "#0B1F16"           # primary text - near-black, green undertone, very high contrast
 SECONDARY = "#35463D"     # secondary text in dense cards (~9:1)
-CAPTION = "#213229"       # instructional captions - reads as dark text, not grey (~12:1)
+CAPTION = "#182A21"       # instructional captions - near-black, reads as text (~13:1)
 MUTED = "#4E625A"         # rare true hints
 PLACEHOLDER = "#55685F"   # input placeholder - a readable hint, ~5:1
 BORDER = "#DAE7E0"        # soft green-grey hairline
@@ -218,6 +221,18 @@ a {{ color: {ACCENT_DARK}; }}
 
 def inject() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def note(text: str) -> None:
+    """Render guidance/help text as solid, near-black, readable copy - our own
+    element so nothing (Streamlit's faded caption grey) can override it.
+    Supports **bold**; renders at close to body size."""
+    safe = _html.escape(text).replace("\\$", "$")
+    safe = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
+    st.markdown(
+        f"<div style='color:{CAPTION};font-size:0.98rem;line-height:1.6;margin:2px 0 8px;'>"
+        f"{safe}</div>",
+        unsafe_allow_html=True)
 
 
 def hero(title: str, subtitle: str, badge_text: str, badge_tone: str = "green") -> None:

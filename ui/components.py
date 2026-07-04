@@ -202,7 +202,7 @@ def render_stock_overview(
     # ---- name + sector ----
     st.markdown(f"### {analysis.symbol} - {analysis.name}")
     if analysis.sector:
-        st.caption(f"Sector: {analysis.sector}")
+        theme.note(f"Sector: {analysis.sector}")
 
     # ---- quality score card (grade + key stats) ----
     st.markdown(_score_card(analysis, info), unsafe_allow_html=True)
@@ -247,7 +247,7 @@ def render_stock_overview(
         earnings_dates = [q.get("date") for q in eps_history if q.get("date")]
         render_price_chart(frame, earnings_dates)
     else:
-        st.caption("Price history unavailable right now.")
+        theme.note("Price history unavailable right now.")
 
     # ---- analyst ratings + earnings beats, side by side ----
     col_a, col_e = st.columns(2)
@@ -281,7 +281,7 @@ def render_stock_overview(
                     unsafe_allow_html=True,
                 )
         else:
-            st.caption("No analyst data available for this name.")
+            theme.note("No analyst data available for this name.")
 
     with col_e:
         st.markdown("**🎯 Earnings: expected vs delivered**")
@@ -316,12 +316,12 @@ def render_stock_overview(
                 st.altair_chart(scatter, use_container_width=True)
             beats = sum(1 for q in eps_history if q["beat"])
             misses = len(eps_history) - beats
-            st.caption(f"🟢 beat / 🔴 missed analyst estimates (hover a dot for the numbers) - "
+            theme.note(f"🟢 beat / 🔴 missed analyst estimates (hover a dot for the numbers) - "
                        f"beat in **{beats} of the last {len(eps_history)} quarters**"
                        + (f", missed {misses}" if misses else "")
                        + ". Companies that beat steadily tend to hold up better.")
         else:
-            st.caption("No earnings history available for this name.")
+            theme.note("No earnings history available for this name.")
 
 
 def render_tv_ratings(ratings: dict, title: str = "TradingView technical rating") -> None:
@@ -357,7 +357,7 @@ def render_tv_ratings(ratings: dict, title: str = "TradingView technical rating"
                 f"<span style='color:#DC2626;font-weight:600;'>{r.sell} sell</span></div>",
                 unsafe_allow_html=True,
             )
-    st.caption("How to read this: TradingView runs ~26 technical indicators (moving averages, "
+    theme.note("How to read this: TradingView runs ~26 technical indicators (moving averages, "
                "RSI, MACD...). Each votes buy, neutral, or sell - the verdict is the tally. "
                "A second opinion, not a signal to trade on its own.")
 
@@ -456,7 +456,7 @@ def render_premium_detail(s) -> None:
                 f"- Collect **${s.call_credit_dollars:,.0f}** = **{s.call_yield_pct:.2f}%** for the month\n"
                 f"- Strategy: **Covered Call** (needs 100 shares)"))
         else:
-            st.caption("No suitable call found for a covered call right now.")
+            theme.note("No suitable call found for a covered call right now.")
 
     deal = {
         "Rich": "Premium is **Rich** - you're paid more than this stock's usual movement would "
@@ -466,7 +466,7 @@ def render_premium_detail(s) -> None:
                 "deal; look for a name that pays more.",
     }.get(s.richness)
     if deal:
-        st.caption(deal)
+        theme.note(deal)
     st.warning(_esc(f"⚠️ Risk: {s.risk_note}"))
     st.success(_esc(f"💡 {s.recommendation}"))
 
@@ -526,7 +526,7 @@ def render_advice(advice) -> None:
         unsafe_allow_html=True,
     )
     if advice.outlook_reasons:
-        st.caption(_esc(" · ".join(advice.outlook_reasons)))
+        theme.note(_esc(" · ".join(advice.outlook_reasons)))
 
     if advice.primary:
         st.markdown(
@@ -552,13 +552,13 @@ def render_advice(advice) -> None:
     for c in advice.cautions:
         st.warning(_esc(c))
 
-    st.caption(advice.dte_note)
+    theme.note(advice.dte_note)
 
 
 def render_events(events, empty_note: str = "No major events in the next few weeks.") -> None:
     """Compact list of upcoming market events, soonest first."""
     if not events:
-        st.caption(empty_note)
+        theme.note(empty_note)
         return
     for e in events:
         when = e.date.strftime("%a %b %d")

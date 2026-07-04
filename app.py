@@ -205,7 +205,7 @@ def _tab_market(provider, ctx, strategies) -> None:
     st.markdown(" ".join(bits), unsafe_allow_html=True)
 
     with st.expander("What's coming up (events that move the market)"):
-        st.caption(sent_note)
+        theme.note(sent_note)
         components.render_events(events)
 
     # Today's best index play, with a one-click handoff to Build.
@@ -230,7 +230,7 @@ def _tab_premium(settings, provider) -> None:
     from src.data import stock_universe
 
     theme.section("Which names pay the best premium - and are worth it?", "Premium finder")
-    st.caption("For each name it prices the one-month put you'd sell (~0.30 delta) and lays out "
+    theme.note("For each name it prices the one-month put you'd sell (~0.30 delta) and lays out "
                "the income, your odds, the safety cushion, how rich the premium really is, and "
                "whether it's tradable. Sort the table by any column.")
 
@@ -266,7 +266,7 @@ def _tab_premium(settings, provider) -> None:
 
     snaps = st.session_state.get("premium_snaps")
     if not snaps:
-        st.caption("Press **Compare** to build the table.")
+        theme.note("Press **Compare** to build the table.")
         return
 
     st.dataframe(components.premium_dataframe(snaps), width="stretch", hide_index=True,
@@ -307,7 +307,7 @@ def _tab_analyze(settings, provider, strategies) -> None:
     sym = st.selectbox("Symbol", opts, index=idx, key="analyze_sym",
                        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...")
     if not sym:
-        st.caption("Pick an index, ETF, or stock for its full picture and the strategy that "
+        theme.note("Pick an index, ETF, or stock for its full picture and the strategy that "
                    "fits it.")
         return
     if not provider.is_real and _classify(sym, settings) != "index":
@@ -340,7 +340,7 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
         with c2:
             if tv:
                 components.render_tv_ratings(tv, title=f"TradingView on {sym}")
-        st.caption("Indexes have no earnings or fundamentals - the Market tab is your main guide "
+        theme.note("Indexes have no earnings or fundamentals - the Market tab is your main guide "
                    "here.")
     else:
         if not provider.is_real:
@@ -356,7 +356,7 @@ def _strategy_about(strat) -> None:
         c = st.columns(2)
         c[0].markdown(f"**Market outlook:** {strat.get('market_outlook', '-')}")
         c[1].markdown(f"**Difficulty:** {strat.get('difficulty', '-')}")
-        st.caption(f"👀 In thinkorswim: {strat.get('tos_hint', '')}")
+        theme.note(f"👀 In thinkorswim: {strat.get('tos_hint', '')}")
         st.markdown(f"[📖 Read the full SOP in Notion]({strat['notion_url']})")
         if strat.get("warning"):
             st.warning(f"⚠️ {strat['warning']}")
@@ -385,10 +385,10 @@ def _tab_build(settings, strategies, provider) -> None:
                                      help="Type to search. Pick more than one to scan together.")
 
     if strat.get("family") == "credit_spread":
-        st.caption("ℹ️ Credit spreads use cash-settled **index** names only (SPX, NDX, RUT, XSP). "
+        theme.note("ℹ️ Credit spreads use cash-settled **index** names only (SPX, NDX, RUT, XSP). "
                    "To trade a stock or ETF, pick **Cash Secured Put** or a **Covered Call**.")
     else:
-        st.caption("Type any S&P 500 or Nasdaq-100 **stock** (AAPL, NVDA...) or an ETF "
+        theme.note("Type any S&P 500 or Nasdaq-100 **stock** (AAPL, NVDA...) or an ETF "
                    "(SPY, QQQ, IWM, DIA). Want the recommended play for a name? Use **Analyze**.")
 
     uses_width = strat.get("family") == "credit_spread"
@@ -429,7 +429,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
                                   value=0.0, step=1000.0,
                                   help="So the monthly-limit check is realistic.")
     is_pmcc = strat.get("family") == "diagonal"
-    st.caption(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
+    theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
                "each at the delta your SOP calls for."
                + (" (PMCC also picks a deep-in-the-money LEAPS.)" if is_pmcc else ""))
 
@@ -464,7 +464,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
             else:
                 st.info("No setups found for these names right now.")
         else:
-            st.caption("Press **Scan the market now** for a short list of the best setups.")
+            theme.note("Press **Scan the market now** for a short list of the best setups.")
         return
 
     scanned_dtes = sorted({c.dte for c in candidates if c.dte is not None})
@@ -489,7 +489,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
 
 
 def _build_manual(key, strat, underlyings) -> None:
-    st.caption("Type in the trade exactly as you set it up in thinkorswim. "
+    theme.note("Type in the trade exactly as you set it up in thinkorswim. "
                "Long = you bought it (+), short = you sold it (-).")
     underlying = st.selectbox("Underlying", underlyings or allowed_underlyings_for(key),
                               key="val_underlying")
@@ -569,7 +569,7 @@ def _stock_overview_block(sym, provider, key_prefix="setup"):
         components.render_events(evs)
         eps = earn_info.get("eps_avg")
         if eps:
-            st.caption(f"Analysts expect about \\${eps:.2f} earnings per share next report "
+            theme.note(f"Analysts expect about \\${eps:.2f} earnings per share next report "
                        f"(range \\${earn_info.get('eps_low', eps):.2f}"
                        f" to \\${earn_info.get('eps_high', eps):.2f}).")
 
@@ -606,7 +606,7 @@ def _sidebar(settings, provider) -> None:
             st.info("Offline - showing sample prices. Connect to the internet for real market "
                     "data, or set up Schwab for true real-time.")
         elif provider.mode == "yahoo":
-            st.caption("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
+            theme.note("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
 
         st.divider()
         st.markdown("**Your plan**")
@@ -622,7 +622,7 @@ def _sidebar(settings, provider) -> None:
         _connect_sheet_ui()
         st.divider()
         st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
-        st.caption("You are paper trading to learn the process. Follow the rules, not the P&L.")
+        theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
 
 
 def _connect_schwab_ui(provider) -> None:
@@ -632,7 +632,7 @@ def _connect_schwab_ui(provider) -> None:
         if live:
             st.success("You are on real-time Schwab data.")
             return
-        st.caption("Right now you have real Yahoo data (~15 min delayed), which is fine for "
+        theme.note("Right now you have real Yahoo data (~15 min delayed), which is fine for "
                    "your trades. To get true real-time from your own account:")
         st.markdown(
             "1. Go to **developer.schwab.com** and sign in with your Schwab login.\n"
@@ -643,7 +643,7 @@ def _connect_schwab_ui(provider) -> None:
             "6. Run once in a terminal: `python -m src.data.schwab_client` (a browser opens to "
             "log in).\n"
             "7. Restart the app - this will switch to **LIVE** automatically.")
-        st.caption("Your keys stay on your PC. Full details are in the README.")
+        theme.note("Your keys stay on your PC. Full details are in the README.")
 
 
 def _connect_sheet_ui() -> None:
@@ -651,7 +651,7 @@ def _connect_sheet_ui() -> None:
     connected = webhook_logger.is_configured()
     label = "🔗 Google Sheet: connected ✅" if connected else "🔗 Connect Google Sheet"
     with st.expander(label, expanded=not connected):
-        st.caption("One-time setup. In your sheet: **Extensions → Apps Script**, paste the "
+        theme.note("One-time setup. In your sheet: **Extensions → Apps Script**, paste the "
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         current = webhook_logger.get_url() or ""
