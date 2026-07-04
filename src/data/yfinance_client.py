@@ -253,13 +253,24 @@ def get_analyst_ratings(underlying: str) -> dict[str, int]:
 def get_eps_history(underlying: str, max_quarters: int = 16) -> list[dict[str, Any]]:
     """Past quarters: what analysts expected vs what the company delivered.
 
-    Each item: {label, estimate, actual, surprise_pct, beat}. Oldest first.
-    Beat/miss uses Yahoo's official Surprise(%) - the same number the pros
-    quote - so an exact rounding tie never gets called wrong.
+    Each item: {label, date, estimate, actual, surprise_pct, beat}. Oldest first.
+
+    Tries the earnings-calendar endpoint first (up to ~4 years of history). If that
+    is empty - which happens on datacenter IPs (Streamlit Cloud) where Yahoo blocks
+    that specific endpoint - it falls back to the earnings-history endpoint, which
+    rides the same quoteSummary API as the analyst ratings (so it keeps working
+    where the calendar one is blocked), giving the last ~4 quarters.
     """
+    t = _ticker(underlying)
+    out = _eps_from_calendar(t, max_quarters)
+    if out:
+        return out
+    return _eps_from_history(t, max_quarters)
+
+
+def _eps_from_calendar(t, max_quarters: int) -> list[dict[str, Any]]:
     try:
-        # limit=28 reaches back ~4+ years (rows include a few future quarters).
-        ed = _ticker(underlying).get_earnings_dates(limit=28)
+        ed = t.get_earnings_dates(limit=28)   # reaches back ~4+ years
         if ed is None or len(ed) == 0:
             return []
     except Exception:
@@ -277,15 +288,47 @@ def get_eps_history(underlying: str, max_quarters: int = 16) -> list[dict[str, A
         beat = (_f(surprise_raw) >= 0) if has_surprise else (actual_f >= est_f)
         out.append({
             "label": f"{when.year} Q{(when.month - 1) // 3 + 1}",
-            "date": when.date().isoformat(),   # for the "E" markers on the chart
-            "estimate": est_f,
-            "actual": actual_f,
-            "surprise_pct": _f(surprise_raw),
-            "beat": beat,
+            "date": when.date().isoformat(),
+            "estimate": est_f, "actual": actual_f,
+            "surprise_pct": _f(surprise_raw), "beat": beat,
         })
     out = out[:max_quarters]
     out.reverse()   # oldest first for charting
     return out
+
+
+def _eps_from_history(t, max_quarters: int) -> list[dict[str, Any]]:
+    """Fallback: the quoteSummary earnings-history endpoint (last ~4 quarters).
+    Columns: epsActual, epsEstimate, surprisePercent (a fraction, e.g. 0.045)."""
+    try:
+        eh = t.get_earnings_history()
+    except Exception:
+        eh = None
+    if eh is None or len(eh) == 0:
+        return []
+    out: list[dict[str, Any]] = []
+    for when, row in eh.iterrows():   # index is the quarter date, oldest first
+        actual = row.get("epsActual")
+        if actual is None or (isinstance(actual, float) and math.isnan(actual)):
+            continue
+        est_f = _f(row.get("epsEstimate"))
+        actual_f = _f(actual)
+        sp = row.get("surprisePercent")
+        has_sp = sp is not None and not (isinstance(sp, float) and math.isnan(sp))
+        surprise_pct = _f(sp) * 100 if has_sp else 0.0   # fraction -> percent
+        beat = (surprise_pct >= 0) if has_sp else (actual_f >= est_f)
+        try:
+            qd = when.date() if hasattr(when, "date") else when
+            label = f"{qd.year} Q{(qd.month - 1) // 3 + 1}"
+            date_iso = qd.isoformat()
+        except Exception:
+            label, date_iso = str(when), None
+        out.append({
+            "label": label, "date": date_iso,
+            "estimate": est_f, "actual": actual_f,
+            "surprise_pct": surprise_pct, "beat": beat,
+        })
+    return out[-max_quarters:]
 
 
 def get_price_frame(underlying: str, period: str = "1y"):
