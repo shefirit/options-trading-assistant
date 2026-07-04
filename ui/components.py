@@ -286,12 +286,15 @@ def render_stock_overview(
     with col_e:
         st.markdown("**🎯 Earnings: expected vs delivered**")
         if eps_history:
+            def _result(q):
+                return "Delivered" if q["beat"] is None else ("Beat" if q["beat"] else "Missed")
             df = pd.DataFrame({
                 "Quarter": [q["label"] for q in eps_history],
                 "EPS": [q["actual"] for q in eps_history],
                 "Expected": [q["estimate"] for q in eps_history],
-                "Surprise": [f"{q['surprise_pct']:+.1f}%" for q in eps_history],
-                "Result": ["Beat" if q["beat"] else "Missed" for q in eps_history],
+                "Surprise": [f"{q['surprise_pct']:+.1f}%" if q["surprise_pct"] is not None
+                             else "n/a" for q in eps_history],
+                "Result": [_result(q) for q in eps_history],
             })
             scatter = alt.Chart(df).mark_circle(size=110, opacity=1).encode(
                 x=alt.X("Quarter:N", sort=None,
@@ -302,8 +305,8 @@ def render_stock_overview(
                                       labelColor="#35463D", gridColor="#EEF2F7",
                                       domainOpacity=0)),
                 color=alt.Color("Result:N", legend=None,
-                                scale=alt.Scale(domain=["Beat", "Missed"],
-                                                range=["#0B7A54", "#DC2626"])),
+                                scale=alt.Scale(domain=["Beat", "Missed", "Delivered"],
+                                                range=["#0B7A54", "#DC2626", "#5F7169"])),
                 tooltip=[alt.Tooltip("Quarter:N"),
                          alt.Tooltip("Expected:Q", format="$,.2f", title="Analysts expected"),
                          alt.Tooltip("EPS:Q", format="$,.2f", title="Delivered"),
@@ -314,12 +317,18 @@ def render_stock_overview(
                 st.altair_chart(scatter, width="stretch")
             except TypeError:
                 st.altair_chart(scatter, use_container_width=True)
-            beats = sum(1 for q in eps_history if q["beat"])
-            misses = len(eps_history) - beats
-            theme.note(f"🟢 beat / 🔴 missed analyst estimates (hover a dot for the numbers) - "
-                       f"beat in **{beats} of the last {len(eps_history)} quarters**"
-                       + (f", missed {misses}" if misses else "")
-                       + ". Companies that beat steadily tend to hold up better.")
+            graded = [q for q in eps_history if q["beat"] is not None]
+            if graded:
+                beats = sum(1 for q in graded if q["beat"])
+                misses = len(graded) - beats
+                theme.note(f"🟢 beat / 🔴 missed analyst estimates (hover a dot for the numbers) - "
+                           f"beat in **{beats} of the last {len(graded)} quarters**"
+                           + (f", missed {misses}" if misses else "")
+                           + ". Companies that beat steadily tend to hold up better.")
+            else:
+                theme.note("Delivered earnings per share by quarter (hover a dot for the numbers). "
+                           "Analyst estimates weren't available from the data source, so beat/miss "
+                           "isn't shown.")
         else:
             theme.note("No earnings history available for this name.")
 

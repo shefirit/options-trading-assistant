@@ -262,10 +262,11 @@ def get_eps_history(underlying: str, max_quarters: int = 16) -> list[dict[str, A
     where the calendar one is blocked), giving the last ~4 quarters.
     """
     t = _ticker(underlying)
-    out = _eps_from_calendar(t, max_quarters)
-    if out:
-        return out
-    return _eps_from_history(t, max_quarters)
+    for source in (_eps_from_calendar, _eps_from_history, _eps_from_income):
+        out = source(t, max_quarters)
+        if out:
+            return out
+    return []
 
 
 def _eps_from_calendar(t, max_quarters: int) -> list[dict[str, Any]]:
@@ -328,6 +329,42 @@ def _eps_from_history(t, max_quarters: int) -> list[dict[str, Any]]:
             "estimate": est_f, "actual": actual_f,
             "surprise_pct": surprise_pct, "beat": beat,
         })
+    return out[-max_quarters:]
+
+
+def _eps_from_income(t, max_quarters: int) -> list[dict[str, Any]]:
+    """Last-resort fallback: delivered EPS from the quarterly income statement
+    (a different Yahoo endpoint again). No analyst estimate here, so beat/miss is
+    unknown (beat=None) - the chart shows these as neutral 'delivered' points."""
+    try:
+        qi = t.quarterly_income_stmt
+    except Exception:
+        return []
+    if qi is None or len(qi) == 0:
+        return []
+    row = None
+    for name in ("Diluted EPS", "Basic EPS"):
+        if name in qi.index:
+            row = qi.loc[name]
+            break
+    if row is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for when, val in row.items():
+        if val is None or (isinstance(val, float) and math.isnan(val)):
+            continue
+        try:
+            qd = when.date() if hasattr(when, "date") else when
+            label = f"{qd.year} Q{(qd.month - 1) // 3 + 1}"
+            date_iso = qd.isoformat()
+        except Exception:
+            label, date_iso = str(when), None
+        out.append({
+            "label": label, "date": date_iso,
+            "estimate": None, "actual": _f(val),
+            "surprise_pct": None, "beat": None,
+        })
+    out.sort(key=lambda d: d["date"] or "")   # oldest first
     return out[-max_quarters:]
 
 
