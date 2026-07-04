@@ -20,8 +20,10 @@ ACCENT = "#0B7A54"        # deep emerald - buttons, slider, links, focus (white 
 ACCENT_DARK = "#0A6042"   # hover / pressed
 ACCENT_BRIGHT = "#10B981" # decorative only (chart lines, small fills) - never text
 INK = "#0B1F16"           # primary text - near-black, green undertone, very high contrast
-SECONDARY = "#35463D"     # secondary text - dark enough to be accessible (~9:1)
-MUTED = "#4E625A"         # captions / hints - still ~5.6:1, NOT a faded grey
+SECONDARY = "#35463D"     # secondary text in dense cards (~9:1)
+CAPTION = "#213229"       # instructional captions - reads as dark text, not grey (~12:1)
+MUTED = "#4E625A"         # rare true hints
+PLACEHOLDER = "#55685F"   # input placeholder - a readable hint, ~5:1
 BORDER = "#DAE7E0"        # soft green-grey hairline
 BORDER_STRONG = "#C1D5CB"
 CANVAS = "#F2F9F5"        # soft green-tinted canvas
@@ -51,14 +53,26 @@ h1 {{ font-size: 2rem !important;   font-weight: 800 !important; }}
 h2 {{ font-size: 1.45rem !important; font-weight: 750 !important; }}
 h3 {{ font-size: 1.15rem !important; font-weight: 700 !important; }}
 p, li, label, .stMarkdown {{ line-height: 1.6; }}
-/* Streamlit captions default to a small pale grey - darken AND enlarge them, since
-   this app puts real guidance in captions and the audience needs to read it easily. */
-[data-testid="stCaptionContainer"] {{
-    color: {SECONDARY} !important;
-    font-size: 0.94rem !important;
-    line-height: 1.55 !important;
+
+/* Captions carry real instructions in this app - render them as solid dark text
+   (near body ink), not faded grey, at close to body size. */
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {{
+    color: {CAPTION} !important;
+    font-size: 0.98rem !important;
+    line-height: 1.6 !important;
 }}
-[data-testid="stCaptionContainer"] p {{ font-size: 0.94rem !important; }}
+
+/* Field labels (Strategy, Symbol, Contracts...) - dark and semibold for emphasis. */
+[data-testid="stWidgetLabel"] label, [data-testid="stWidgetLabel"] p,
+.stSelectbox label, .stMultiSelect label, .stNumberInput label, .stTextInput label,
+.stRadio label, .stSlider label {{
+    color: {INK} !important; font-weight: 600 !important; font-size: 1rem !important;
+}}
+
+/* Placeholders - readable hint, not a whisper. */
+input::placeholder, textarea::placeholder {{ color: {PLACEHOLDER} !important; opacity: 1 !important; }}
+[data-baseweb="select"] [class*="placeholder"] {{ color: {PLACEHOLDER} !important; }}
 
 /* ---------------- hide Streamlit chrome ---------------- */
 #MainMenu, footer {{ visibility: hidden; }}
@@ -181,11 +195,11 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-hero-sub {{ color: {SECONDARY}; font-size: 1.02rem; margin-top: 3px; }}
 
 .ota-eyebrow {{
-    font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em;
-    text-transform: uppercase; color: {ACCENT}; margin-top: 1.4rem;
+    font-size: 0.82rem; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: {ACCENT}; margin-top: 1.5rem;
 }}
-.ota-section-title {{ font-size: 1.4rem; font-weight: 750; letter-spacing: -0.02em;
-                      margin-bottom: 0.5rem; color: {INK}; }}
+.ota-section-title {{ font-size: 1.62rem; font-weight: 800; letter-spacing: -0.025em;
+                      margin: 2px 0 0.55rem; color: {INK}; line-height: 1.2; }}
 
 .ota-chip {{
     display: inline-flex; align-items: center;
