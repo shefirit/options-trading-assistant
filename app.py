@@ -456,6 +456,13 @@ def _spread_event_warnings(underlyings, provider, dte_window=45) -> list:
     return notes
 
 
+def _spread_width(cand) -> float:
+    """The narrowest gap between adjacent strikes = the real spread width achieved."""
+    strikes = sorted({leg.strike for leg in cand.trade.legs})
+    gaps = [b - a for a, b in zip(strikes, strikes[1:]) if b - a > 0]
+    return min(gaps) if gaps else 0.0
+
+
 def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
     if not scanner.can_scan(key):
         st.info("This strategy depends on the real shares you already own, so use **Check a "
@@ -514,6 +521,21 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
     scanned_dtes = sorted({c.dte for c in candidates if c.dte is not None})
     st.success(f"Found {len(candidates)} setup(s) at your SOP delta, across "
                f"{', '.join(str(d) for d in scanned_dtes)} days to expiration.")
+
+    # Warn when the strikes are too coarse to honor the requested width (e.g. NDX
+    # far out of the money), so the bigger max loss is never a surprise.
+    if width and strat.get("family") == "credit_spread":
+        got = min((w for c in candidates if (w := _spread_width(c)) > 0), default=0.0)
+        if got and got > width * 1.5:
+            names = ", ".join(sorted({c.trade.underlying for c in candidates}))
+            st.warning(
+                f"⚠️ You asked for a **${width:.0f}-wide** spread, but these came out "
+                f"**~${got:.0f} wide** - so the max loss is larger than you intended. "
+                f"**{names}**'s option strikes are spaced that far apart where your short leg "
+                "sits (far out of the money). For tight ${:.0f}-wide spreads use **SPX**, **XSP**, "
+                "or **RUT** (fine 1-5 point strikes); NDX strikes get coarse far from the price."
+                .format(width))
+
     st.dataframe(components.candidates_dataframe(candidates), width="stretch", hide_index=True)
 
     pick = st.number_input("Look at trade #", min_value=1, max_value=len(candidates),
