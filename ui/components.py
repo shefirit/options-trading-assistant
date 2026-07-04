@@ -457,6 +457,50 @@ def render_premium_detail(s) -> None:
     st.success(_esc(f"💡 {s.recommendation}"))
 
 
+_VERDICT_WORD = {"sell": "✅ Good to sell", "okay": "⚠️ Okay", "skip": "❌ Skip"}
+
+
+def premium_dataframe(snapshots: list) -> "pd.DataFrame":
+    """A dense, sortable comparison of every scanned name - the numbers that drive
+    the decision, side by side. Click any column header to sort."""
+    rows = []
+    for s in snapshots:
+        if s.error:
+            rows.append({"Symbol": s.symbol, "Verdict": "— " + s.error})
+            continue
+        rows.append({
+            "Symbol": s.symbol,
+            "Grade": s.grade or "ETF",
+            "Trend": s.trend.title(),
+            "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
+            "Income $/mo": s.credit_dollars,
+            "Yield %/mo": s.monthly_yield_pct,
+            "Win odds %": s.pop,
+            "Cushion %": s.cushion_pct,
+            "Premium": s.richness,
+            "Tradable": s.liquidity,
+            "Earnings": "⚠ before expiry" if s.earnings_before_expiry else "—",
+            "Sell put @": s.short_strike,
+        })
+    return pd.DataFrame(rows)
+
+
+# Column formatting for the premium comparison table (st.dataframe column_config).
+def premium_column_config():
+    import streamlit as _st
+    return {
+        "Income $/mo": _st.column_config.NumberColumn(format="$%d",
+            help="Cash you collect for one contract this month."),
+        "Yield %/mo": _st.column_config.NumberColumn(format="%.2f%%",
+            help="That income as a % of the cash you set aside."),
+        "Win odds %": _st.column_config.NumberColumn(format="%d%%",
+            help="Rough chance the put expires worthless and you keep the premium."),
+        "Cushion %": _st.column_config.NumberColumn(format="%.1f%%",
+            help="How far the stock can fall before you start losing."),
+        "Sell put @": _st.column_config.NumberColumn(format="$%.0f"),
+    }
+
+
 def render_advice(advice) -> None:
     """The options-strategy plan for a symbol: outlook, the recommended play
     (from HER eight strategies), alternatives, and cautions - plain English.

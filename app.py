@@ -1,18 +1,13 @@
-"""Options Trading Assistant - a guided, explore-first options helper.
+"""Options Trading Assistant - a free-navigation trading dashboard.
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Two ways to use it, chosen with the toggle up top:
+Four tabs, all open at once - use them in any order, nothing is locked:
 
-  🧭 Place a trade - a guided flow, one decision per step, in order:
-       1 Market   - should I even trade today?
-       2 Name     - pick or find a stock/ETF/index, and see if it's good
-       3 Strategy - the app recommends the play that fits that name
-       4 Setup    - the exact trade at your SOP delta and DTE
-       5 Check    - does it pass your rules? -> log it
-
-  🔎 Explore names - free research: screen for premium, look up any name's
-       full analysis and the strategy that fits it, then jump into placing it.
+  📊 Market        - is today a good day to sell premium? (holiday-aware)
+  🔎 Find premium  - screen names for the richest, safest option premium
+  🔬 Analyze       - any stock/ETF/index: full picture + the strategy that fits it
+  🎯 Build & check - pick a strategy, scan real setups, check your SOP rules, log it
 
 It never places trades and never gives buy/sell advice. You place every trade
 yourself in thinkorswim; this just helps you do it correctly.
@@ -40,20 +35,7 @@ from ui import components, theme
 st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
 theme.inject()
 
-# Which underlying to read the overall market from (European index, matches spreads).
 MARKET_READ_SYMBOL = "SPX"
-
-MODE_TRADE = "🧭  Place a trade"
-MODE_EXPLORE = "🔎  Explore names"
-
-# The five steps: (number, short label, the question it answers).
-STEPS = [
-    (1, "Market", "Should I trade today?"),
-    (2, "Name", "Which name - and is it good?"),
-    (3, "Strategy", "What's the best play for it?"),
-    (4, "Setup", "What is the exact trade?"),
-    (5, "Check + Log", "Am I following my rules?"),
-]
 
 
 @st.cache_resource
@@ -67,7 +49,6 @@ def money(x: float) -> str:
 
 # ------------------------------------------------------------------ small helpers
 def _classify(sym: str, settings) -> str:
-    """index (European, cash-settled) | etf (US-style) | stock."""
     if sym in settings["underlyings"]["european_style"]:
         return "index"
     if sym in settings["underlyings"]["us_style"]:
@@ -76,7 +57,6 @@ def _classify(sym: str, settings) -> str:
 
 
 def _symbol_options(settings) -> list:
-    """Everything you can pick: European indexes + ETFs + the stock universe."""
     from src.data import stock_universe
     european = list(settings["underlyings"]["european_style"])
     etfs = list(settings["underlyings"]["us_style"])
@@ -84,13 +64,7 @@ def _symbol_options(settings) -> list:
         european + etfs + stock_universe.FEATURED + stock_universe.all_stocks()))
 
 
-def _strategies_for_symbol(sym: str, strategies) -> list:
-    """Which of your strategies are allowed on this symbol (from the config rules)."""
-    return [k for k in strategies if sym in allowed_underlyings_for(k)]
-
-
-def _compute_advice(sym: str, kind: str, provider, settings):
-    """Full per-symbol recommendation: which strategy fits this name, and why."""
+def _compute_advice(sym, kind, provider, settings):
     ctx = provider.get_market_context(sym)
     analysis = provider.get_stock_analysis(sym) if kind in ("stock", "etf") else None
     tv = provider.get_tradingview(sym, is_index=(kind == "index"))
@@ -103,100 +77,6 @@ def _compute_advice(sym: str, kind: str, provider, settings):
         monthly_bp=float(settings["risk_limits"]["monthly_bp_limit"]))
 
 
-# ------------------------------------------------------------------ navigation
-def _seed_widget(widget_key: str, store_key: str, default) -> None:
-    """Seed a widget's value from its persistent mirror the first time it appears
-    (e.g. after navigating back). Streamlit garbage-collects a widget's own key
-    once it stops rendering, so selections are mirrored into a plain store key that
-    survives. Seeds only when the widget key is absent, so live edits aren't lost."""
-    if widget_key not in st.session_state:
-        st.session_state[widget_key] = st.session_state.get(store_key, default)
-
-
-def _goto(n: int) -> None:
-    st.session_state["step"] = n
-    st.session_state["max_step"] = max(st.session_state.get("max_step", 1), n)
-    st.rerun()
-
-
-def _stepper(current: int) -> None:
-    """A clickable progress bar. Jump to any step you've reached; steps ahead are locked."""
-    reached = st.session_state.get("max_step", 1)
-    cols = st.columns(len(STEPS))
-    for col, (n, label, _) in zip(cols, STEPS):
-        mark = "✓" if n < current else str(n)
-        if col.button(f"{mark}  {label}", key=f"nav_{n}", use_container_width=True,
-                      type="primary" if n == current else "secondary",
-                      disabled=n > reached):
-            _goto(n)
-    question = next(q for n, _, q in STEPS if n == current)
-    st.markdown(
-        f'<div class="ota-eyebrow">Step {current} of {len(STEPS)}</div>'
-        f'<div class="ota-section-title">{question}</div>',
-        unsafe_allow_html=True)
-
-
-def _nav(current: int, can_continue: bool = True,
-         continue_label: str = "Continue ▸", hint: str = "") -> None:
-    st.write("")
-    c1, c2, c3 = st.columns([1, 1.4, 3])
-    if current > 1:
-        if c1.button("◂ Back", key=f"back_{current}", use_container_width=True):
-            _goto(current - 1)
-    if current < len(STEPS):
-        if c2.button(continue_label, key=f"cont_{current}", type="primary",
-                     use_container_width=True, disabled=not can_continue):
-            _goto(current + 1)
-        if hint and not can_continue:
-            c3.caption(hint)
-
-
-# ------------------------------------------------------------------ main
-def main() -> None:
-    settings = load_settings()
-    strategies = load_strategies()
-    provider = get_provider()
-
-    st.session_state.setdefault("step", 1)
-    st.session_state.setdefault("max_step", 1)
-
-    _sidebar(settings, provider)
-
-    badge_tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
-    badge_text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
-                  "demo": "● DEMO · sample data"}[provider.mode]
-    theme.hero(
-        "Options Trading Assistant",
-        "Read the market, find a good name, get the strategy that fits it, then check your rules.",
-        badge_text, badge_tone)
-
-    mode = st.segmented_control(
-        "Mode", [MODE_TRADE, MODE_EXPLORE], default=MODE_TRADE, key="app_mode",
-        label_visibility="collapsed")
-    st.write("")
-
-    if mode == MODE_EXPLORE:
-        _explore(settings, provider, strategies)
-        return
-
-    ctx = provider.get_market_context(MARKET_READ_SYMBOL)
-    _stepper(st.session_state["step"])
-    st.write("")
-
-    step = st.session_state["step"]
-    if step == 1:
-        _step_market(provider, ctx, strategies)
-    elif step == 2:
-        _step_name(settings, provider, strategies)
-    elif step == 3:
-        _step_strategy(settings, provider, strategies)
-    elif step == 4:
-        _step_setup(strategies, provider)
-    elif step == 5:
-        _step_check(strategies, provider)
-
-
-# ------------------------------------------------------------------ Step 1: Market
 def _days_phrase(n) -> str:
     if n is None:
         return ""
@@ -207,9 +87,38 @@ def _days_phrase(n) -> str:
     return f"in {n} days"
 
 
+# ------------------------------------------------------------------ main
+def main() -> None:
+    settings = load_settings()
+    strategies = load_strategies()
+    provider = get_provider()
+
+    _sidebar(settings, provider)
+
+    badge_tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
+    badge_text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
+                  "demo": "● DEMO · sample data"}[provider.mode]
+    theme.hero(
+        "Options Trading Assistant",
+        "Read the market, screen for premium, analyze a name, build and check the trade.",
+        badge_text, badge_tone)
+
+    ctx = provider.get_market_context(MARKET_READ_SYMBOL)
+
+    t_market, t_prem, t_analyze, t_build = st.tabs(
+        ["📊  Market", "🔎  Find premium", "🔬  Analyze a name", "🎯  Build & check"])
+    with t_market:
+        _tab_market(provider, ctx, strategies)
+    with t_prem:
+        _tab_premium(settings, provider)
+    with t_analyze:
+        _tab_analyze(settings, provider, strategies)
+    with t_build:
+        _tab_build(settings, strategies, provider)
+
+
+# ------------------------------------------------------------------ Market tab
 def _trading_verdict(ctx, events):
-    """A single clear call on whether today is a good day to sell premium.
-    Returns (headline, tone, why). tone: green | amber | red."""
     vix = ctx.vix
     big_soon = next((e for e in events
                      if e.kind in ("fomc", "jobs") and e.days_away is not None
@@ -227,18 +136,17 @@ def _trading_verdict(ctx, events):
     if vix is not None and vix >= 20:
         return ("Okay - but keep size small", "amber",
                 f"Volatility is a bit elevated (VIX {vix:.0f}). Premiums are richer, but so are "
-                "the swings. Fine to sell premium, just trade smaller than usual and stay at low "
-                "delta.")
+                "the swings. Fine to sell premium, just trade smaller and stay at low delta.")
     if vix is not None:
         return ("Good conditions to sell premium", "green",
                 f"The market is calm (VIX {vix:.0f}) with no big event in the next couple of "
-                "days. This is a comfortable backdrop for your 21-45 day premium-selling trades.")
+                "days. A comfortable backdrop for your 21-45 day premium-selling trades.")
     return ("Read the market before you trade", "amber",
             "Live volatility is unavailable right now, so check conditions yourself before "
             "selling premium.")
 
 
-def _step_market(provider, ctx, strategies) -> None:
+def _tab_market(provider, ctx, strategies) -> None:
     import datetime as dt
 
     from src.data import market_calendar as cal
@@ -275,9 +183,7 @@ def _step_market(provider, ctx, strategies) -> None:
             st.markdown(
                 f"<div style='margin-top:10px;font-size:1.05rem'>Today is <b>{reason}</b>, so "
                 f"the market is closed - no trading and no new prices (the numbers above are the "
-                f"last close). Markets reopen <b>{nxt_str}</b>. Nothing to do today; come back "
-                f"when it's open and I'll read the conditions for you.</div>",
-                unsafe_allow_html=True)
+                f"last close). Markets reopen <b>{nxt_str}</b>.</div>", unsafe_allow_html=True)
         else:
             headline, tone, why = _trading_verdict(ctx, events)
             icon = {"green": "✅", "amber": "⚠️", "red": "🛑"}[tone]
@@ -301,31 +207,126 @@ def _step_market(provider, ctx, strategies) -> None:
         st.caption(sent_note)
         components.render_events(events)
 
-    # A shortcut for when she has no particular name in mind.
+    # Today's best index play, with a one-click handoff to Build.
     best_key = ctx.best_strategy_key or list(strategies.keys())[0]
     best_name = ctx.best_strategy_name or strategies[best_key]["name"]
-    st.write("")
+    st.divider()
     c1, c2 = st.columns([5, 2])
-    c1.caption(f"No name in mind? Today's market leans toward **{best_name}** on an index (SPX).")
-    if c2.button("Use today's best index play ▸", use_container_width=True):
-        st.session_state["flow_symbol"] = "SPX"
-        st.session_state["flow_strategy"] = best_key
-        st.session_state["_prev_flow_symbol"] = "SPX"
-        for k in ("w_symbol", "w_strategy", "candidates", "wiz_chosen", "scan_sig"):
-            st.session_state.pop(k, None)
-        _goto(3)
+    c1.info(f"💡 Today's market leans toward **{best_name}** on an index - {ctx.recommendation_reason}")
+    if c2.button("Set this up in Build ▸", use_container_width=True, key="mkt_to_build"):
+        st.session_state["build_strategy"] = best_key
+        st.session_state["build_underlyings"] = ["SPX"]
+        st.session_state["_prev_build_strategy"] = best_key
+        st.success("Loaded into **Build & check** - open that tab to scan it.")
 
     if not provider.is_real:
         st.info("You are offline, so these are sample numbers. Connect to the internet for real "
                 "market data (or set up Schwab for true real-time).")
 
-    _nav(1)
+
+# ------------------------------------------------------------------ Find premium tab
+def _tab_premium(settings, provider) -> None:
+    from src.data import stock_universe
+
+    theme.section("Which names pay the best premium - and are worth it?", "Premium finder")
+    st.caption("For each name it prices the one-month put you'd sell (~0.30 delta) and lays out "
+               "the income, your odds, the safety cushion, how rich the premium really is, and "
+               "whether it's tradable. Sort the table by any column.")
+
+    if not provider.is_real:
+        st.info("The premium finder needs real market data - connect to the internet first.")
+        return
+
+    etfs = settings["underlyings"]["us_style"]
+    options = list(dict.fromkeys(etfs + stock_universe.FEATURED + stock_universe.all_stocks()))
+    picks = st.multiselect(
+        "Names to compare", options,
+        default=[s for s in ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"] if s in options],
+        max_selections=20, key="premium_picks",
+        help="Add as many as you like - the table compares them all at once.")
+
+    monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
+    if st.button("Compare", type="primary", key="premium_scan"):
+        if not picks:
+            st.warning("Pick at least one name.")
+        else:
+            snaps = []
+            bar = st.progress(0.0, text="Reading option premiums...")
+            for i, sym in enumerate(picks):
+                try:
+                    snaps.append(provider.get_premium_snapshot(sym, monthly_bp=monthly_bp))
+                except Exception as e:
+                    from src.data.premium_finder import PremiumSnapshot
+                    snaps.append(PremiumSnapshot(symbol=sym, error=str(e)[:40]))
+                bar.progress((i + 1) / len(picks), text=f"Checked {sym} ({i+1}/{len(picks)})")
+            bar.empty()
+            from src.data import premium_finder
+            st.session_state["premium_snaps"] = premium_finder.rank(snaps)
+
+    snaps = st.session_state.get("premium_snaps")
+    if not snaps:
+        st.caption("Press **Compare** to build the table.")
+        return
+
+    st.dataframe(components.premium_dataframe(snaps), width="stretch", hide_index=True,
+                 column_config=components.premium_column_config())
+    with st.expander("🎓 What the columns mean"):
+        st.markdown(
+            "- **Verdict** - the bottom-line call: good to sell / okay / skip.\n"
+            "- **Income $/mo** and **Yield %/mo** - cash you collect, and as a % of the money "
+            "you set aside.\n"
+            "- **Win odds %** - rough chance the put expires worthless and you keep the premium.\n"
+            "- **Cushion %** - how far the stock can fall before you start losing.\n"
+            "- **Premium** - Rich / Fair / Thin: is the premium generous *relative to how much "
+            "the stock actually moves* (the real edge)?\n"
+            "- **Tradable** - Good / OK / Thin, from the bid-ask spread and open interest.\n"
+            "- **Earnings** - flags if an earnings report lands before your option expires.")
+
+    valid = [s for s in snaps if not s.error]
+    if valid:
+        st.divider()
+        chosen = st.selectbox("See the full plan for one name", [s.symbol for s in valid],
+                              key="premium_detail_sym")
+        detail = next(s for s in valid if s.symbol == chosen)
+        with st.container(border=True):
+            components.render_premium_detail(detail)
+            if st.button(f"Analyze {chosen} in depth ▸", key="prem_to_analyze"):
+                st.session_state["analyze_sym"] = chosen
+                st.success(f"Loaded {chosen} into **Analyze a name** - open that tab.")
 
 
-# ------------------------------------------------------------------ Step 2: Name
+# ------------------------------------------------------------------ Analyze tab
+def _tab_analyze(settings, provider, strategies) -> None:
+    theme.section("Analyze any name - and get the strategy that fits it", "Deep dive")
+    opts = _symbol_options(settings)
+    default = st.session_state.get("analyze_sym")
+    idx = opts.index(default) if default in opts else None
+    sym = st.selectbox("Symbol", opts, index=idx, key="analyze_sym",
+                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...")
+    if not sym:
+        st.caption("Pick an index, ETF, or stock for its full picture and the strategy that "
+                   "fits it.")
+        return
+    if not provider.is_real and _classify(sym, settings) != "index":
+        st.info("The deep dive needs real market data - connect to the internet first.")
+        return
+
+    kind = _classify(sym, settings)
+    with st.container(border=True):
+        _symbol_research(sym, provider, settings, key_prefix="analyze")
+        advice = _compute_advice(sym, kind, provider, settings)
+        st.divider()
+        components.render_advice(advice)
+        if advice.primary:
+            if st.button(f"Build this: {advice.primary.name} on {sym} ▸", type="primary",
+                         key="analyze_to_build"):
+                st.session_state["build_strategy"] = advice.primary.key
+                st.session_state["build_underlyings"] = [sym]
+                st.session_state["_prev_build_strategy"] = advice.primary.key
+                st.success("Loaded into **Build & check** - open that tab to scan and check it.")
+
+
 def _symbol_research(sym, provider, settings, key_prefix) -> None:
-    """Full at-a-glance research for one name: index -> price + TradingView;
-    stock/ETF -> the EarningsHub-style overview (grade, chart, analysts, earnings)."""
     kind = _classify(sym, settings)
     if kind == "index":
         price, chg = provider.get_price_change(sym) if provider.is_real else (None, None)
@@ -336,48 +337,16 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
         with c2:
             if tv:
                 components.render_tv_ratings(tv, title=f"TradingView on {sym}")
-        st.caption("Indexes have no earnings or fundamentals - the market read in Step 1 is your "
-                   "main guide here.")
+        st.caption("Indexes have no earnings or fundamentals - the Market tab is your main guide "
+                   "here.")
     else:
         if not provider.is_real:
-            st.info("The full name check needs real data. Connect to the internet and this will "
-                    "show the grade, price trend, and earnings dates.")
+            st.info("The full name check needs real data.")
             return
         _stock_overview_block(sym, provider, key_prefix=key_prefix)
 
 
-def _step_name(settings, provider, strategies) -> None:
-    opts = _symbol_options(settings)
-
-    # Restore the last pick when navigating back (index=), without touching the
-    # widget key directly - so within-step edits and 'removal sticks' both work.
-    default_sym = st.session_state.get("flow_symbol")
-    idx = opts.index(default_sym) if default_sym in opts else None
-    sym = st.selectbox(
-        "Which name do you want to trade?", opts, index=idx, key="w_symbol",
-        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
-        help="Indexes (SPX, NDX...) run credit spreads. ETFs and stocks (SPY, AAPL...) run cash "
-             "secured puts, covered calls, and PMCC.")
-    st.session_state["flow_symbol"] = sym
-
-    # Changing the name makes the strategy + any scan stale - clear them.
-    if st.session_state.get("_prev_flow_symbol") != sym:
-        st.session_state["_prev_flow_symbol"] = sym
-        for k in ("flow_strategy", "w_strategy", "candidates", "wiz_chosen", "scan_sig"):
-            st.session_state.pop(k, None)
-
-    with st.expander("🔎 Not sure which name? Compare a few by premium richness",
-                     expanded=not sym):
-        _premium_finder_section(settings, provider, embedded=True)
-
-    if sym:
-        with st.container(border=True):
-            _symbol_research(sym, provider, settings, key_prefix="name")
-
-    _nav(2, can_continue=bool(sym), hint="Pick a name to continue.")
-
-
-# ------------------------------------------------------------------ Step 3: Strategy
+# ------------------------------------------------------------------ Build & check tab
 def _strategy_about(strat) -> None:
     with st.expander(f"ℹ️ About {strat['name']}", expanded=False):
         st.markdown(f"**What it is:** {strat['plain_english']}")
@@ -390,203 +359,139 @@ def _strategy_about(strat) -> None:
             st.warning(f"⚠️ {strat['warning']}")
 
 
-def _step_strategy(settings, provider, strategies) -> None:
-    sym = st.session_state.get("flow_symbol")
-    if not sym:
-        st.warning("Go back to Step 2 and pick a name first.")
-        _nav(3, can_continue=False)
-        return
+def _tab_build(settings, strategies, provider) -> None:
+    from src.data import stock_universe
+    keys = list(strategies.keys())
+    st.session_state.setdefault("build_strategy", keys[0])
 
-    kind = _classify(sym, settings)
-    valid = _strategies_for_symbol(sym, strategies)
-
-    advice = None
-    if provider.is_real or kind == "index":
-        with st.spinner(f"Working out the best play for {sym}..."):
-            advice = _compute_advice(sym, kind, provider, settings)
-        components.render_advice(advice)
-    else:
-        st.info("Connect to the internet for a tailored recommendation. You can still pick a "
-                "strategy below and check it against your rules.")
-
-    default_strat = st.session_state.get("flow_strategy")
-    if default_strat not in valid:
-        default_strat = (advice.primary.key if advice and advice.primary
-                         and advice.primary.key in valid else valid[0])
-    _seed_widget("w_strategy", "flow_strategy", default_strat)
-    if st.session_state["w_strategy"] not in valid:
-        st.session_state["w_strategy"] = default_strat
-
-    st.write("")
-    strategy_key = st.selectbox(
-        "Strategy for this trade", valid, key="w_strategy",
-        format_func=lambda k: strategies[k]["name"],
-        help="Pre-set to the recommended play above - change it if you prefer another.")
-    st.session_state["flow_strategy"] = strategy_key
-
-    if st.session_state.get("_prev_flow_strategy_s3") != strategy_key:
-        st.session_state["_prev_flow_strategy_s3"] = strategy_key
-        st.session_state.pop("candidates", None)
-        st.session_state.pop("wiz_chosen", None)
-        st.session_state.pop("scan_sig", None)
-
-    _strategy_about(strategies[strategy_key])
-    _nav(3)
-
-
-# ------------------------------------------------------------------ Step 4: Setup
-def _step_setup(strategies, provider) -> None:
-    strategy_key = st.session_state.get("flow_strategy")
-    sym = st.session_state.get("flow_symbol")
-    if not strategy_key or not sym:
-        st.warning("Go back and choose a name and a strategy first.")
-        _nav(4, can_continue=False)
-        return
+    top = st.columns([2, 2])
+    strategy_key = top[0].selectbox("Strategy", keys, key="build_strategy",
+                                    format_func=lambda k: strategies[k]["name"])
     strat = strategies[strategy_key]
-    underlyings = [sym]
+    allowed = allowed_underlyings_for(strategy_key)
+    priority = [u for u in (settings["underlyings"]["us_style"] + stock_universe.FEATURED)
+                if u in allowed]
+    ordered = priority + [u for u in allowed if u not in priority]
+    default_u = ["SPX"] if "SPX" in allowed else ordered[:1]
+    st.session_state.setdefault("build_underlyings", default_u)
+    if st.session_state.get("_prev_build_strategy") != strategy_key:
+        st.session_state["_prev_build_strategy"] = strategy_key
+        valid = [u for u in st.session_state["build_underlyings"] if u in ordered]
+        st.session_state["build_underlyings"] = valid or default_u
+    underlyings = top[1].multiselect("Underlying(s)", ordered, key="build_underlyings",
+                                     help="Type to search. Pick more than one to scan together.")
 
-    if not scanner.can_scan(strategy_key):
-        st.info("This strategy depends on the real shares you already own, so the app can't scan "
-                "it for you. In the next step you can type in the trade exactly as you set it up "
-                "in thinkorswim, and the app will check it against your SOP.")
-        _nav(4, continue_label="Enter it myself ▸")
-        return
+    if strat.get("family") == "credit_spread":
+        st.caption("ℹ️ Credit spreads use cash-settled **index** names only (SPX, NDX, RUT, XSP). "
+                   "To trade a stock or ETF, pick **Cash Secured Put** or a **Covered Call**.")
+    else:
+        st.caption("Type any S&P 500 or Nasdaq-100 **stock** (AAPL, NVDA...) or an ETF "
+                   "(SPY, QQQ, IWM, DIA). Want the recommended play for a name? Use **Analyze**.")
 
     uses_width = strat.get("family") == "credit_spread"
     row = st.columns([1, 1] if uses_width else [1, 2])
-    contracts = row[0].number_input("Contracts", min_value=1, max_value=50, value=1, step=1,
-                                    help="How many copies of the whole position. Default is 1.")
+    contracts = row[0].number_input("Contracts", min_value=1, max_value=50, value=1, step=1)
     width = None
     if uses_width:
         width = row[1].number_input("Spread width ($)", min_value=1.0, max_value=200.0,
                                     value=25.0, step=1.0,
                                     help="Gap between your short and long strike.")
 
-    scan_sig = (strategy_key, sym, int(contracts), width)
-    if st.session_state.get("scan_sig") != scan_sig:
-        st.session_state["scan_sig"] = scan_sig
-        st.session_state.pop("candidates", None)
-        st.session_state.pop("wiz_chosen", None)
+    sig = (strategy_key, tuple(underlyings), int(contracts), width)
+    if st.session_state.get("build_sig") != sig:
+        st.session_state["build_sig"] = sig
+        st.session_state.pop("build_candidates", None)
+        st.session_state.pop("build_chosen", None)
 
+    _strategy_about(strat)
+    st.divider()
+    mode = st.radio("How", ["🔎 Find setups for me", "✅ Check a trade I built myself"],
+                    horizontal=True, label_visibility="collapsed", key="build_mode")
+    if mode.startswith("🔎"):
+        _build_scan(strategy_key, strat, underlyings, provider, contracts, width)
+    else:
+        _build_manual(strategy_key, strat, underlyings)
+
+
+def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
+    if not scanner.can_scan(key):
+        st.info("This strategy depends on the real shares you already own, so use **Check a "
+                "trade I built myself** above to validate it against your SOP.")
+        return
+    if not underlyings:
+        st.warning("Pick at least one underlying above.")
+        return
+
+    existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
+                                  value=0.0, step=1000.0,
+                                  help="So the monthly-limit check is realistic.")
     is_pmcc = strat.get("family") == "diagonal"
-    st.caption(f"Shows up to 10 {strat['name']} setups on {sym} - one per expiration, sorted by "
-               "days to expiration, each at the delta your SOP calls for."
-               + (" (PMCC also picks a deep-in-the-money LEAPS as the stock stand-in.)"
-                  if is_pmcc else ""))
+    st.caption(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
+               "each at the delta your SOP calls for."
+               + (" (PMCC also picks a deep-in-the-money LEAPS.)" if is_pmcc else ""))
 
     if st.button("🔎 Scan the market now", type="primary"):
         found = []
-        with st.spinner(f"Reading {sym} option chains..."):
+        bar = st.progress(0.0, text="Reading option chains...")
+        for i, u in enumerate(underlyings):
             try:
-                chain = provider.get_chain(sym)
-                leaps = provider.get_leaps_chain(sym) if is_pmcc else None
-                found = scanner.scan_setups(strategy_key, chain, width=width,
-                                            contracts=int(contracts), max_setups=10,
-                                            leaps_chain=leaps)
+                chain = provider.get_chain(u)
+                leaps = provider.get_leaps_chain(u) if is_pmcc else None
+                found.extend(scanner.scan_setups(key, chain, width=width,
+                                                 contracts=int(contracts), max_setups=10,
+                                                 leaps_chain=leaps))
             except Exception as e:
-                st.error(f"{sym}: {e}")
-        found.sort(key=lambda c: (c.dte if c.dte is not None else 0))
-        st.session_state["candidates"] = found
-        st.session_state.pop("wiz_chosen", None)
+                st.error(f"{u}: {e}")
+            bar.progress((i + 1) / len(underlyings), text=f"Scanned {u} ({i+1}/{len(underlyings)})")
+        bar.empty()
+        found.sort(key=lambda c: (c.trade.underlying, c.dte if c.dte is not None else 0))
+        st.session_state["build_candidates"] = found
+        st.session_state.pop("build_chosen", None)
 
-    candidates = st.session_state.get("candidates", [])
+    candidates = st.session_state.get("build_candidates", [])
     if not candidates:
-        if "candidates" in st.session_state:
-            _no_setups_message(strat, is_pmcc)
+        if "build_candidates" in st.session_state:
+            fam = strat.get("family")
+            if fam == "covered_call":
+                st.info("No setups found. A covered call needs 100 shares - for these names that "
+                        "may exceed your monthly buying-power limit. Try a cheaper stock or a PMCC.")
+            elif is_pmcc:
+                st.info("No setups found. PMCC needs long-dated LEAPS, which some names lack "
+                        "(and demo mode has none). Try a large, liquid stock on real data.")
+            else:
+                st.info("No setups found for these names right now.")
         else:
             st.caption("Press **Scan the market now** for a short list of the best setups.")
-        _nav(4, can_continue=False)
         return
 
     scanned_dtes = sorted({c.dte for c in candidates if c.dte is not None})
     st.success(f"Found {len(candidates)} setup(s) at your SOP delta, across "
                f"{', '.join(str(d) for d in scanned_dtes)} days to expiration.")
     st.dataframe(components.candidates_dataframe(candidates), width="stretch", hide_index=True)
-    with st.expander("🎓 What do these columns mean?"):
-        st.markdown(
-            "- **DTE** - days to expiration. You get a few, spread from 21 to 44 days.\n"
-            "- **Short Δ (delta)** - roughly the chance the option you SOLD finishes in the "
-            "money. Each setup is at the delta your SOP aims for.\n"
-            "- **Credit $** - cash you collect up front.\n"
-            "- **Max loss $** - the worst case if the trade goes fully against you.\n"
-            "- **Return/Risk** - credit divided by max loss. Higher = richer premium for the "
-            "risk taken.")
 
-    pick = st.number_input("Pick a setup to check (trade #)", min_value=1,
-                           max_value=len(candidates), value=1, step=1)
+    pick = st.number_input("Look at trade #", min_value=1, max_value=len(candidates),
+                           value=1, step=1)
     chosen = candidates[int(pick) - 1]
-    st.session_state["wiz_chosen"] = chosen
-
     with st.container(border=True):
         if not chosen.fits_sop:
             st.warning(f"⚠️ {chosen.note}")
         st.markdown("**Leg-by-leg (build it this way in thinkorswim):**")
         st.dataframe(components.candidate_leg_detail(chosen), width="stretch", hide_index=True)
-
-    _nav(4, continue_label="Check this setup ▸")
-
-
-def _no_setups_message(strat, is_pmcc) -> None:
-    fam = strat.get("family")
-    if fam == "covered_call":
-        st.info("No setups found. A covered call needs 100 shares, and for this name that may "
-                "cost more than your monthly buying-power limit. Try a lower-priced stock, or use "
-                "a Poor Man's Covered Call.")
-    elif is_pmcc:
-        st.info("No setups found. PMCC needs long-dated LEAPS options, which some names do not "
-                "offer (and demo mode has none). Try a large, liquid stock in real-data mode.")
-    else:
-        st.info("No setups found for this name right now.")
+        st.markdown("**Your SOP checklist:**")
+        report = validate_trade(chosen.trade, existing_month_bp=existing_bp)
+        components.render_checklist(report)
+        _log_button(chosen.trade, strat["name"],
+                    {"credit": chosen.credit, "max_loss": chosen.max_loss,
+                     "buying_power": chosen.buying_power}, report.passed, key="scan")
 
 
-# ------------------------------------------------------------------ Step 5: Check + Log
-def _step_check(strategies, provider) -> None:
-    strategy_key = st.session_state.get("flow_strategy")
-    sym = st.session_state.get("flow_symbol")
-    if not strategy_key:
-        st.warning("Go back and choose a name and a strategy first.")
-        _nav(5, can_continue=False)
-        return
-    strat = strategies[strategy_key]
-    chosen = st.session_state.get("wiz_chosen")
-
-    options = ["✅ Check the setup I picked", "✏️ Check a trade I built myself"]
-    default_idx = 0 if chosen is not None else 1
-    mode = st.radio("What do you want to check?", options, index=default_idx,
-                    horizontal=True, key="check_mode")
-
-    existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
-                                  value=0.0, step=1000.0,
-                                  help="So the monthly-limit check is realistic.")
-
-    if mode.startswith("✅"):
-        if chosen is None:
-            st.info("You haven't picked a setup yet. Go back to Step 4 and scan, or switch to "
-                    "**Check a trade I built myself** above.")
-            _nav(5)
-            return
-        with st.container(border=True):
-            st.markdown(f"**{strat['name']} on {chosen.trade.underlying}**")
-            st.dataframe(components.candidate_leg_detail(chosen), width="stretch", hide_index=True)
-            st.markdown("**Your SOP checklist:**")
-            report = validate_trade(chosen.trade, existing_month_bp=existing_bp)
-            components.render_checklist(report)
-            _log_button(chosen.trade, strat["name"],
-                        {"credit": chosen.credit, "max_loss": chosen.max_loss,
-                         "buying_power": chosen.buying_power}, report.passed, key="scan")
-    else:
-        _manual_check(strategy_key, strat, sym, existing_bp)
-
-    _nav(5)
-
-
-def _manual_check(key, strat, sym, existing_bp) -> None:
+def _build_manual(key, strat, underlyings) -> None:
     st.caption("Type in the trade exactly as you set it up in thinkorswim. "
                "Long = you bought it (+), short = you sold it (-).")
-    default_list = [sym] if sym else allowed_underlyings_for(key)
-    underlying = st.selectbox("Underlying", default_list, key="val_underlying")
-    contracts = st.number_input("Contracts", min_value=1, max_value=50, value=1, step=1,
-                                key="val_contracts")
+    underlying = st.selectbox("Underlying", underlyings or allowed_underlyings_for(key),
+                              key="val_underlying")
+    existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
+                                  value=0.0, step=1000.0, key="val_bp")
 
     legs: list[Leg] = []
     for i, leg_def in enumerate(strat["legs"]):
@@ -602,11 +507,12 @@ def _manual_check(key, strat, sym, existing_bp) -> None:
         delta = cols[1].number_input("Delta", min_value=-1.0, max_value=1.0, value=0.0, step=0.01,
                                      key=f"delta_{i}", help="Puts negative, calls positive.")
         premium = cols[2].number_input("Mid price", min_value=0.0, value=0.0, step=0.05, key=f"prem_{i}")
-        dte = cols[3].number_input("DTE", min_value=0, max_value=1000, value=30,
-                                   step=1, key=f"dte_{i}")
+        dte = cols[3].number_input("DTE", min_value=0, max_value=1000, value=30, step=1, key=f"dte_{i}")
         legs.append(Leg(role=role, action=action, option_type=opt_type, strike=strike,
                         delta=delta, premium=premium, quantity=qty, dte=int(dte)))
 
+    contracts = st.number_input("Contracts", min_value=1, max_value=50, value=1, step=1,
+                                key="val_contracts")
     if st.button("Check this trade", type="primary"):
         trade = Trade(strategy_key=key, underlying=underlying, contracts=int(contracts), legs=legs)
         st.session_state["checked_trade"] = trade
@@ -621,48 +527,8 @@ def _manual_check(key, strat, sym, existing_bp) -> None:
                         report.passed, key="manual")
 
 
-# ------------------------------------------------------------------ Explore mode
-def _explore(settings, provider, strategies) -> None:
-    theme.section("Explore names - look around, no commitment", "Research")
-    st.caption("Screen for premium or look up any name's full picture. When you find one you "
-               "like, jump straight into placing the trade.")
-
-    _premium_finder_section(settings, provider, embedded=False)
-
-    st.divider()
-    theme.section("Look up any name", "Deep dive")
-    opts = _symbol_options(settings)
-    sym = st.selectbox("Symbol", opts, index=None, key="explore_sym",
-                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...")
-    if not sym:
-        st.caption("Pick a name for its full analysis and the strategy that fits it.")
-        return
-    if not provider.is_real and _classify(sym, settings) != "index":
-        st.info("The deep dive needs real market data - connect to the internet first.")
-        return
-
-    kind = _classify(sym, settings)
-    with st.container(border=True):
-        _symbol_research(sym, provider, settings, key_prefix="explore")
-        advice = _compute_advice(sym, kind, provider, settings)
-        st.divider()
-        components.render_advice(advice)
-        if advice.primary:
-            if st.button(f"Trade this: {advice.primary.name} on {sym} ▸", type="primary",
-                         key="explore_trade"):
-                st.session_state["flow_symbol"] = sym
-                st.session_state["flow_strategy"] = advice.primary.key
-                st.session_state["_prev_flow_symbol"] = sym
-                for k in ("w_symbol", "w_strategy", "candidates", "wiz_chosen", "scan_sig",
-                          "app_mode"):
-                    st.session_state.pop(k, None)
-                _goto(3)
-
-
 # ------------------------------------------------------------------ shared pieces
 def _stock_overview_block(sym, provider, key_prefix="setup"):
-    """The full stock overview (score card, chart, analysts, earnings).
-    Returns (analysis, earn_info)."""
     with st.spinner(f"Analyzing {sym}..."):
         analysis = provider.get_stock_analysis(sym)
         info = provider.get_raw_info(sym)
@@ -712,54 +578,6 @@ def _stock_overview_block(sym, provider, key_prefix="setup"):
     return analysis, earn_info
 
 
-def _premium_finder_section(settings, provider, embedded=False) -> None:
-    """Compare symbols by how rich their option premiums are - helps choose a name."""
-    from src.data import stock_universe
-
-    if not embedded:
-        theme.section("Which names pay the best premium?", "Premium finder")
-    st.caption("For each name it checks selling a one-month put (~0.30 delta, about a 70% "
-               "chance of keeping the premium) and gives a simple call: good to sell, okay, "
-               "or skip.")
-
-    if not provider.is_real:
-        st.info("The premium finder needs real market data - connect to the internet first.")
-        return
-
-    etfs = settings["underlyings"]["us_style"]
-    options = list(dict.fromkeys(etfs + stock_universe.FEATURED + stock_universe.all_stocks()))
-    picks = st.multiselect(
-        "Compare a few names", options,
-        default=[s for s in ["AAPL", "NVDA", "SPY"] if s in options],
-        max_selections=12, key="premium_picks",
-        help="Start with 2-4 names. You can add more, but fewer is easier to compare.")
-
-    monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
-    if st.button("Compare", type="primary", key="premium_scan"):
-        if not picks:
-            st.warning("Pick at least one symbol.")
-        else:
-            snaps = []
-            bar = st.progress(0.0, text="Reading option premiums...")
-            for i, sym in enumerate(picks):
-                try:
-                    snaps.append(provider.get_premium_snapshot(sym, monthly_bp=monthly_bp))
-                except Exception as e:
-                    from src.data.premium_finder import PremiumSnapshot
-                    snaps.append(PremiumSnapshot(symbol=sym, error=str(e)[:40]))
-                bar.progress((i + 1) / len(picks), text=f"Checked {sym} ({i+1}/{len(picks)})")
-            bar.empty()
-            from src.data import premium_finder
-            st.session_state["premium_snaps"] = premium_finder.rank(snaps)
-
-    snaps = st.session_state.get("premium_snaps")
-    if not snaps:
-        st.caption("Press **Compare** for a simple good-to-sell / okay / skip on each name.")
-        return
-    components.render_premium_cards(snaps)
-    st.caption("See a name you like? Type it into the name box above to analyze and trade it.")
-
-
 def _log_button(trade, strategy_name, size, passed, key: str) -> None:
     note = st.text_input("Note (optional)", key=f"note_{key}",
                          placeholder="e.g. VIX low, following the SOP")
@@ -786,15 +604,6 @@ def _sidebar(settings, provider) -> None:
                     "data, or set up Schwab for true real-time.")
         elif provider.mode == "yahoo":
             st.caption("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
-
-        st.divider()
-        if st.button("↺ Start over", use_container_width=True,
-                     help="Clear this trade and go back to Step 1."):
-            for k in ("flow_symbol", "flow_strategy", "w_symbol", "w_strategy", "candidates",
-                      "wiz_chosen", "checked_trade", "scan_sig", "_prev_flow_symbol",
-                      "_prev_flow_strategy_s3"):
-                st.session_state.pop(k, None)
-            _goto(1)
 
         st.divider()
         st.markdown("**Your plan**")
