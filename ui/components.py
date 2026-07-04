@@ -45,7 +45,7 @@ def _metric_line(m) -> None:
     st.markdown(_esc(f"{icon} **{m.label}:** :{color}[{m.value}] - {m.read}"))
 
 
-_GRADE_COLOR = {"A": "#059669", "B": "#10B981", "C": "#D97706", "D": "#EA580C", "F": "#DC2626"}
+_GRADE_COLOR = {"A": "#0A6A49", "B": "#12855C", "C": "#B45309", "D": "#C2410C", "F": "#C02A1B"}
 
 
 def _fmt_big(n) -> str:
@@ -62,7 +62,7 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
     """The 'Quality score' box - stats strip with the grade badge, like the
     EarningsHub score card. Pure HTML so dollar signs render safely.
     """
-    gcolor = _GRADE_COLOR.get(analysis.grade, "#D97706")
+    gcolor = _GRADE_COLOR.get(analysis.grade, "#B45309")
     pe = info.get("trailingPE")
     fpe = info.get("forwardPE")
     ps = info.get("priceToSalesTrailing12Months")
@@ -73,7 +73,7 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
 
     def stat(label, value):
         return (f"<span style='margin-right:18px;white-space:nowrap;'>"
-                f"<span style='color:#64748B;'>{label}</span> "
+                f"<span style='color:#4E625A;'>{label}</span> "
                 f"<b>{value}</b></span>") if value else ""
 
     row1 = "".join([
@@ -83,16 +83,16 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
         stat("P/S", f"{ps:.1f}" if ps else ""),
     ])
     row2 = "".join([
-        stat("Revenue (12mo)", f"{_fmt_big(rev)}" + (f" <span style='color:#059669;'>({rg*100:+.0f}%)</span>" if rg is not None else "") if rev else ""),
-        stat("EPS (12mo)", f"&#36;{eps:.2f}" + (f" <span style='color:#059669;'>({eg*100:+.0f}%)</span>" if eg is not None else "") if eps else ""),
+        stat("Revenue (12mo)", f"{_fmt_big(rev)}" + (f" <span style='color:#0B7A54;'>({rg*100:+.0f}%)</span>" if rg is not None else "") if rev else ""),
+        stat("EPS (12mo)", f"&#36;{eps:.2f}" + (f" <span style='color:#0B7A54;'>({eg*100:+.0f}%)</span>" if eg is not None else "") if eps else ""),
     ])
     return (
-        f"<div style='background:#F8F9FC;border:1px solid #E2E8F0;border-radius:14px;"
+        f"<div style='background:#F2F9F5;border:1px solid #DAE7E0;border-radius:14px;"
         f"padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"
         f"gap:12px;margin:4px 0 10px;'>"
         f"<div style='line-height:2;'>"
         f"<div style='font-weight:700;margin-bottom:2px;'>Quality score "
-        f"<span style='color:#64748B;font-weight:500;font-size:0.85rem;'>"
+        f"<span style='color:#4E625A;font-weight:500;font-size:0.85rem;'>"
         f"(from the checks below)</span></div>"
         f"<div>{row1}</div><div>{row2}</div></div>"
         f"<div style='background:{gcolor};color:#fff;border-radius:12px;min-width:52px;"
@@ -114,12 +114,12 @@ def render_price_chart(frame, earnings_dates: list | None = None) -> None:
     df = frame.reset_index()
     df.columns = ["Date", "Close"]
     rising = float(df["Close"].iloc[-1]) >= float(df["Close"].iloc[0])
-    color = "#059669" if rising else "#DC2626"
+    color = "#0B7A54" if rising else "#DC2626"
     rgba = "5,150,105" if rising else "220,38,38"
 
     base = alt.Chart(df).encode(
         x=alt.X("Date:T", axis=alt.Axis(title=None, format="%b '%y", grid=False,
-                                        labelColor="#64748B", domainColor="#E2E8F0")),
+                                        labelColor="#4E625A", domainColor="#DAE7E0")),
     )
     area = base.mark_area(
         line={"color": color, "strokeWidth": 2},
@@ -133,7 +133,7 @@ def render_price_chart(frame, earnings_dates: list | None = None) -> None:
     ).encode(
         y=alt.Y("Close:Q",
                 scale=alt.Scale(zero=False, nice=True),
-                axis=alt.Axis(title=None, format="$,.0f", labelColor="#64748B",
+                axis=alt.Axis(title=None, format="$,.0f", labelColor="#4E625A",
                               gridColor="#EEF2F7", domainOpacity=0)),
     )
 
@@ -161,7 +161,7 @@ def render_price_chart(frame, earnings_dates: list | None = None) -> None:
             layers.append(alt.Chart(edf).mark_rule(
                 color="#94A3B8", strokeDash=[4, 4], opacity=0.35).encode(x="Date:T"))
             layers.append(alt.Chart(edf).mark_text(
-                text="E", dy=0, fontSize=11, fontWeight="bold", color="#059669",
+                text="E", dy=0, fontSize=11, fontWeight="bold", color="#0B7A54",
             ).encode(x="Date:T", y=alt.value(248),
                      tooltip=alt.value("Earnings report")))
 
@@ -217,12 +217,12 @@ def render_stock_overview(
                 first = float(frame["Close"].iloc[0])
                 last = float(frame["Close"].iloc[-1])
                 diff, pct = last - first, (last - first) / first * 100
-                ccolor = "#059669" if diff >= 0 else "#DC2626"
+                ccolor = "#0B7A54" if diff >= 0 else "#DC2626"
                 arrow = "▲" if diff >= 0 else "▼"
                 change_html = (f"<span style='color:{ccolor};font-weight:700;'>"
                                f"{arrow} &#36;{abs(diff):,.2f} ({pct:+.1f}%)</span>"
-                               f"<span style='color:#64748B;'> · past {choice or '1Y'}</span>")
-            today_html = (f"<span style='color:#64748B;font-size:0.9rem;'> · today "
+                               f"<span style='color:#4E625A;'> · past {choice or '1Y'}</span>")
+            today_html = (f"<span style='color:#4E625A;font-size:0.9rem;'> · today "
                           f"{change_pct:+.2f}%</span>") if change_pct is not None else ""
             st.markdown(
                 f"<div style='font-size:2rem;font-weight:800;line-height:1.1;'>"
@@ -250,14 +250,14 @@ def render_stock_overview(
             sell = analysts.get("sell", 0) + analysts.get("strong_sell", 0)
             verdict = ("BUY" if buy / total >= 0.5 else
                        "SELL" if sell / total >= 0.4 else "HOLD")
-            vcolor = {"BUY": "#059669", "HOLD": "#D97706", "SELL": "#DC2626"}[verdict]
+            vcolor = {"BUY": "#0B7A54", "HOLD": "#B45309", "SELL": "#DC2626"}[verdict]
             st.markdown(
                 f"<span style='background:{vcolor};color:#fff;border-radius:10px;"
                 f"padding:2px 14px;font-weight:800;'>{verdict}</span> "
                 f"<span style='font-size:0.95rem;'>({total} analysts)</span>",
                 unsafe_allow_html=True,
             )
-            for label, n, color in (("Buy", buy, "#059669"), ("Hold", hold, "#D97706"),
+            for label, n, color in (("Buy", buy, "#0B7A54"), ("Hold", hold, "#B45309"),
                                     ("Sell", sell, "#DC2626")):
                 pct = n / total * 100
                 st.markdown(
@@ -285,14 +285,14 @@ def render_stock_overview(
             scatter = alt.Chart(df).mark_circle(size=110, opacity=1).encode(
                 x=alt.X("Quarter:N", sort=None,
                         axis=alt.Axis(title=None, labelAngle=-45,
-                                      labelColor="#64748B", domainColor="#E2E8F0")),
+                                      labelColor="#4E625A", domainColor="#DAE7E0")),
                 y=alt.Y("EPS:Q", scale=alt.Scale(zero=False, nice=True),
                         axis=alt.Axis(title=None, format="$,.2f",
-                                      labelColor="#64748B", gridColor="#EEF2F7",
+                                      labelColor="#4E625A", gridColor="#EEF2F7",
                                       domainOpacity=0)),
                 color=alt.Color("Result:N", legend=None,
                                 scale=alt.Scale(domain=["Beat", "Missed"],
-                                                range=["#059669", "#DC2626"])),
+                                                range=["#0B7A54", "#DC2626"])),
                 tooltip=[alt.Tooltip("Quarter:N"),
                          alt.Tooltip("Expected:Q", format="$,.2f", title="Analysts expected"),
                          alt.Tooltip("EPS:Q", format="$,.2f", title="Delivered"),
@@ -322,12 +322,12 @@ def render_tv_ratings(ratings: dict, title: str = "TradingView technical rating"
     if not ratings:
         return
     st.markdown(f"**📊 {title}**")
-    verdict_color = {"green": "#059669", "orange": "#D97706", "red": "#DC2626"}
+    verdict_color = {"green": "#0B7A54", "orange": "#B45309", "red": "#DC2626"}
     cols = st.columns(len(ratings))
     for col, (label, r) in zip(cols, ratings.items()):
         total = max(r.buy + r.neutral + r.sell, 1)
         b, n, s = (r.buy / total * 100, r.neutral / total * 100, r.sell / total * 100)
-        vc = verdict_color.get(r.color, "#D97706")
+        vc = verdict_color.get(r.color, "#B45309")
         window = "on daily charts" if label == "daily" else "on weekly charts (longer view)"
         with col:
             st.markdown(
@@ -335,13 +335,13 @@ def render_tv_ratings(ratings: dict, title: str = "TradingView technical rating"
                 f"<b style='color:{vc};'>{r.recommendation}</b></div>"
                 # one bar, three colored segments = the indicator vote
                 f"<div style='display:flex;height:12px;border-radius:6px;overflow:hidden;"
-                f"border:1px solid #E2E8F0;max-width:340px;'>"
-                f"<div style='width:{b:.0f}%;background:#059669;'></div>"
+                f"border:1px solid #DAE7E0;max-width:340px;'>"
+                f"<div style='width:{b:.0f}%;background:#0B7A54;'></div>"
                 f"<div style='width:{n:.0f}%;background:#CBD5E1;'></div>"
                 f"<div style='width:{s:.0f}%;background:#DC2626;'></div></div>"
-                f"<div style='font-size:0.85rem;color:#64748B;margin-top:2px;'>"
+                f"<div style='font-size:0.85rem;color:#4E625A;margin-top:2px;'>"
                 f"{total} indicators {window}: "
-                f"<span style='color:#059669;font-weight:600;'>{r.buy} buy</span> · "
+                f"<span style='color:#0B7A54;font-weight:600;'>{r.buy} buy</span> · "
                 f"{r.neutral} neutral · "
                 f"<span style='color:#DC2626;font-weight:600;'>{r.sell} sell</span></div>",
                 unsafe_allow_html=True,
@@ -352,7 +352,7 @@ def render_tv_ratings(ratings: dict, title: str = "TradingView technical rating"
 
 
 _VERDICT_STYLE = {
-    "sell": ("✅ Good to sell", "#059669", "#ECFDF5", "#A7F3D0"),
+    "sell": ("✅ Good to sell", "#0B7A54", "#ECFDF5", "#A7F3D0"),
     "okay": ("⚠️ Okay", "#B45309", "#FFFBEB", "#FDE68A"),
     "skip": ("❌ Skip", "#B91C1C", "#FEF2F2", "#FECACA"),
 }
@@ -364,15 +364,15 @@ def render_premium_cards(snapshots: list) -> None:
     for s in snapshots:
         if s.error:
             st.markdown(
-                f"<div style='border:1px solid #E2E8F0;border-radius:14px;padding:12px 16px;"
-                f"margin-bottom:10px;color:#64748B;'><b>{s.symbol}</b> - {s.error}</div>",
+                f"<div style='border:1px solid #DAE7E0;border-radius:14px;padding:12px 16px;"
+                f"margin-bottom:10px;color:#4E625A;'><b>{s.symbol}</b> - {s.error}</div>",
                 unsafe_allow_html=True)
             continue
 
         label, vcolor, vbg, vborder = _VERDICT_STYLE.get(s.verdict, _VERDICT_STYLE["okay"])
-        gcolor = _GRADE_COLOR.get(s.grade, "#4F46E5")   # ETF/None -> indigo
+        gcolor = _GRADE_COLOR.get(s.grade, "#0B7A54")   # ETF/None -> indigo
         grade_txt = s.grade or "ETF"
-        rich_color = ("#059669" if s.richness == "Rich"
+        rich_color = ("#0B7A54" if s.richness == "Rich"
                       else "#B45309" if s.richness == "Fair" else "#B91C1C")
         cushion = (f" · falls to ${s.breakeven:,.0f} before you lose "
                    f"({s.cushion_pct:.0f}% cushion)" if s.cushion_pct is not None else "")
@@ -381,14 +381,14 @@ def render_premium_cards(snapshots: list) -> None:
 
         st.markdown(
             f"""
-            <div style="border:1px solid #E2E8F0;border-radius:14px;padding:14px 16px;
+            <div style="border:1px solid #DAE7E0;border-radius:14px;padding:14px 16px;
                         margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.05);">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
                 <div style="display:flex;align-items:center;gap:10px;">
                   <span style="background:{gcolor};color:#fff;border-radius:8px;padding:2px 9px;
                                font-weight:800;font-size:0.95rem;">{grade_txt}</span>
                   <span style="font-size:1.25rem;font-weight:800;">{s.symbol}</span>
-                  <span style="color:#64748B;">${s.price:,.2f}</span>
+                  <span style="color:#4E625A;">${s.price:,.2f}</span>
                 </div>
                 <span style="background:{vbg};border:1px solid {vborder};color:{vcolor};
                              border-radius:999px;padding:3px 14px;font-weight:700;
@@ -396,7 +396,7 @@ def render_premium_cards(snapshots: list) -> None:
               </div>
               <div style="margin-top:8px;font-size:1.1rem;">
                 <b>${s.credit_dollars:,.0f}/month</b>
-                <span style="color:#64748B;">({s.monthly_yield_pct:.1f}%)</span>
+                <span style="color:#4E625A;">({s.monthly_yield_pct:.1f}%)</span>
                 &nbsp;·&nbsp; Premium <b style="color:{rich_color};">{s.richness}</b>
                 &nbsp;·&nbsp; {s.action}
               </div>

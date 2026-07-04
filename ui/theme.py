@@ -1,57 +1,64 @@
-"""The app's design system: modern, clean, accessible.
+"""The app's design system: "Fresh Growth" - modern, friendly, accessible.
 
-- Inter typeface (the font used by Linear, Figma, GitHub - the modern standard)
-- One indigo accent on a cool near-white canvas with white cards
-- Streamlit's default chrome (menu, footer, toolbar) hidden
-- Reusable pieces: hero header, section headings with eyebrows, chips
+- Emerald-green brand on a soft green-tinted canvas with clean white cards.
+- Inter typeface, generous sizing, and HIGH-CONTRAST text throughout - secondary
+  text is deliberately dark (not the faded grey that fails accessibility).
+- Alive but calm: smooth hovers, clear focus rings, subtle depth.
 
-Accessibility: 17px base text, slate-900 on white (17:1 contrast), color is
-never the only signal (labels and icons accompany it), visible focus rings.
+Accessibility targets (WCAG AA):
+- Body text 17px, primary ink #0B1F16 on white ~ 16:1 contrast.
+- Secondary #35463D ~ 9:1, muted #4E625A ~ 5.6:1 - both pass AA, no washed-out grey.
+- Color is never the only signal (icons + labels accompany it); visible focus rings.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-# ---------------- palette ----------------
-ACCENT = "#4F46E5"        # indigo-600
-ACCENT_DARK = "#4338CA"   # indigo-700
-INK = "#0F172A"           # slate-900
-MUTED = "#64748B"         # slate-500
-BORDER = "#E2E8F0"        # slate-200
-CANVAS = "#F8F9FC"
+# ---------------- palette (Fresh Growth) ----------------
+ACCENT = "#0B7A54"        # deep emerald - buttons, slider, links, focus (white text passes AA)
+ACCENT_DARK = "#0A6042"   # hover / pressed
+ACCENT_BRIGHT = "#10B981" # decorative only (chart lines, small fills) - never text
+INK = "#0B1F16"           # primary text - near-black, green undertone, very high contrast
+SECONDARY = "#35463D"     # secondary text - dark enough to be accessible (~9:1)
+MUTED = "#4E625A"         # captions / hints - still ~5.6:1, NOT a faded grey
+BORDER = "#DAE7E0"        # soft green-grey hairline
+BORDER_STRONG = "#C1D5CB"
+CANVAS = "#F2F9F5"        # soft green-tinted canvas
 CARD = "#FFFFFF"
-TILE = "#F8F9FC"
-GREEN = "#059669"         # emerald-600
-AMBER = "#D97706"         # amber-600
-RED = "#DC2626"           # red-600
+TILE = "#EEF7F1"          # metric-tile fill
+GREEN = "#0B7A54"         # success / good
+AMBER = "#B45309"         # warning
+RED = "#C02A1B"           # danger
 
 _CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 /* ---------------- global type ---------------- */
-/* Force Inter everywhere except code blocks and Streamlit's icon glyphs
-   (those use an icon font that must not be overridden). */
 html, body, .stApp {{
     font-size: 17px;
     color: {INK};
-    font-feature-settings: 'tnum' 1;   /* aligned numbers in tables/metrics */
+    font-feature-settings: 'tnum' 1, 'cv05' 1;   /* aligned numbers */
 }}
+.stApp {{ background: {CANVAS}; }}
 .stApp *:not(code):not(pre):not([data-testid="stIconMaterial"]):not([class*="material"]) {{
     font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif !important;
 }}
-h1, h2, h3, h4 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02em; }}
+h1, h2, h3, h4 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02em;
+                  color: {INK}; }}
 h1 {{ font-size: 2rem !important;   font-weight: 800 !important; }}
 h2 {{ font-size: 1.45rem !important; font-weight: 750 !important; }}
 h3 {{ font-size: 1.15rem !important; font-weight: 700 !important; }}
-p, li, label {{ line-height: 1.6; }}
+p, li, label, .stMarkdown {{ line-height: 1.6; }}
+/* Streamlit captions default to a pale grey - darken for readability. */
+[data-testid="stCaptionContainer"], .stCaption, small {{ color: {MUTED} !important; }}
 
 /* ---------------- hide Streamlit chrome ---------------- */
 #MainMenu, footer {{ visibility: hidden; }}
 [data-testid="stToolbar"] {{ display: none; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
-.block-container {{ padding-top: 1.2rem; max-width: 1200px; }}
+.block-container {{ padding-top: 1.2rem; max-width: 1180px; }}
 
 /* ---------------- sidebar ---------------- */
 section[data-testid="stSidebar"] {{
@@ -64,66 +71,81 @@ section[data-testid="stSidebar"] {{
     background: {CARD};
     border: 1px solid {BORDER} !important;
     border-radius: 16px !important;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+    box-shadow: 0 1px 2px rgba(11, 122, 84, 0.04), 0 6px 20px rgba(11, 122, 84, 0.05);
 }}
 
 /* ---------------- metrics as tiles ---------------- */
 [data-testid="stMetric"] {{
     background: {TILE};
     border: 1px solid {BORDER};
-    border-radius: 12px;
-    padding: 10px 14px;
+    border-radius: 14px;
+    padding: 12px 16px;
+    transition: border-color .15s ease, box-shadow .15s ease;
 }}
-[data-testid="stMetricValue"] {{ font-size: 1.55rem; font-weight: 800; }}
-[data-testid="stMetricLabel"] {{ font-size: 0.85rem; font-weight: 600; color: {MUTED};
-                                 text-transform: uppercase; letter-spacing: 0.04em; }}
-[data-testid="stMetricDelta"] {{ font-weight: 600; }}
+[data-testid="stMetric"]:hover {{
+    border-color: {BORDER_STRONG};
+    box-shadow: 0 4px 14px rgba(11,122,84,.07);
+}}
+[data-testid="stMetricValue"] {{ font-size: 1.6rem; font-weight: 800; color: {INK}; }}
+[data-testid="stMetricLabel"] {{ font-size: 0.82rem; font-weight: 600; color: {SECONDARY};
+                                 text-transform: uppercase; letter-spacing: 0.05em; }}
+[data-testid="stMetricDelta"] {{ font-weight: 700; }}
 
 /* ---------------- buttons ---------------- */
-.stButton > button, .stFormSubmitButton > button {{
+.stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {{
     border-radius: 10px;
     font-weight: 600;
-    padding: 0.5rem 1.1rem;
-    border: 1px solid {BORDER};
+    padding: 0.5rem 1.15rem;
+    border: 1px solid {BORDER_STRONG};
     background: {CARD};
     color: {INK};
-    transition: all .12s ease;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
 }}
-.stButton > button:hover {{ border-color: {ACCENT}; color: {ACCENT};
-                            transform: translateY(-1px);
-                            box-shadow: 0 3px 10px rgba(79,70,229,.12); }}
+.stButton > button:hover, .stDownloadButton > button:hover {{
+    border-color: {ACCENT}; color: {ACCENT_DARK};
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(11,122,84,.14);
+}}
+.stButton > button:active {{ transform: translateY(0) scale(.99); }}
 [data-testid="stBaseButton-primary"] {{
     background: {ACCENT} !important;
     border: 1px solid {ACCENT} !important;
     color: #ffffff !important;
-    box-shadow: 0 2px 8px rgba(79,70,229,.28);
+    box-shadow: 0 2px 10px rgba(11,122,84,.28);
 }}
 [data-testid="stBaseButton-primary"]:hover {{
-    background: {ACCENT_DARK} !important; color: #fff !important;
+    background: {ACCENT_DARK} !important; border-color: {ACCENT_DARK} !important;
+    color: #fff !important; box-shadow: 0 6px 18px rgba(11,122,84,.32);
 }}
-button:focus-visible {{ outline: 3px solid rgba(79,70,229,.4) !important; outline-offset: 2px; }}
+button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outline-offset: 2px; }}
 
 /* ---------------- tabs -> modern segmented control ---------------- */
 .stTabs [data-baseweb="tab-list"] {{
     gap: 4px;
-    background: #EEF2F7;
-    padding: 4px;
+    background: {TILE};
+    padding: 5px;
     border-radius: 12px;
     width: fit-content;
+    border: 1px solid {BORDER};
 }}
 .stTabs [data-baseweb="tab"] {{
     border-radius: 9px;
-    padding: 6px 18px;
+    padding: 7px 18px;
     font-weight: 600;
     background: transparent;
-    color: {MUTED};
+    color: {SECONDARY};
+    transition: background .12s ease, color .12s ease;
 }}
+.stTabs [data-baseweb="tab"]:hover {{ color: {ACCENT_DARK}; }}
 .stTabs [aria-selected="true"] {{
     background: {CARD} !important;
-    color: {INK} !important;
-    box-shadow: 0 1px 4px rgba(15,23,42,.10);
+    color: {ACCENT_DARK} !important;
+    box-shadow: 0 1px 4px rgba(11,31,22,.10);
 }}
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display: none; }}
+
+/* ---------------- radios / segmented -> pill toggle ---------------- */
+[data-testid="stRadio"] [role="radiogroup"] label {{ font-weight: 600; }}
 
 /* ---------------- expanders / inputs / alerts / tables ---------------- */
 [data-testid="stExpander"] {{
@@ -132,38 +154,44 @@ button:focus-visible {{ outline: 3px solid rgba(79,70,229,.4) !important; outlin
     background: {CARD};
 }}
 [data-testid="stExpander"] summary {{ font-weight: 600; }}
+[data-testid="stExpander"] summary:hover {{ color: {ACCENT_DARK}; }}
 .stTextInput input, .stNumberInput input, .stSelectbox > div > div,
 .stMultiSelect > div > div {{ border-radius: 10px !important; }}
+.stTextInput input:focus, .stNumberInput input:focus {{
+    border-color: {ACCENT} !important; box-shadow: 0 0 0 3px rgba(11,122,84,.15) !important;
+}}
 [data-testid="stAlert"] {{ border-radius: 12px; }}
 [data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 12px; }}
+[data-baseweb="slider"] [role="slider"] {{ background: {ACCENT} !important; }}
 hr {{ border-color: {BORDER}; }}
+a {{ color: {ACCENT_DARK}; }}
 
 /* ---------------- app-specific pieces ---------------- */
 .ota-hero {{
     display: flex; justify-content: space-between; align-items: center;
     gap: 16px; flex-wrap: wrap; margin-bottom: 0.4rem;
 }}
-.ota-hero-title {{ font-size: 1.9rem; font-weight: 800; letter-spacing: -0.03em; }}
-.ota-hero-sub {{ color: {MUTED}; font-size: 1rem; margin-top: 2px; }}
+.ota-hero-title {{ font-size: 1.95rem; font-weight: 800; letter-spacing: -0.03em; color: {INK}; }}
+.ota-hero-sub {{ color: {SECONDARY}; font-size: 1.02rem; margin-top: 3px; }}
 
 .ota-eyebrow {{
     font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em;
     text-transform: uppercase; color: {ACCENT}; margin-top: 1.4rem;
 }}
-.ota-section-title {{ font-size: 1.35rem; font-weight: 750; letter-spacing: -0.02em;
-                      margin-bottom: 0.5rem; }}
+.ota-section-title {{ font-size: 1.4rem; font-weight: 750; letter-spacing: -0.02em;
+                      margin-bottom: 0.5rem; color: {INK}; }}
 
 .ota-chip {{
     display: inline-flex; align-items: center;
     padding: 4px 14px; border-radius: 999px;
     font-size: 0.95rem; font-weight: 600;
     border: 1px solid {BORDER}; background: {CARD}; color: {INK};
-    margin-right: 8px;
+    margin-right: 8px; margin-bottom: 4px;
 }}
-.ota-chip-green  {{ background: #ECFDF5; border-color: #A7F3D0; color: #065F46; }}
-.ota-chip-red    {{ background: #FEF2F2; border-color: #FECACA; color: #991B1B; }}
-.ota-chip-amber  {{ background: #FFFBEB; border-color: #FDE68A; color: #92400E; }}
-.ota-chip-indigo {{ background: #EEF2FF; border-color: #C7D2FE; color: #3730A3; }}
+.ota-chip-green  {{ background: #E3F5EC; border-color: #B4E3CC; color: #0A5C3F; }}
+.ota-chip-red    {{ background: #FDECE9; border-color: #F6C7BF; color: #99271A; }}
+.ota-chip-amber  {{ background: #FBF0DA; border-color: #F1D8A5; color: #874A08; }}
+.ota-chip-indigo {{ background: #E1F0F3; border-color: #B7DBE3; color: #0B5566; }}
 </style>
 """
 

@@ -1,11 +1,11 @@
-# Modern, clean design system. Cool near-white canvas, white cards,
-# slate ink text, and a single indigo accent. High contrast for accessibility.
+# "Fresh Growth" design system: soft green canvas, white cards, emerald accent,
+# near-black high-contrast text. Tuned for WCAG AA readability.
 [theme]
 base = "light"
-primaryColor = "#4F46E5"              # indigo accent - buttons, slider, focus
-backgroundColor = "#F8F9FC"           # cool near-white canvas
+primaryColor = "#0B7A54"              # emerald accent - buttons, slider, tags, focus
+backgroundColor = "#F2F9F5"           # soft green-tinted canvas
 secondaryBackgroundColor = "#FFFFFF"  # cards, sidebar, inputs
-textColor = "#0F172A"                 # slate ink - very high contrast
+textColor = "#0B1F16"                 # near-black green ink - very high contrast
 font = "sans serif"
 
 # Note: no [server] settings here on purpose. The hosted app needs to run
