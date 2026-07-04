@@ -68,6 +68,20 @@ def allowed_underlyings_for(strategy_key: str) -> list[str]:
     return us_all
 
 
+def underlying_kind(underlying: str) -> str:
+    """'index' (European, cash-settled) | 'etf' (US-style ETF) | 'stock'.
+
+    Drives the SOP spread width: indexes 25-50 points, ETFs $25-50, stocks $5-10.
+    """
+    settings = load_settings()
+    u = underlying.upper()
+    if u in {s.upper() for s in settings["underlyings"]["european_style"]}:
+        return "index"
+    if u in {s.upper() for s in settings["underlyings"]["us_style"]}:
+        return "etf"
+    return "stock"
+
+
 def is_european_style(underlying: str) -> bool:
     """True for cash-settled European-style index names (SPX, NDX, RUT, XSP).
 

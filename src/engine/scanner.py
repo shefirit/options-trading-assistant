@@ -34,10 +34,15 @@ def can_scan(strategy_key: str) -> bool:
     return get_strategy(strategy_key).get("family") in SETUP_FAMILIES
 
 
-def _auto_width(underlying_price: float) -> float:
-    """A sensible spread width if the user does not pick one."""
+def _auto_width(underlying_price: float, symbol: Optional[str] = None) -> float:
+    """A sensible spread width if the user does not pick one, per the SOP:
+    indexes and ETFs use ~$25-50, individual stocks ~$5-10."""
+    if symbol is not None:
+        from src.engine.config_loader import underlying_kind
+        return 5.0 if underlying_kind(symbol) == "stock" else 25.0
+    # Fallback by price when the symbol is unknown.
     if underlying_price >= 1000:
-        return 25.0      # index-sized names like SPX
+        return 25.0
     if underlying_price >= 100:
         return 5.0
     return 1.0
@@ -256,7 +261,7 @@ def scan(
             f"'{strategy.get('name', strategy_key)}' is not scannable yet - "
             "use the checklist to validate a trade you build yourself."
         )
-    w = width if width is not None else _auto_width(chain.underlying_price)
+    w = width if width is not None else _auto_width(chain.underlying_price, chain.underlying)
 
     if strategy_key == "put_credit_spread":
         return _scan_vertical(chain, strategy_key, OptionType.PUT, w, contracts, max_candidates, target_dte)
@@ -418,7 +423,7 @@ def scan_setups(
         raise ValueError(
             f"'{strategy.get('name', strategy_key)}' is not scannable yet - "
             "use the checklist to validate a trade you build yourself.")
-    w = width if width is not None else _auto_width(chain.underlying_price)
+    w = width if width is not None else _auto_width(chain.underlying_price, chain.underlying)
     target = _target_short_delta(strategy)
     lo, hi = _setup_dte_window(strategy, dte_min, dte_max)
     # US-style stocks/ETFs must enter nearer 45 DTE (no early-assignment surprises);

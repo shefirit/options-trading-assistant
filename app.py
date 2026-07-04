@@ -402,9 +402,17 @@ def _tab_build(settings, strategies, provider) -> None:
     contracts = row[0].number_input("Contracts", min_value=1, max_value=50, value=1, step=1)
     width = None
     if uses_width:
+        from src.engine.config_loader import underlying_kind
+        # SOP width: individual stocks $5-10; indexes and ETFs $25-50. Default to the
+        # right tier for the picked names, resetting when you switch types.
+        kinds = {underlying_kind(u) for u in underlyings} if underlyings else {"index"}
+        default_width = 5.0 if kinds == {"stock"} else 25.0
+        if st.session_state.get("_prev_width_kinds") != kinds:
+            st.session_state["_prev_width_kinds"] = kinds
+            st.session_state["build_width"] = default_width
         width = row[1].number_input("Spread width ($)", min_value=1.0, max_value=200.0,
-                                    value=25.0, step=1.0,
-                                    help="Gap between your short and long strike.")
+                                    step=1.0, key="build_width",
+                                    help="SOP: individual stocks $5-10; indexes and ETFs $25-50.")
 
     sig = (strategy_key, tuple(underlyings), int(contracts), width)
     if st.session_state.get("build_sig") != sig:
