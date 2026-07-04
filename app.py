@@ -372,8 +372,12 @@ def _tab_build(settings, strategies, provider) -> None:
                                     format_func=lambda k: strategies[k]["name"])
     strat = strategies[strategy_key]
     allowed = allowed_underlyings_for(strategy_key)
-    priority = [u for u in (settings["underlyings"]["us_style"] + stock_universe.FEATURED)
-                if u in allowed]
+    # For credit spreads, list the cash-settled indexes first (safest - no assignment),
+    # then ETFs and featured stocks. For US-style strategies, ETFs/stocks first.
+    european = settings["underlyings"]["european_style"]
+    pref = ((european if strat.get("family") == "credit_spread" else [])
+            + settings["underlyings"]["us_style"] + stock_universe.FEATURED)
+    priority = [u for u in pref if u in allowed]
     ordered = priority + [u for u in allowed if u not in priority]
     default_u = ["SPX"] if "SPX" in allowed else ordered[:1]
     st.session_state.setdefault("build_underlyings", default_u)
@@ -385,8 +389,10 @@ def _tab_build(settings, strategies, provider) -> None:
                                      help="Type to search. Pick more than one to scan together.")
 
     if strat.get("family") == "credit_spread":
-        theme.note("ℹ️ Credit spreads use cash-settled **index** names only (SPX, NDX, RUT, XSP). "
-                   "To trade a stock or ETF, pick **Cash Secured Put** or a **Covered Call**.")
+        theme.note("ℹ️ Per your SOP, credit spreads run on **any liquid stock, ETF, or index**. "
+                   "**Indexes** (SPX, NDX, RUT, XSP) are cash-settled with no assignment risk - "
+                   "the cleanest choice. **Stocks/ETFs** can be assigned, so the app enters them "
+                   "nearer 45 DTE and warns about earnings.")
     else:
         theme.note("Type any S&P 500 or Nasdaq-100 **stock** (AAPL, NVDA...) or an ETF "
                    "(SPY, QQQ, IWM, DIA). Want the recommended play for a name? Use **Analyze**.")
@@ -416,6 +422,32 @@ def _tab_build(settings, strategies, provider) -> None:
         _build_manual(strategy_key, strat, underlyings)
 
 
+def _spread_event_warnings(underlyings, provider, dte_window=45) -> list:
+    """Your SOP: no binary events (earnings / Fed) during a credit-spread trade."""
+    import datetime as dt
+
+    from src.data import stock_universe
+    notes = []
+    today = dt.date.today()
+    if provider.is_real:
+        for u in underlyings:
+            if not stock_universe.is_stock(u):
+                continue   # ETFs/indexes have no company earnings
+            earn = provider.get_earnings_info(u).get("earnings_date")
+            if earn and today <= earn <= today + dt.timedelta(days=dte_window):
+                notes.append(
+                    f"⚠️ **{u}** reports earnings on {earn:%b %d} (in {(earn - today).days} days) "
+                    "- inside your trade window. Your SOP says don't sell premium through "
+                    "earnings: pick an expiration before it, or skip this name.")
+    for e in provider.get_macro_events(trade_dte=dte_window):
+        if e.kind == "fomc" and e.in_window:
+            notes.append(
+                f"⚠️ **{e.label}** is {_days_phrase(e.days_away)} - inside your trade window. "
+                "Big-move event; trade after it, or keep size small.")
+            break
+    return notes
+
+
 def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
     if not scanner.can_scan(key):
         st.info("This strategy depends on the real shares you already own, so use **Check a "
@@ -424,6 +456,10 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
     if not underlyings:
         st.warning("Pick at least one underlying above.")
         return
+
+    if strat.get("family") == "credit_spread":
+        for _msg in _spread_event_warnings(underlyings, provider):
+            st.warning(_msg)
 
     existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
                                   value=0.0, step=1000.0,

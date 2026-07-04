@@ -421,6 +421,12 @@ def scan_setups(
     w = width if width is not None else _auto_width(chain.underlying_price)
     target = _target_short_delta(strategy)
     lo, hi = _setup_dte_window(strategy, dte_min, dte_max)
+    # US-style stocks/ETFs must enter nearer 45 DTE (no early-assignment surprises);
+    # European indices may enter as early as 21.
+    from src.engine.config_loader import is_european_style
+    us_floor = strategy.get("entry", {}).get("dte_min_us_style")
+    if us_floor is not None and not is_european_style(chain.underlying):
+        lo = max(lo, int(us_floor))
 
     dtes = sorted(d for d in chain.dtes() if lo <= d <= hi)
     if not dtes:

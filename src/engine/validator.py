@@ -11,6 +11,7 @@ from src.engine import rules, sizing
 from src.engine.config_loader import (
     allowed_underlyings_for,
     get_strategy,
+    is_european_style,
     load_settings,
 )
 from src.engine.models import (
@@ -59,7 +60,12 @@ def validate_trade(
 
     # 3. Timing (days to expiration).
     if "dte_min" in entry and "dte_max" in entry:
-        results.append(rules.check_dte_range(trade, int(entry["dte_min"]), int(entry["dte_max"])))
+        dte_min = int(entry["dte_min"])
+        # US-style stocks/ETFs enter nearer 45 (avoid the early-assignment zone);
+        # European indices (SPX/NDX...) may enter as early as 21.
+        if "dte_min_us_style" in entry and not is_european_style(trade.underlying):
+            dte_min = int(entry["dte_min_us_style"])
+        results.append(rules.check_dte_range(trade, dte_min, int(entry["dte_max"])))
     elif "short_call_dte_target" in entry:
         results.append(rules.check_dte_target(trade, int(entry["short_call_dte_target"])))
     elif "dte_target" in entry:

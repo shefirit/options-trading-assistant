@@ -51,15 +51,15 @@ def test_put_credit_spread_scan_respects_sop(chain):
     assert cands, "expected at least one put credit spread candidate"
     for c in cands:
         assert c.credit > 0
-        assert 21 <= c.dte <= 35
+        assert 21 <= c.dte <= 45
         assert c.max_loss > 0
         if c.fits_sop:
-            # Fully-fitting candidates obey the delta rule and pass the checklist.
-            assert c.short_delta <= 0.10 + 1e-9
+            # Fully-fitting candidates obey the SOP put-spread delta (0.25) and pass.
+            assert c.short_delta <= 0.25 + 1e-9
             assert validate_trade(c.trade).passed
         else:
             # Near-misses are only slightly over the limit, and say so.
-            assert 0.10 < c.short_delta <= 0.13 + 1e-9
+            assert 0.25 < c.short_delta <= 0.28 + 1e-9
             assert "over" in c.note.lower()
 
 
@@ -129,19 +129,19 @@ def test_scan_setups_returns_few_across_dtes(chain):
     setups = scanner.scan_setups("put_credit_spread", chain, width=25, max_setups=4)
     assert 1 <= len(setups) <= 4
     dtes = [c.dte for c in setups]
-    # a spread of expirations, all inside the 21-44 window, sorted soonest first
+    # a spread of expirations, all inside the 21-45 window, sorted soonest first
     assert dtes == sorted(dtes)
-    assert all(21 <= d <= 44 for d in dtes)
+    assert all(21 <= d <= 45 for d in dtes)
     assert len(set(dtes)) == len(dtes)   # one per expiration
 
 
 def test_scan_setups_short_leg_at_sop_delta(chain):
-    # SOP short-leg limit is 0.10; setups should sit just under it, not far below.
+    # SOP put-spread limit is 0.25; setups should sit near it, not far below.
     setups = scanner.scan_setups("put_credit_spread", chain, width=25)
     assert setups
     for c in setups:
-        assert c.short_delta <= 0.10 + 1e-9
-        assert c.short_delta >= 0.06        # near the target, not a far-OTM 0.03
+        assert c.short_delta <= 0.25 + 1e-9
+        assert c.short_delta >= 0.10        # near the target, not a far-OTM 0.03
         assert c.fits_sop
 
 

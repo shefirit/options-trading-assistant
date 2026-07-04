@@ -25,14 +25,16 @@ DTE_TOLERANCE = 7           # days
 
 def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
     ok = trade.underlying in allowed
-    # The allowed list can be hundreds of stocks, so summarize instead of listing all.
-    hint = (
-        "Credit spreads and iron condors should use European-style, cash-settled index names "
-        "(SPX, NDX, RUT, XSP) so there is no early-assignment risk."
-        if len(allowed) < 20 else
-        "Cash secured puts and covered calls need a US-style name you can own shares of - "
-        "an ETF (SPY, QQQ, IWM, DIA) or an S&P 500 / Nasdaq-100 stock."
-    )
+    # The allowed list can be hundreds of names, so summarize instead of listing all.
+    has_index = any(s in allowed for s in ("SPX", "NDX", "RUT", "XSP"))
+    if has_index:   # credit spreads / iron condors - any liquid name per the SOP
+        hint = ("Credit spreads use any liquid stock, ETF, or index (SPX, QQQ, AAPL...). "
+                "Just make sure it's liquid enough to enter and exit easily.")
+        expected = "any liquid stock, ETF, or index"
+    else:           # cash secured puts / covered calls / PMCC
+        hint = ("Cash secured puts and covered calls need a US-style name you can own shares of - "
+                "an ETF (SPY, QQQ...) or an S&P 500 / Nasdaq-100 stock.")
+        expected = "US-style stock or ETF"
     return CheckResult(
         name="Right underlying for this strategy",
         status=CheckStatus.PASS if ok else CheckStatus.FAIL,
@@ -40,7 +42,7 @@ def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
             f"{trade.underlying} is allowed for this strategy."
             if ok else f"{trade.underlying} is not allowed here. {hint}"
         ),
-        expected=("European-style index" if len(allowed) < 20 else "US-style stock or ETF"),
+        expected=expected,
         actual=trade.underlying,
     )
 

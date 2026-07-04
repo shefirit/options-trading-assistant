@@ -25,7 +25,7 @@ strategies:
     family: credit_spread
     market_outlook: "Neutral / Bullish"
     difficulty: "Beginner"
-    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk. SPX is the usual pick, but any of them works.
+    underlying_style: european_or_us   # SOP: any liquid stock, ETF, or index. SPX (European) = cash-settled, no assignment; stocks/ETFs can be assigned.
     plain_english: "You SELL a put below the current price and BUY a cheaper put further below as protection. You collect cash (a credit) and win as long as price stays above your short put."
     tos_hint: "Short put shows as -1, long put shows as +1. Net credit shows in green."
     notion_url: "https://app.notion.com/p/38803e90e03281199d80d4c1fbc5056d"
@@ -37,10 +37,11 @@ strategies:
         action: buy
         option_type: put
     entry:
-      short_leg_delta_max: 0.10
-      dte_target: 30
-      dte_min: 21
-      dte_max: 44
+      short_leg_delta_max: 0.25   # SOP: short put delta 0.25 max (lower = safer)
+      dte_target: 45              # SOP: 45 DTE preferred
+      dte_min: 21                 # European indices may enter at 21
+      dte_max: 45
+      dte_min_us_style: 35        # SOP: stocks/ETFs avoid the 21-DTE early-assignment zone
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -53,7 +54,7 @@ strategies:
     family: credit_spread
     market_outlook: "Neutral / Bearish"
     difficulty: "Beginner"
-    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk.
+    underlying_style: european_or_us   # SOP: any liquid stock, ETF, or index. SPX (European) = cash-settled, no assignment; stocks/ETFs can be assigned.
     plain_english: "You SELL a call above the current price and BUY a cheaper call further above as protection. You collect cash and win as long as price stays below your short call."
     tos_hint: "Short call shows as -1, long call shows as +1. Net credit shows in green."
     notion_url: "https://app.notion.com/p/38803e90e032814ebbfce1dc07dfdfac"
@@ -65,10 +66,11 @@ strategies:
         action: buy
         option_type: call
     entry:
-      short_leg_delta_max: 0.10
-      dte_target: 30
-      dte_min: 21
-      dte_max: 44
+      short_leg_delta_max: 0.10   # SOP: short call delta 0.10 and below (stricter than puts)
+      dte_target: 45              # SOP: ~45 DTE
+      dte_min: 21                 # European indices may enter at 21
+      dte_max: 45
+      dte_min_us_style: 35        # SOP: stocks/ETFs avoid the 21-DTE early-assignment zone
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -81,7 +83,7 @@ strategies:
     family: credit_spread
     market_outlook: "Neutral (no big moves)"
     difficulty: "Intermediate"
-    underlying_style: european   # European-style only (SPX, NDX, RUT, XSP): cash-settled, no early-assignment risk.
+    underlying_style: european_or_us   # SOP: any liquid stock, ETF, or index. European (SPX/NDX) can enter 21-45; US-style must enter at ~45 (no early-assignment surprises).
     plain_english: "A put credit spread AND a call credit spread at the same time. You collect cash from both sides and win if price stays inside your range."
     tos_hint: "Four legs: -1 short put, +1 long put, -1 short call, +1 long call. One net credit."
     notion_url: "https://app.notion.com/p/38803e90e03281498abfd46c0efe70db"
@@ -99,10 +101,11 @@ strategies:
         action: buy
         option_type: call
     entry:
-      short_leg_delta_max: 0.10   # applies to BOTH short legs
-      dte_target: 30
-      dte_min: 21
-      dte_max: 44
+      short_leg_delta_max: 0.15   # SOP: 0.15 max PER LEG (total ~0.30 = 70% win)
+      dte_target: 45              # SOP: 45 DTE preferred
+      dte_min: 21                 # European indices may enter at 21
+      dte_max: 45
+      dte_min_us_style: 40        # SOP: stocks/ETFs enter near 45 only (early-assignment)
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0

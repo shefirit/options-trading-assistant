@@ -68,6 +68,16 @@ def allowed_underlyings_for(strategy_key: str) -> list[str]:
     return us_all
 
 
+def is_european_style(underlying: str) -> bool:
+    """True for cash-settled European-style index names (SPX, NDX, RUT, XSP).
+
+    They have no early-assignment risk, so the SOP lets you enter as early as 21
+    DTE. US-style stocks/ETFs can be assigned early, so they enter nearer 45.
+    """
+    european = load_settings()["underlyings"]["european_style"]
+    return underlying.upper() in {s.upper() for s in european}
+
+
 def clear_cache() -> None:
     """Call after editing a YAML file so the new values are picked up."""
     load_settings.cache_clear()

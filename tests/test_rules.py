@@ -67,7 +67,8 @@ def test_valid_put_credit_spread_passes():
 
 
 def test_short_leg_delta_too_high_fails():
-    report = validate_trade(put_credit_spread(short_delta=-0.15))
+    # SOP put-spread limit is 0.25; a 0.35-delta short put is too close to the money.
+    report = validate_trade(put_credit_spread(short_delta=-0.35))
     assert not report.passed
     assert any("delta under" in n.lower() for n in _fail_names(report))
 
@@ -92,12 +93,17 @@ def test_over_monthly_bp_limit_fails():
     assert any("buying power" in n.lower() for n in _fail_names(report))
 
 
-def test_credit_spread_on_us_style_fails():
-    # Credit spreads must use European-style, cash-settled names (no assignment risk).
-    # A put credit spread on SPY (US-style) should be rejected.
-    report = validate_trade(put_credit_spread(underlying="SPY"))
-    assert not report.passed
-    assert any("underlying" in n.lower() for n in _fail_names(report))
+def test_credit_spread_us_style_allowed_but_avoids_21_dte():
+    # SOP: credit spreads may use any liquid stock/ETF/index, but US-style names
+    # must enter nearer 45 DTE (no 21-DTE early-assignment zone); indices may use 21.
+    ok = validate_trade(put_credit_spread(underlying="SPY", dte=40))
+    assert ok.passed, f"SPY at 40 DTE should pass: {_fail_names(ok)}"
+    early = validate_trade(put_credit_spread(underlying="SPY", dte=21))
+    assert not early.passed
+    assert any("days to expiration" in n.lower() for n in _fail_names(early))
+    # A European index is fine entering at 21 DTE.
+    idx = validate_trade(put_credit_spread(underlying="SPX", dte=21))
+    assert idx.passed, f"SPX at 21 DTE should pass: {_fail_names(idx)}"
 
 
 def test_credit_spread_allows_european_names():
@@ -126,8 +132,8 @@ def test_wrong_underlying_for_covered_call_fails():
 
 
 def test_iron_condor_checks_both_short_legs():
-    # A 0.12-delta short call breaks the 0.10 limit even if the short put is fine.
-    report = validate_trade(iron_condor(short_call_delta=-0.12))
+    # A 0.20-delta short call breaks the SOP's 0.15 per-leg limit even if the put is fine.
+    report = validate_trade(iron_condor(short_call_delta=-0.20))
     assert not report.passed
     assert any("short call delta under" in n.lower() for n in _fail_names(report))
 
