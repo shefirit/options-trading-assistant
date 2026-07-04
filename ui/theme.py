@@ -142,30 +142,51 @@ section[data-testid="stSidebar"] {{
 }}
 button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outline-offset: 2px; }}
 
-/* ---------------- tabs -> modern segmented control ---------------- */
+/* ---------------- tabs -> bold, full-width segmented nav ---------------- */
 .stTabs [data-baseweb="tab-list"] {{
-    gap: 4px;
-    background: {TILE};
-    padding: 5px;
-    border-radius: 12px;
-    width: fit-content;
+    display: flex !important;
+    gap: 8px;
+    width: 100% !important;
+    background: {CARD};
+    padding: 8px;
+    border-radius: 18px;
     border: 1px solid {BORDER};
+    box-shadow: 0 2px 12px rgba(11,122,84,.07);
+    margin-bottom: 0.7rem;
 }}
 .stTabs [data-baseweb="tab"] {{
-    border-radius: 9px;
-    padding: 7px 18px;
-    font-weight: 600;
+    flex: 1 1 0 !important;
+    width: auto !important;
+    justify-content: center;
+    min-height: 50px;
+    border-radius: 13px;
+    padding: 10px 14px;
     background: transparent;
     color: {SECONDARY};
-    transition: background .12s ease, color .12s ease;
+    transition: transform .18s cubic-bezier(.34,1.56,.64,1),
+                background .16s ease, color .16s ease, box-shadow .16s ease;
 }}
-.stTabs [data-baseweb="tab"]:hover {{ color: {ACCENT_DARK}; }}
+.stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
+.stTabs [data-baseweb="tab"] p {{
+    color: inherit !important; font-weight: 700 !important; font-size: 1.05rem !important;
+    letter-spacing: -0.01em;
+}}
+.stTabs [data-baseweb="tab"]:hover {{
+    background: #E4F5EC;
+    color: {ACCENT_DARK};
+    transform: translateY(-2px);
+}}
 .stTabs [aria-selected="true"] {{
-    background: {CARD} !important;
-    color: {ACCENT_DARK} !important;
-    box-shadow: 0 1px 4px rgba(11,31,22,.10);
+    background: {ACCENT} !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 8px 20px rgba(11,122,84,.32);
+    transform: translateY(-2px);
 }}
+.stTabs [aria-selected="true"]:hover {{ background: {ACCENT_DARK} !important; color: #fff !important; }}
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display: none; }}
+.stTabs [data-baseweb="tab-list"] button:focus-visible {{
+    outline: 3px solid rgba(11,122,84,.42) !important; outline-offset: 2px;
+}}
 
 /* ---------------- radios / segmented -> pill toggle ---------------- */
 [data-testid="stRadio"] [role="radiogroup"] label {{ font-weight: 600; }}
