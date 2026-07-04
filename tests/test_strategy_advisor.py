@@ -103,3 +103,30 @@ def test_etf_skips_quality_gate():
 def test_monthly_dte_note_always_present():
     a = advise("SPX", "index", 7500, trend="up", tv=_tv())
     assert "21-35" in a.dte_note
+
+
+def _cc_keys(a):
+    return [alt.key for alt in a.alternatives if alt.key.startswith("covered_call")]
+
+
+def test_covered_call_model3_when_bullish_and_calm():
+    # Confident + calm market -> the zero-cost ratio (Model 3).
+    a = advise("TEST", "stock", 200.0, trend="up", vix=12.0, tv=_tv("Strong Buy", "Buy"),
+               analysis=_analysis())
+    assert a.outlook == "bullish"
+    assert "covered_call_model_3" in _cc_keys(a)
+
+
+def test_covered_call_model1_when_fear_is_high():
+    # Elevated fear -> the protective collar (Model 1), even on a strong stock.
+    a = advise("TEST", "stock", 200.0, trend="up", vix=26.0, tv=_tv("Strong Buy", "Buy"),
+               analysis=_analysis())
+    assert "covered_call_model_1" in _cc_keys(a)
+
+
+def test_covered_call_model2_when_neutral():
+    # Steady/neutral -> the classic covered call (Model 2).
+    a = advise("TEST", "stock", 200.0, trend="sideways", vix=15.0, tv=_tv("Neutral", "Neutral"),
+               analysis=_analysis())
+    assert a.outlook == "neutral"
+    assert "covered_call_model_2" in _cc_keys(a)

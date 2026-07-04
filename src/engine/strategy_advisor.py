@@ -35,8 +35,39 @@ _NAMES = {
     "iron_condor": "Iron Condor",
     "cash_secured_put": "Cash Secured Put",
     "poor_mans_covered_call": "Poor Man's Covered Call",
+    "covered_call_model_1": "Covered Call - Model 1 (Collar / Full Protection)",
     "covered_call_model_2": "Covered Call - Model 2 (Classic Spread)",
+    "covered_call_model_3": "Covered Call - Model 3 (Zero-Cost Ratio)",
 }
+
+
+def _covered_call_play(outlook: str, vix) -> "Play":
+    """Pick the covered-call MODEL that fits current conditions (all need 100
+    shares). High market fear -> Model 1 (collar, full downside protection).
+    Bullish and calm -> Model 3 (zero-cost ratio, cheap hedge, but advanced and
+    needs daily management). Otherwise -> Model 2 (classic, balanced).
+
+    Uses market fear (VIX), not the stock's RSI - a strong stock is usually
+    "overbought," and that shouldn't force it into the defensive collar.
+    """
+    nervous = outlook == "bearish" or (vix is not None and vix >= 22)
+    if nervous:
+        return _play("covered_call_model_1",
+                     "If you own 100 shares: the picture looks shaky (weak trend, high fear, or "
+                     "overbought), so Model 1's collar buys a long put for FULL downside "
+                     "protection while you still collect the call premium - the safe way to hold "
+                     "through the bumps.")
+    if outlook == "bullish" and (vix is None or vix < 18):
+        return _play("covered_call_model_3",
+                     "If you own 100 shares and can watch it daily: you're bullish and the market "
+                     "is calm, so Model 3's zero-cost ratio makes the downside hedge nearly free "
+                     "and keeps more of the call premium as income. Advanced - a hard drop below "
+                     "the two short puts accelerates losses, so only take it if you'll manage it "
+                     "actively.")
+    return _play("covered_call_model_2",
+                 "If you own 100 shares: a steady, neutral read favors Model 2 - the classic "
+                 "covered call with a cheaper put-spread hedge, balancing monthly income and "
+                 "protection.")
 
 
 class Play(BaseModel):
@@ -182,24 +213,20 @@ def advise(
                             "if you are assigned, you own a name you wanted anyway.")
             alts = [_play("poor_mans_covered_call",
                           "The same income idea with much less capital tied up."),
-                    _play("covered_call_model_2",
-                          "If you already own 100 shares, sell monthly calls for income.")]
+                    _covered_call_play(outlook, vix)]
         else:
             primary = _play("poor_mans_covered_call",
                             f"{symbol} looks strong but 100 shares are too expensive for "
                             "your budget. A deep, long-dated call stands in for the shares "
                             "and you sell monthly calls against it for income.")
-            alts = [_play("covered_call_model_2",
-                          "If you already own 100 shares, sell monthly calls instead.")]
+            alts = [_covered_call_play(outlook, vix)]
     elif outlook == "neutral":
         if affordable:
             primary = _play("cash_secured_put",
                             "The read is neutral - sell a put further below the price "
                             "(lower delta), so you also win if it drifts sideways or "
                             "dips mildly.")
-            alts = [_play("covered_call_model_2",
-                          "If you own 100 shares, a covered call earns income while "
-                          "the stock goes nowhere."),
+            alts = [_covered_call_play(outlook, vix),
                     _play("poor_mans_covered_call",
                           "Income with less capital, if you are still mildly positive "
                           "long-term.")]
@@ -207,8 +234,7 @@ def advise(
             primary = _play("poor_mans_covered_call",
                             "Neutral read on an expensive name - the PMCC earns monthly "
                             "income without buying 100 shares.")
-            alts = [_play("covered_call_model_2",
-                          "If you already own 100 shares.")]
+            alts = [_covered_call_play(outlook, vix)]
     else:  # bearish
         cautions.insert(0, f"{symbol} looks weak right now. Selling puts against a "
                            "downtrend is how beginners get hurt - your playbook has no "
