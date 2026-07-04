@@ -6,9 +6,20 @@ yellow means allowed but pay attention, blue is a reminder.
 
 from __future__ import annotations
 
+import html as _htmllib
+
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+# Accessible replacements for Streamlit's bright :red[]/:orange[]/:green[]/:blue[]
+# markdown colors (those fail contrast - the built-in orange is only ~3.4:1).
+_STATUS_TEXT = {
+    "FAIL": "#C02A1B",   # ~5.9:1
+    "WARN": "#8A4B08",   # ~7.2:1 (dark amber)
+    "PASS": "#0A5C3F",   # ~7:1 (dark emerald)
+    "INFO": "#0B5566",   # ~7:1 (teal)
+}
 
 from src.data.stock_analysis import StockAnalysis
 from src.engine.models import Candidate, CheckStatus, ValidationReport
@@ -552,11 +563,16 @@ def render_events(events, empty_note: str = "No major events in the next few wee
     for e in events:
         when = e.date.strftime("%a %b %d")
         days = "today" if e.days_away == 0 else f"in {e.days_away} day{'s' if e.days_away != 1 else ''}"
-        line = f"{e.icon} **{e.label}** - {when} ({days})"
+        label = f"{e.icon} <b>{_htmllib.escape(e.label)}</b> - {when} ({days})"
         if e.in_window:
-            st.markdown(f":orange[{line}]  \n:orange[⚠️ lands inside your trade window - {e.note}]")
+            st.markdown(
+                f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>"
+                f"<div style='color:{_STATUS_TEXT['WARN']};font-weight:600;line-height:1.5;'>"
+                f"⚠️ lands inside your trade window - {_htmllib.escape(e.note)}</div>",
+                unsafe_allow_html=True)
         else:
-            st.markdown(line)
+            st.markdown(f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>",
+                        unsafe_allow_html=True)
 
 
 def render_checklist(report: ValidationReport) -> None:
@@ -568,16 +584,14 @@ def render_checklist(report: ValidationReport) -> None:
     else:
         st.error(f"This trade BREAKS {report.n_failed} of your rules. Do not enter until fixed.")
 
+    status_key = {CheckStatus.FAIL: "FAIL", CheckStatus.WARN: "WARN",
+                  CheckStatus.PASS: "PASS"}
     for r in report.results:
-        line = _esc(f"{r.icon}  **{r.name}** - {r.message}")
-        if r.status == CheckStatus.FAIL:
-            st.markdown(f":red[{line}]")
-        elif r.status == CheckStatus.WARN:
-            st.markdown(f":orange[{line}]")
-        elif r.status == CheckStatus.PASS:
-            st.markdown(f":green[{line}]")
-        else:
-            st.markdown(f":blue[{line}]")
+        color = _STATUS_TEXT.get(status_key.get(r.status, "INFO"), "#0B5566")
+        st.markdown(
+            f"<div style='color:{color};line-height:1.55;margin:4px 0;font-size:1rem;'>"
+            f"{r.icon}  <b>{_htmllib.escape(r.name)}</b> - {_htmllib.escape(r.message)}</div>",
+            unsafe_allow_html=True)
 
 
 def candidates_dataframe(candidates: list[Candidate]) -> pd.DataFrame:

@@ -196,7 +196,7 @@ a {{ color: {ACCENT_DARK}; }}
 
 .ota-eyebrow {{
     font-size: 0.82rem; font-weight: 800; letter-spacing: 0.14em;
-    text-transform: uppercase; color: {ACCENT}; margin-top: 1.5rem;
+    text-transform: uppercase; color: {ACCENT_DARK}; margin-top: 1.5rem;
 }}
 .ota-section-title {{ font-size: 1.62rem; font-weight: 800; letter-spacing: -0.025em;
                       margin: 2px 0 0.55rem; color: {INK}; line-height: 1.2; }}
