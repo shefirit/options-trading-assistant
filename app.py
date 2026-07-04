@@ -169,7 +169,8 @@ def _tab_market(provider, ctx, strategies) -> None:
             col.metric(label, price, delta)
             changes.append(t["change_pct"])
     if not market_open:
-        st.caption("Showing the **last close** - the market is closed today.")
+        st.markdown(theme.chip("◷ Showing last close - market closed today", "amber"),
+                    unsafe_allow_html=True)
 
     events = provider.get_macro_events(trade_dte=35)
 

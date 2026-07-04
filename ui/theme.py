@@ -51,8 +51,14 @@ h1 {{ font-size: 2rem !important;   font-weight: 800 !important; }}
 h2 {{ font-size: 1.45rem !important; font-weight: 750 !important; }}
 h3 {{ font-size: 1.15rem !important; font-weight: 700 !important; }}
 p, li, label, .stMarkdown {{ line-height: 1.6; }}
-/* Streamlit captions default to a pale grey - darken for readability. */
-[data-testid="stCaptionContainer"], .stCaption, small {{ color: {MUTED} !important; }}
+/* Streamlit captions default to a small pale grey - darken AND enlarge them, since
+   this app puts real guidance in captions and the audience needs to read it easily. */
+[data-testid="stCaptionContainer"] {{
+    color: {SECONDARY} !important;
+    font-size: 0.94rem !important;
+    line-height: 1.55 !important;
+}}
+[data-testid="stCaptionContainer"] p {{ font-size: 0.94rem !important; }}
 
 /* ---------------- hide Streamlit chrome ---------------- */
 #MainMenu, footer {{ visibility: hidden; }}
