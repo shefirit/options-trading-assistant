@@ -413,18 +413,19 @@ def render_premium_detail(s) -> None:
     if s.error:
         st.warning(f"{s.symbol}: {s.error}")
         return
-    grade_txt = f"  ·  grade {s.grade}" if s.grade else ""
+    grade_txt = f"  ·  quality {s.grade}" if s.grade else "  ·  ETF"
     st.markdown(f"### {s.symbol} · ${s.price:,.2f}  ·  trend {s.trend}{grade_txt}")
 
-    # The three numbers that matter (odds are ~70% by design, so not shown).
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Monthly income", f"{s.monthly_yield_pct:.2f}%")
-    m2.metric("Downside cushion", f"{s.cushion_pct:.1f}%" if s.cushion_pct is not None else "—",
-              help=f"How far {s.symbol} can fall before you start losing "
-                   f"(breakeven ${s.breakeven:,.2f})." if s.breakeven else None)
-    m3.metric("Can trade?", s.liquidity,
-              help=f"Bid-ask spread {s.spread_pct:.0f}% of price, "
-                   f"open interest {s.open_interest or 0:,}." if s.spread_pct else None)
+    # The numbers a beginner actually decides on.
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Income / month", f"${s.credit_dollars:,.0f}")
+    m2.metric("As % of cash", f"{s.monthly_yield_pct:.2f}%")
+    m3.metric("Premium deal", s.richness,
+              help="Rich = you're paid more than this stock's usual moves would justify (good "
+                   "for you). Thin = it moves a lot but pays little (bad). Fair = normal.")
+    m4.metric("Can trade?", s.liquidity,
+              help=f"Bid-ask spread {s.spread_pct:.0f}% of price, open interest "
+                   f"{s.open_interest or 0:,}." if s.spread_pct else None)
 
     for f in s.flags:
         st.warning(f"⚠️ {f}")
@@ -446,13 +447,15 @@ def render_premium_detail(s) -> None:
         else:
             st.caption("No suitable call found for a covered call right now.")
 
-    tone = "green" if s.richness == "Rich" else "amber" if s.richness == "Fair" else "red"
-    st.markdown(
-        theme.chip(f"Premium: {s.richness}", tone)
-        + theme.chip(f"IV {s.atm_iv*100:.0f}%" if s.atm_iv else "IV n/a", "indigo")
-        + theme.chip(f"IV vs actual {s.iv_hv_ratio:.2f}x" if s.iv_hv_ratio else "", "neutral"),
-        unsafe_allow_html=True,
-    )
+    deal = {
+        "Rich": "Premium is **Rich** - you're paid more than this stock's usual movement would "
+                "justify. That's a good deal for you as the seller.",
+        "Fair": "Premium is **Fair** - about normal for how much this stock moves.",
+        "Thin": "Premium is **Thin** - the stock swings a lot but pays little for the risk. A poor "
+                "deal; look for a name that pays more.",
+    }.get(s.richness)
+    if deal:
+        st.caption(deal)
     st.warning(_esc(f"⚠️ Risk: {s.risk_note}"))
     st.success(_esc(f"💡 {s.recommendation}"))
 
@@ -461,8 +464,8 @@ _VERDICT_WORD = {"sell": "✅ Good to sell", "okay": "⚠️ Okay", "skip": "❌
 
 
 def premium_dataframe(snapshots: list) -> "pd.DataFrame":
-    """A dense, sortable comparison of every scanned name - the numbers that drive
-    the decision, side by side. Click any column header to sort."""
+    """A lean, sortable comparison of every scanned name - only the handful of
+    things a beginner needs to decide. Click any column header to sort."""
     rows = []
     for s in snapshots:
         if s.error:
@@ -470,17 +473,13 @@ def premium_dataframe(snapshots: list) -> "pd.DataFrame":
             continue
         rows.append({
             "Symbol": s.symbol,
-            "Grade": s.grade or "ETF",
-            "Trend": s.trend.title(),
             "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
+            "Quality": s.grade or "ETF",
             "Income $/mo": s.credit_dollars,
             "Yield %/mo": s.monthly_yield_pct,
-            "Win odds %": s.pop,
-            "Cushion %": s.cushion_pct,
-            "Premium": s.richness,
-            "Tradable": s.liquidity,
-            "Earnings": "⚠ before expiry" if s.earnings_before_expiry else "—",
-            "Sell put @": s.short_strike,
+            "Premium deal": s.richness,
+            "Watch out": ("⚠ earnings first" if s.earnings_before_expiry
+                          else "⚠ hard to trade" if s.liquidity == "Thin" else "—"),
         })
     return pd.DataFrame(rows)
 
@@ -489,15 +488,18 @@ def premium_dataframe(snapshots: list) -> "pd.DataFrame":
 def premium_column_config():
     import streamlit as _st
     return {
+        "Verdict": _st.column_config.TextColumn(help="The bottom-line call for a beginner."),
+        "Quality": _st.column_config.TextColumn(
+            help="Company quality grade A-F (ETFs are baskets, so shown as ETF). Matters because "
+                 "a put can leave you owning the shares."),
         "Income $/mo": _st.column_config.NumberColumn(format="$%d",
             help="Cash you collect for one contract this month."),
         "Yield %/mo": _st.column_config.NumberColumn(format="%.2f%%",
-            help="That income as a % of the cash you set aside."),
-        "Win odds %": _st.column_config.NumberColumn(format="%d%%",
-            help="Rough chance the put expires worthless and you keep the premium."),
-        "Cushion %": _st.column_config.NumberColumn(format="%.1f%%",
-            help="How far the stock can fall before you start losing."),
-        "Sell put @": _st.column_config.NumberColumn(format="$%.0f"),
+            help="That income as a % of the cash you set aside - the fair way to compare names."),
+        "Premium deal": _st.column_config.TextColumn(
+            help="Is the premium a good deal for the risk? Rich = you're paid MORE than this "
+                 "stock's usual swings would justify (good for you). Thin = it swings a lot but "
+                 "pays little (bad). Fair = about normal."),
     }
 
 

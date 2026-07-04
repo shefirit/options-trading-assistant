@@ -268,24 +268,66 @@ def snapshot(
 
 
 def _set_verdict(snap: PremiumSnapshot) -> None:
-    """The bottom-line call: should you sell premium on this name? Follows the
-    rule of thumb that quality matters (you might get assigned the shares) and
-    that thin premium or bad timing means skip.
+    """The bottom-line call, weighing the things that actually matter to a
+    beginner selling a cash secured put: is the company solid (a put can leave
+    you owning it), is the premium a genuinely good deal for the risk, can you
+    trade it cleanly, and is the timing clear of earnings?
+
+    ETFs (no letter grade) count as solid - they are baskets, not one company.
     """
+    g = snap.grade
+    solid = g in ("A", "B") or g is None
+
+    # --- any one of these is a deal-breaker -> skip ---
     if snap.action != "Sell puts":
-        snap.verdict, snap.verdict_reason = "skip", "Downtrend - wait, or sell calls if you own it."
-    elif snap.grade in ("D", "F"):
-        snap.verdict, snap.verdict_reason = "skip", "Weak company - risky if a put leaves you owning it."
-    elif snap.liquidity == "Thin":
-        snap.verdict, snap.verdict_reason = "skip", "Options are hard to trade (wide spread)."
-    elif snap.richness == "Thin":
-        snap.verdict, snap.verdict_reason = "skip", "Premium is thin for how much it moves - not worth it."
-    elif snap.earnings_before_expiry:
-        snap.verdict, snap.verdict_reason = "okay", "Good premium, but earnings land first - use a nearer expiry or wait."
+        snap.verdict, snap.verdict_reason = "skip", (
+            "It's in a downtrend - don't sell puts into a falling stock. Sell calls here only if "
+            "you already own the shares.")
+        return
+    if g in ("D", "F"):
+        snap.verdict, snap.verdict_reason = "skip", (
+            f"Weak company (grade {g}). If the put assigns you the shares, you're stuck owning a "
+            "poor business - the quality matters more than the premium.")
+        return
+    if snap.liquidity == "Thin":
+        snap.verdict, snap.verdict_reason = "skip", (
+            "Hard to trade - the gap between the buy and sell price is so wide you'd lose money "
+            "just getting in and out.")
+        return
+    if snap.richness == "Thin":
+        snap.verdict, snap.verdict_reason = "skip", (
+            "The premium is a poor deal - this name swings around a lot but pays little for the "
+            "risk. Look for a name that pays you more for the same movement.")
+        return
+
+    # --- good setup, bad timing -> caps at 'okay' ---
+    if snap.earnings_before_expiry:
+        snap.verdict, snap.verdict_reason = "okay", (
+            "Solid otherwise, but an earnings report lands before your option expires (a coin-flip "
+            "event). Pick an expiration before earnings, or wait until they've passed.")
+        return
+
+    if snap.richness == "n/a":
+        snap.verdict, snap.verdict_reason = "okay", (
+            "Priced reasonably, but I couldn't gauge how good the premium deal is - double-check "
+            "it yourself before selling.")
+        return
+
+    # --- the good cases ---
+    if snap.richness == "Rich" and solid:
+        snap.verdict, snap.verdict_reason = "sell", (
+            "Rich premium on a strong, easy-to-trade name - one of the better ones to sell right "
+            "now.")
     elif snap.richness == "Rich":
-        snap.verdict, snap.verdict_reason = "sell", "Rich premium on a solid, tradable name."
+        snap.verdict, snap.verdict_reason = "sell", (
+            "Rich premium and easy to trade - good, though the company is only average quality "
+            "(grade C), so be happy to own it if assigned.")
+    elif solid:
+        snap.verdict, snap.verdict_reason = "sell", (
+            "Fair premium on a strong name - a steady, sensible one to sell.")
     else:
-        snap.verdict, snap.verdict_reason = "okay", "Fair premium - fine if you'd be happy owning it."
+        snap.verdict, snap.verdict_reason = "okay", (
+            "Fair premium on an average name - fine if you'd genuinely be happy owning the shares.")
 
 
 _VERDICT_RANK = {"sell": 3, "okay": 2, "skip": 1}

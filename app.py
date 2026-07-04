@@ -272,15 +272,17 @@ def _tab_premium(settings, provider) -> None:
                  column_config=components.premium_column_config())
     with st.expander("🎓 What the columns mean"):
         st.markdown(
-            "- **Verdict** - the bottom-line call: good to sell / okay / skip.\n"
-            "- **Income $/mo** and **Yield %/mo** - cash you collect, and as a % of the money "
-            "you set aside.\n"
-            "- **Win odds %** - rough chance the put expires worthless and you keep the premium.\n"
-            "- **Cushion %** - how far the stock can fall before you start losing.\n"
-            "- **Premium** - Rich / Fair / Thin: is the premium generous *relative to how much "
-            "the stock actually moves* (the real edge)?\n"
-            "- **Tradable** - Good / OK / Thin, from the bid-ask spread and open interest.\n"
-            "- **Earnings** - flags if an earnings report lands before your option expires.")
+            "- **Verdict** - the bottom-line call: ✅ good to sell / ⚠️ okay / ❌ skip. It already "
+            "weighs everything below, so if you only read one column, read this.\n"
+            "- **Quality** - the company's A-F grade (ETFs are baskets, shown as ETF). It matters "
+            "because if the put assigns, you end up owning the shares.\n"
+            "- **Income $/mo** and **Yield %/mo** - the cash you collect, and that as a % of the "
+            "money you set aside (the fair way to compare names).\n"
+            "- **Premium deal** - is the premium a *good deal for the risk*? **Rich** = you're "
+            "paid more than this stock's usual swings would justify (good for you). **Thin** = it "
+            "moves a lot but pays little (bad). **Fair** = normal.\n"
+            "- **Watch out** - flags a landmine: an earnings report before expiry, or options "
+            "that are hard to trade.")
 
     valid = [s for s in snaps if not s.error]
     if valid:
