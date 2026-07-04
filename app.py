@@ -619,6 +619,7 @@ def _sidebar(settings, provider) -> None:
 
         st.divider()
         _connect_schwab_ui(provider)
+        _connect_earnings_ui()
         _connect_sheet_ui()
         st.divider()
         st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
@@ -644,6 +645,28 @@ def _connect_schwab_ui(provider) -> None:
             "log in).\n"
             "7. Restart the app - this will switch to **LIVE** automatically.")
         theme.note("Your keys stay on your PC. Full details are in the README.")
+
+
+def _connect_earnings_ui() -> None:
+    """Paste a free Alpha Vantage key to pull years of earnings history (works on
+    the hosted app, where Yahoo's earnings endpoint is blocked)."""
+    from src.data import alphavantage_client as av
+    connected = av.is_configured()
+    label = "📈 Earnings history: connected ✅" if connected else "📈 Add earnings history (free)"
+    with st.expander(label, expanded=False):
+        theme.note("Gets years of expected-vs-delivered EPS for the Analyze tab. Yahoo blocks "
+                   "this on the hosted app, so a free Alpha Vantage key fills it in.")
+        current = av.get_key() or ""
+        key = st.text_input("Alpha Vantage key", value=current, key="av_key_input",
+                            type="password", placeholder="paste your key")
+        if st.button("Save key", key="save_av"):
+            if key.strip():
+                av.set_key(key.strip())
+                st.success("Saved. The earnings chart will now show years of history.")
+            else:
+                st.error("Paste your key first.")
+        theme.note("Free key: alphavantage.co/support/#api-key. On the **hosted** app, also add "
+                   "it under **Settings → Secrets** as:  alphavantage_key = \"YOUR_KEY\"")
 
 
 def _connect_sheet_ui() -> None:

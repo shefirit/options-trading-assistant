@@ -185,7 +185,19 @@ class DataProvider:
                                   lambda: yfinance_client.get_analyst_ratings(symbol), 3600)
 
     def get_eps_history(self, symbol: str) -> list:
-        """Past quarters of expected-vs-delivered earnings - real data only."""
+        """Past quarters of expected-vs-delivered earnings.
+
+        Alpha Vantage first (years of history, works on the hosted app where Yahoo's
+        earnings endpoint is IP-blocked); Yahoo as the fallback. Cached 24h - earnings
+        only change quarterly, and it keeps well under Alpha Vantage's free daily limit.
+        """
+        from src.data import alphavantage_client as av
+        symbol = symbol.upper()
+        if av.is_configured():
+            out = cache.get_or_fetch(f"aveps:{symbol}",
+                                     lambda: av.get_eps_history(symbol, 24), 86_400)
+            if out:
+                return out
         if self.mode != "yahoo":
             return []
         return cache.get_or_fetch(f"epshist:{symbol}",
