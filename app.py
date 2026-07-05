@@ -961,7 +961,6 @@ def _sidebar(settings, provider) -> None:
 
         st.divider()
         _connect_schwab_ui(provider)
-        _connect_tradier_ui()
         _connect_earnings_ui()
         _connect_sheet_ui()
         st.divider()
@@ -1010,29 +1009,6 @@ def _connect_earnings_ui() -> None:
                 st.error("Paste your key first.")
         theme.note("Free key: alphavantage.co/support/#api-key. On the **hosted** app, also add "
                    "it under **Settings → Secrets** as:  alphavantage_key = \"YOUR_KEY\"")
-
-
-def _connect_tradier_ui() -> None:
-    """Optional: a Tradier token for fresher chains. The app already uses free
-    CBOE data by default, so this is not required."""
-    from src.data import tradier_client as td
-    connected = td.is_configured()
-    label = ("📊 Options data (Tradier): connected ✅" if connected
-             else "📊 Optional: sharper options data (Tradier)")
-    with st.expander(label, expanded=False):
-        theme.note("Not needed - the app already gets option chains free from CBOE (the "
-                   "options exchange), no setup. This is only if you later want a Tradier "
-                   "feed as well. To add it: sign up at developer.tradier.com, copy the "
-                   "Sandbox Access Token, and paste it below (or in Settings → Secrets).")
-        current = td.get_key() or ""
-        token = st.text_input("Tradier sandbox token", value=current, key="td_key_input",
-                              type="password", placeholder="paste your token")
-        if st.button("Save token", key="save_td"):
-            if token.strip():
-                td.set_key(token.strip())
-                st.success("Saved. The scanner will use Tradier for option chains.")
-            else:
-                st.error("Paste your token first.")
 
 
 def _connect_sheet_ui() -> None:

@@ -19,7 +19,6 @@ from src.data import (
     market_events,
     premium_finder,
     stock_analysis,
-    tradier_client,
     tradingview_client,
     yfinance_client,
 )
@@ -117,20 +116,14 @@ class DataProvider:
     def get_chain(self, underlying: str, dte_min: Optional[int] = None,
                  dte_max: Optional[int] = None) -> OptionChain:
         """Real option chain for a name. Source order: Schwab (local real-time) ->
-        Tradier (if a token is set) -> CBOE (free, no key, the hosted default) ->
-        Yahoo (fallback). dte_min/dte_max keep only the expirations you need."""
+        CBOE (free, no key, the hosted default) -> Yahoo (fallback).
+        dte_min/dte_max keep only the expirations you need."""
         underlying = underlying.upper()
         if self.mode == "schwab":
             return cache.get_or_fetch(f"chain:{underlying}",
                                       lambda: self._client.get_option_chain(underlying), 60)
         lo = 15 if dte_min is None else dte_min
         hi = 70 if dte_max is None else dte_max
-        if self.is_real and tradier_client.is_configured():
-            ch = cache.get_or_fetch(
-                f"tchain:{underlying}:{lo}:{hi}",
-                lambda: tradier_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
-            if ch.contracts:
-                return ch
         if self.is_real:
             full = self._cboe_full(underlying)
             if full is not None:
@@ -143,13 +136,6 @@ class DataProvider:
 
     def _expiration_chain(self, symbol: str, target_dte: int) -> Optional[OptionChain]:
         """One expiration nearest target_dte, same source order as get_chain."""
-        if self.is_real and tradier_client.is_configured():
-            try:
-                ch = tradier_client.get_expiration_chain(symbol, target_dte)
-                if ch.contracts:
-                    return ch
-            except Exception:
-                pass
         if self.is_real:
             full = self._cboe_full(symbol)
             if full is not None:
