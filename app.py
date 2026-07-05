@@ -492,19 +492,33 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                + (" (PMCC also picks a deep-in-the-money LEAPS.)" if is_pmcc else ""))
 
     if st.button("🔎 Scan the market now", type="primary"):
+        from yfinance.exceptions import YFRateLimitError
         found = []
+        rate_limited = []
         bar = st.progress(0.0, text="Reading option chains...")
         for i, u in enumerate(underlyings):
             try:
-                chain = provider.get_chain(u)
+                # Only fetch the expirations this strategy actually needs (not a wide
+                # default window) - far fewer requests to Yahoo per scan, so a scan is
+                # both faster and much less likely to trip their rate limit.
+                lo, hi = scanner.strategy_dte_window(strat, u)
+                chain = provider.get_chain(u, dte_min=max(lo - 7, 0), dte_max=hi + 7)
                 leaps = provider.get_leaps_chain(u) if is_pmcc else None
                 found.extend(scanner.scan_setups(key, chain, width=width,
                                                  contracts=int(contracts), max_setups=10,
                                                  leaps_chain=leaps))
+            except YFRateLimitError:
+                rate_limited.append(u)
             except Exception as e:
                 st.error(f"{u}: {e}")
             bar.progress((i + 1) / len(underlyings), text=f"Scanned {u} ({i+1}/{len(underlyings)})")
         bar.empty()
+        if rate_limited:
+            st.warning(
+                f"⏳ Yahoo temporarily blocked new requests for: **{', '.join(rate_limited)}**. "
+                "This is Yahoo's own traffic limit kicking in (not a bug in the app) - it "
+                "usually clears in a minute or two. Wait a bit, then press **Scan the market "
+                "now** again. Scanning fewer names at once also helps.")
         found.sort(key=lambda c: (c.trade.underlying, c.dte if c.dte is not None else 0))
         st.session_state["build_candidates"] = found
         st.session_state.pop("build_chosen", None)

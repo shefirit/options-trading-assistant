@@ -30,6 +30,22 @@ FIXTURE = Path(__file__).parent / "fixtures" / "spx_chain.json"
 SPY_FIXTURE = Path(__file__).parent / "fixtures" / "spy_chain.json"
 
 
+def test_strategy_dte_window_narrower_than_wide_default():
+    """The real fetch window a strategy needs, used to trim Yahoo requests -
+    should stay well inside the old 15-70 default so scans make far fewer calls."""
+    from src.engine.config_loader import get_strategy
+    strat = get_strategy("put_credit_spread")
+
+    lo, hi = scanner.strategy_dte_window(strat, "SPX")   # European index: 21-45
+    assert (lo, hi) == (21, 45)
+
+    lo, hi = scanner.strategy_dte_window(strat, "AAPL")  # US-style stock: 30-49
+    assert (lo, hi) == (30, 49)
+
+    # Either way, meaningfully narrower than the old blanket 15-70 fetch window.
+    assert hi - lo < 70 - 15
+
+
 @pytest.fixture(scope="module")
 def chain() -> OptionChain:
     return OptionChain.from_json(FIXTURE)

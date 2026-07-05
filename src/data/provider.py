@@ -83,14 +83,22 @@ class DataProvider:
         return cls("demo")
 
     # ---------- option chains ----------
-    def get_chain(self, underlying: str) -> OptionChain:
+    def get_chain(self, underlying: str, dte_min: Optional[int] = None,
+                 dte_max: Optional[int] = None) -> OptionChain:
+        """dte_min/dte_max narrow which expirations are pulled from Yahoo - pass
+        the strategy's real window (scanner.strategy_dte_window) instead of the
+        wide default so a scan makes far fewer requests and is less likely to
+        trip Yahoo's rate limit."""
         underlying = underlying.upper()
         if self.mode == "schwab":
             return cache.get_or_fetch(f"chain:{underlying}",
                                       lambda: self._client.get_option_chain(underlying), 60)
         if self.mode == "yahoo":
-            return cache.get_or_fetch(f"ychain:{underlying}",
-                                      lambda: yfinance_client.get_option_chain(underlying), 120)
+            lo = 15 if dte_min is None else dte_min
+            hi = 70 if dte_max is None else dte_max
+            return cache.get_or_fetch(
+                f"ychain:{underlying}:{lo}:{hi}",
+                lambda: yfinance_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
         return self._demo_chain(underlying)
 
     # ---------- market tiles (the head-of-app overview) ----------

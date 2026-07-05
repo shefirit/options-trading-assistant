@@ -301,6 +301,21 @@ def _setup_dte_window(strategy: dict, dte_min: int, dte_max: int) -> tuple[int, 
     return dte_min, dte_max
 
 
+def strategy_dte_window(strategy: dict, underlying: str,
+                        dte_min: int = 21, dte_max: int = 44) -> tuple[int, int]:
+    """The real days-to-expiration span this strategy needs for `underlying`
+    (accounts for the US-style early-assignment adjustment). Used to fetch
+    only the option-chain data actually needed - fewer requests to Yahoo,
+    faster scans, and less chance of tripping their rate limit."""
+    from src.engine.config_loader import is_european_style
+    lo, hi = _setup_dte_window(strategy, dte_min, dte_max)
+    entry = strategy.get("entry", {})
+    if not is_european_style(underlying):
+        lo = max(lo, int(entry.get("dte_min_us_style", lo)))
+        hi = int(entry.get("dte_max_us_style", hi))
+    return lo, hi
+
+
 def _pick_target_short(options: list[OptionContract], target: float) -> Optional[OptionContract]:
     """The short strike nearest the SOP delta: richest one still within the rule,
     or the closest just-over if none qualify."""
@@ -425,14 +440,7 @@ def scan_setups(
             "use the checklist to validate a trade you build yourself.")
     w = width if width is not None else _auto_width(chain.underlying_price, chain.underlying)
     target = _target_short_delta(strategy)
-    lo, hi = _setup_dte_window(strategy, dte_min, dte_max)
-    # US-style stocks/ETFs use their own DTE window (avoid the ~21-DTE early-assignment
-    # zone, but still reach the real ~monthly expiration); indices may enter at 21.
-    from src.engine.config_loader import is_european_style
-    entry = strategy.get("entry", {})
-    if not is_european_style(chain.underlying):
-        lo = max(lo, int(entry.get("dte_min_us_style", lo)))
-        hi = int(entry.get("dte_max_us_style", hi))
+    lo, hi = strategy_dte_window(strategy, chain.underlying, dte_min, dte_max)
 
     dtes = sorted(d for d in chain.dtes() if lo <= d <= hi)
     if not dtes:
