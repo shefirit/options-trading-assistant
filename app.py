@@ -535,11 +535,15 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
             bar.progress((i + 1) / len(underlyings), text=f"Scanned {u} ({i+1}/{len(underlyings)})")
         bar.empty()
         if rate_limited:
-            st.warning(
-                f"⏳ Yahoo temporarily blocked new requests for: **{', '.join(rate_limited)}**. "
-                "This is Yahoo's own traffic limit kicking in (not a bug in the app) - it "
-                "usually clears in a minute or two. Wait a bit, then press **Scan the market "
-                "now** again. Scanning fewer names at once also helps.")
+            from src.data import tradier_client as _td
+            msg = (f"⏳ Yahoo temporarily blocked new requests for: **{', '.join(rate_limited)}**. "
+                   "This is Yahoo's own traffic limit (not a bug in the app) - it usually "
+                   "clears in a minute or two. Wait a bit, then scan again.")
+            if not _td.is_configured():
+                msg += (" To stop this for good, add a **free Tradier token** (sidebar → "
+                        "*Fix scanning blocks*, or Settings → Secrets on the hosted app) - "
+                        "it loads option chains reliably, unlike Yahoo on a hosted server.")
+            st.warning(msg)
         found.sort(key=lambda c: (c.trade.underlying, c.dte if c.dte is not None else 0))
         st.session_state["build_candidates"] = found
         st.session_state.pop("build_chosen", None)
@@ -962,6 +966,7 @@ def _sidebar(settings, provider) -> None:
 
         st.divider()
         _connect_schwab_ui(provider)
+        _connect_tradier_ui()
         _connect_earnings_ui()
         _connect_sheet_ui()
         st.divider()
@@ -1010,6 +1015,33 @@ def _connect_earnings_ui() -> None:
                 st.error("Paste your key first.")
         theme.note("Free key: alphavantage.co/support/#api-key. On the **hosted** app, also add "
                    "it under **Settings → Secrets** as:  alphavantage_key = \"YOUR_KEY\"")
+
+
+def _connect_tradier_ui() -> None:
+    """Paste a free Tradier token so option chains load reliably on the hosted
+    app (Yahoo throttles chains from cloud servers)."""
+    from src.data import tradier_client as td
+    connected = td.is_configured()
+    label = "📊 Options data (Tradier): connected ✅" if connected else "📊 Fix scanning blocks (free Tradier data)"
+    with st.expander(label, expanded=False):
+        theme.note("The scanner needs option chains, and Yahoo blocks those on the hosted "
+                   "app. A free Tradier token loads them reliably (about 15 minutes delayed, "
+                   "fine for your trades).")
+        st.markdown(
+            "1. Sign up free at **developer.tradier.com** and open your **Dashboard**.\n"
+            "2. Copy the **Sandbox Access Token**.\n"
+            "3. Paste it below (or on the hosted app, add it under **Settings → Secrets**).")
+        current = td.get_key() or ""
+        token = st.text_input("Tradier sandbox token", value=current, key="td_key_input",
+                              type="password", placeholder="paste your token")
+        if st.button("Save token", key="save_td"):
+            if token.strip():
+                td.set_key(token.strip())
+                st.success("Saved. The scanner will now use Tradier for option chains.")
+            else:
+                st.error("Paste your token first.")
+        theme.note("On the **hosted** app, add it under **Settings → Secrets** as:  "
+                   "tradier_token = \"YOUR_TOKEN\"")
 
 
 def _connect_sheet_ui() -> None:

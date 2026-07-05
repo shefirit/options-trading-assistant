@@ -18,6 +18,7 @@ from src.data import (
     market_events,
     premium_finder,
     stock_analysis,
+    tradier_client,
     tradingview_client,
     yfinance_client,
 )
@@ -93,9 +94,15 @@ class DataProvider:
         if self.mode == "schwab":
             return cache.get_or_fetch(f"chain:{underlying}",
                                       lambda: self._client.get_option_chain(underlying), 60)
+        lo = 15 if dte_min is None else dte_min
+        hi = 70 if dte_max is None else dte_max
+        # Tradier (keyed, not IP-blocked) is the reliable chain source on the hosted
+        # app; Yahoo often throttles chains there. Prefer it whenever a token is set.
+        if self.is_real and tradier_client.is_configured():
+            return cache.get_or_fetch(
+                f"tchain:{underlying}:{lo}:{hi}",
+                lambda: tradier_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
         if self.mode == "yahoo":
-            lo = 15 if dte_min is None else dte_min
-            hi = 70 if dte_max is None else dte_max
             return cache.get_or_fetch(
                 f"ychain:{underlying}:{lo}:{hi}",
                 lambda: yfinance_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
@@ -122,6 +129,10 @@ class DataProvider:
     def get_leaps_chain(self, underlying: str, target_dte: int = 210) -> Optional[OptionChain]:
         """A far-dated chain (~7 months out) for a PMCC's long LEAPS. Real data only."""
         underlying = underlying.upper()
+        if self.is_real and tradier_client.is_configured():
+            return cache.get_or_fetch(
+                f"tleaps:{underlying}",
+                lambda: tradier_client.get_expiration_chain(underlying, target_dte), 300)
         if self.mode == "yahoo":
             return cache.get_or_fetch(
                 f"leaps:{underlying}",
@@ -253,7 +264,9 @@ class DataProvider:
 
         def _fetch():
             from src.data import stock_universe
-            chain = yfinance_client.get_expiration_chain(symbol, target_dte)
+            chain = (tradier_client.get_expiration_chain(symbol, target_dte)
+                     if tradier_client.is_configured()
+                     else yfinance_client.get_expiration_chain(symbol, target_dte))
             closes = yfinance_client.get_history_closes(symbol, period="6mo")
             hv = premium_finder.annualized_vol(closes)
             trend = trend_from_prices(closes)
@@ -302,6 +315,10 @@ class DataProvider:
         try:
             if self.mode == "schwab":
                 chain = self.get_chain(sym)
+            elif tradier_client.is_configured():
+                chain = cache.get_or_fetch(
+                    f"tposchain:{sym}:{position.expiration}",
+                    lambda: tradier_client.get_expiration_chain(sym, dte_left), 300)
             elif self.mode == "yahoo":
                 chain = cache.get_or_fetch(
                     f"poschain:{sym}:{position.expiration}",

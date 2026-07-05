@@ -5,6 +5,7 @@ token.json
 google_credentials.json
 google_sheet_webhook.txt
 alphavantage_key.txt
+tradier_token.txt
 trade_log.xlsx
 .streamlit/secrets.toml
 streamlit.log
