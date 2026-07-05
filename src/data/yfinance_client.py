@@ -48,9 +48,51 @@ def _i(value: Any) -> int:
     return int(_f(value))
 
 
+_SESSION: Any = None
+
+
+def _session():
+    """A shared session that impersonates a real Chrome browser (TLS fingerprint
+    + headers). Yahoo throttles plain datacenter requests hard - common on hosted
+    apps like Streamlit Cloud - and a browser-looking session gets blocked far
+    less. Falls back to yfinance's default session if curl_cffi isn't available."""
+    global _SESSION
+    if _SESSION is None:
+        try:
+            from curl_cffi import requests as _cffi
+            _SESSION = _cffi.Session(impersonate="chrome")
+        except Exception:
+            _SESSION = False   # sentinel: no custom session available
+    return _SESSION or None
+
+
 def _ticker(underlying: str):
     import yfinance as yf
+    sess = _session()
+    if sess is not None:
+        try:
+            return yf.Ticker(yahoo_symbol(underlying), session=sess)
+        except Exception:
+            pass   # some yfinance builds reject a custom session - use the default
     return yf.Ticker(yahoo_symbol(underlying))
+
+
+def _with_retry(fn, tries: int = 3, base_delay: float = 1.0):
+    """Run a Yahoo call, retrying on Yahoo's rate limit with a short backoff.
+    Their throttle is usually brief, so 1s then 2s waits often get through.
+    Re-raises YFRateLimitError if it never clears, so the caller can warn."""
+    import time
+
+    from yfinance.exceptions import YFRateLimitError
+    last: Optional[Exception] = None
+    for i in range(tries):
+        try:
+            return fn()
+        except YFRateLimitError as e:
+            last = e
+            if i < tries - 1:
+                time.sleep(base_delay * (2 ** i))
+    raise last
 
 
 def _fast_last_price(t) -> Optional[float]:
@@ -181,34 +223,40 @@ def _expirations_with_dte(t) -> list[tuple[str, int]]:
 def get_option_chain(underlying: str, from_dte: int = 15, to_dte: int = 70) -> OptionChain:
     """Fetch a real option chain and normalize it, computing greeks from IV.
 
-    Only pulls expirations inside the DTE window, so it stays fast.
+    Only pulls expirations inside the DTE window, so it stays fast. Wrapped in a
+    rate-limit retry because option chains are the heaviest call and the most
+    likely to be throttled on a hosted app.
     """
-    t = _ticker(underlying)
-    spot = get_price(underlying) or 0.0
-    contracts: list[OptionContract] = []
-    for exp, dte in _expirations_with_dte(t):
-        if from_dte <= dte <= to_dte:
-            contracts.extend(_contracts_from_expiration(t, exp, dte, spot))
-    return OptionChain(underlying=underlying, underlying_price=spot,
-                       fetched_at=date.today().isoformat(), contracts=contracts)
+    def _fetch() -> OptionChain:
+        t = _ticker(underlying)
+        spot = get_price(underlying) or 0.0
+        contracts: list[OptionContract] = []
+        for exp, dte in _expirations_with_dte(t):
+            if from_dte <= dte <= to_dte:
+                contracts.extend(_contracts_from_expiration(t, exp, dte, spot))
+        return OptionChain(underlying=underlying, underlying_price=spot,
+                           fetched_at=date.today().isoformat(), contracts=contracts)
+    return _with_retry(_fetch)
 
 
 def get_expiration_chain(underlying: str, target_dte: int = 30) -> OptionChain:
     """Just the single expiration nearest to target_dte - fast (2 API calls).
 
-    Used by the premium finder, which scans many symbols and only needs one
-    monthly expiration per name.
+    Used by the premium finder and open-position pricing, which only need one
+    expiration per name. Retried on Yahoo's rate limit.
     """
-    t = _ticker(underlying)
-    spot = get_price(underlying) or 0.0
-    exps = _expirations_with_dte(t)
-    valid = [(e, d) for e, d in exps if d >= 1]
-    if not valid:
-        return OptionChain(underlying=underlying, underlying_price=spot, contracts=[])
-    exp, dte = min(valid, key=lambda ed: abs(ed[1] - target_dte))
-    return OptionChain(underlying=underlying, underlying_price=spot,
-                       fetched_at=date.today().isoformat(),
-                       contracts=_contracts_from_expiration(t, exp, dte, spot))
+    def _fetch() -> OptionChain:
+        t = _ticker(underlying)
+        spot = get_price(underlying) or 0.0
+        exps = _expirations_with_dte(t)
+        valid = [(e, d) for e, d in exps if d >= 1]
+        if not valid:
+            return OptionChain(underlying=underlying, underlying_price=spot, contracts=[])
+        exp, dte = min(valid, key=lambda ed: abs(ed[1] - target_dte))
+        return OptionChain(underlying=underlying, underlying_price=spot,
+                           fetched_at=date.today().isoformat(),
+                           contracts=_contracts_from_expiration(t, exp, dte, spot))
+    return _with_retry(_fetch)
 
 
 def historical_volatility(underlying: str, lookback_days: int = 30) -> Optional[float]:

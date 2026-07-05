@@ -1,7 +1,10 @@
 streamlit>=1.40
 altair>=5.0
 pandas>=2.2
-yfinance>=0.2.40
+yfinance>=0.2.50
+# Lets yfinance impersonate a real browser (TLS + headers), so Yahoo throttles
+# the hosted app far less. The app still works without it, just gets blocked more.
+curl_cffi>=0.7
 tradingview-ta>=3.3.0
 pydantic>=2.9
 PyYAML>=6.0
