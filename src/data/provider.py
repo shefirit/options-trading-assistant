@@ -15,6 +15,7 @@ from typing import Optional
 
 from src.data import (
     cache,
+    cboe_client,
     market_events,
     premium_finder,
     stock_analysis,
@@ -84,29 +85,78 @@ class DataProvider:
         return cls("demo")
 
     # ---------- option chains ----------
+    def _cboe_full(self, symbol: str) -> Optional[OptionChain]:
+        """The whole CBOE chain for a name (all expirations), cached per symbol.
+        CBOE is free, needs no key, and isn't IP-blocked like Yahoo, so it's the
+        default chain source on the hosted app. One fetch feeds every window."""
+        def _fetch():
+            try:
+                ch = cboe_client.get_option_chain(symbol, from_dte=0, to_dte=3650)
+                return ch if ch.contracts else None
+            except Exception:
+                return None
+        return cache.get_or_fetch(f"cfull:{symbol}", _fetch, 180)
+
+    @staticmethod
+    def _window(chain: OptionChain, lo: int, hi: int) -> OptionChain:
+        kept = [c for c in chain.contracts if lo <= c.dte <= hi]
+        return OptionChain(underlying=chain.underlying, underlying_price=chain.underlying_price,
+                           fetched_at=chain.fetched_at, contracts=kept)
+
+    @staticmethod
+    def _nearest_expiration(chain: OptionChain, target_dte: int) -> OptionChain:
+        if not chain.contracts:
+            return chain
+        exp = min({c.expiration for c in chain.contracts},
+                  key=lambda e: abs(next(c.dte for c in chain.contracts if c.expiration == e)
+                                    - target_dte))
+        kept = [c for c in chain.contracts if c.expiration == exp]
+        return OptionChain(underlying=chain.underlying, underlying_price=chain.underlying_price,
+                           fetched_at=chain.fetched_at, contracts=kept)
+
     def get_chain(self, underlying: str, dte_min: Optional[int] = None,
                  dte_max: Optional[int] = None) -> OptionChain:
-        """dte_min/dte_max narrow which expirations are pulled from Yahoo - pass
-        the strategy's real window (scanner.strategy_dte_window) instead of the
-        wide default so a scan makes far fewer requests and is less likely to
-        trip Yahoo's rate limit."""
+        """Real option chain for a name. Source order: Schwab (local real-time) ->
+        Tradier (if a token is set) -> CBOE (free, no key, the hosted default) ->
+        Yahoo (fallback). dte_min/dte_max keep only the expirations you need."""
         underlying = underlying.upper()
         if self.mode == "schwab":
             return cache.get_or_fetch(f"chain:{underlying}",
                                       lambda: self._client.get_option_chain(underlying), 60)
         lo = 15 if dte_min is None else dte_min
         hi = 70 if dte_max is None else dte_max
-        # Tradier (keyed, not IP-blocked) is the reliable chain source on the hosted
-        # app; Yahoo often throttles chains there. Prefer it whenever a token is set.
         if self.is_real and tradier_client.is_configured():
-            return cache.get_or_fetch(
+            ch = cache.get_or_fetch(
                 f"tchain:{underlying}:{lo}:{hi}",
                 lambda: tradier_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
+            if ch.contracts:
+                return ch
+        if self.is_real:
+            full = self._cboe_full(underlying)
+            if full is not None:
+                return self._window(full, lo, hi)
         if self.mode == "yahoo":
             return cache.get_or_fetch(
                 f"ychain:{underlying}:{lo}:{hi}",
                 lambda: yfinance_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
         return self._demo_chain(underlying)
+
+    def _expiration_chain(self, symbol: str, target_dte: int) -> Optional[OptionChain]:
+        """One expiration nearest target_dte, same source order as get_chain."""
+        if self.is_real and tradier_client.is_configured():
+            try:
+                ch = tradier_client.get_expiration_chain(symbol, target_dte)
+                if ch.contracts:
+                    return ch
+            except Exception:
+                pass
+        if self.is_real:
+            full = self._cboe_full(symbol)
+            if full is not None:
+                return self._nearest_expiration(full, target_dte)
+        if self.mode == "yahoo":
+            return yfinance_client.get_expiration_chain(symbol, target_dte)
+        return None
 
     # ---------- market tiles (the head-of-app overview) ----------
     TILE_SYMBOLS = ["SPX", "NDX", "RUT", "VIX"]
@@ -129,15 +179,8 @@ class DataProvider:
     def get_leaps_chain(self, underlying: str, target_dte: int = 210) -> Optional[OptionChain]:
         """A far-dated chain (~7 months out) for a PMCC's long LEAPS. Real data only."""
         underlying = underlying.upper()
-        if self.is_real and tradier_client.is_configured():
-            return cache.get_or_fetch(
-                f"tleaps:{underlying}",
-                lambda: tradier_client.get_expiration_chain(underlying, target_dte), 300)
-        if self.mode == "yahoo":
-            return cache.get_or_fetch(
-                f"leaps:{underlying}",
-                lambda: yfinance_client.get_expiration_chain(underlying, target_dte), 300)
-        return None
+        return cache.get_or_fetch(
+            f"leaps:{underlying}", lambda: self._expiration_chain(underlying, target_dte), 300)
 
     # ---------- market read (lightweight - no full option chain fetch) ----------
     def get_market_context(self, underlying: str) -> MarketContext:
@@ -264,9 +307,9 @@ class DataProvider:
 
         def _fetch():
             from src.data import stock_universe
-            chain = (tradier_client.get_expiration_chain(symbol, target_dte)
-                     if tradier_client.is_configured()
-                     else yfinance_client.get_expiration_chain(symbol, target_dte))
+            chain = self._expiration_chain(symbol, target_dte)
+            if chain is None:
+                chain = yfinance_client.get_expiration_chain(symbol, target_dte)
             closes = yfinance_client.get_history_closes(symbol, period="6mo")
             hv = premium_finder.annualized_vol(closes)
             trend = trend_from_prices(closes)
@@ -315,14 +358,10 @@ class DataProvider:
         try:
             if self.mode == "schwab":
                 chain = self.get_chain(sym)
-            elif tradier_client.is_configured():
-                chain = cache.get_or_fetch(
-                    f"tposchain:{sym}:{position.expiration}",
-                    lambda: tradier_client.get_expiration_chain(sym, dte_left), 300)
-            elif self.mode == "yahoo":
+            else:
                 chain = cache.get_or_fetch(
                     f"poschain:{sym}:{position.expiration}",
-                    lambda: yfinance_client.get_expiration_chain(sym, dte_left), 300)
+                    lambda: self._expiration_chain(sym, dte_left), 300)
         except Exception:
             chain = None
         if chain is None:
