@@ -1,7 +1,8 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
- * VERSION 5 - logs each trade two ways:
+ * VERSION 6 - logs each trade two ways (and blanks leftover sample rows in
+ * App Trades so they stop showing #VALUE!):
  *   1. A hidden, machine-readable tab ("Options Assistant Log") that powers the
  *      app's My trades screen (tracking, results, delete). Created automatically.
  *   2. A human row in your "App Trades" tab (a copy of your monthly M(1) sheet),
@@ -120,17 +121,26 @@ function _mirrorFormulas(r) {
   };
 }
 
-// Put the guarded formulas on every trade row, so empty rows stop showing errors.
-function _repairMirrorFormulas(sheet) {
-  for (var r = MIRROR_FIRST_ROW; r <= MIRROR_LAST_ROW; r++) {
-    var f = _mirrorFormulas(r);
-    for (var c in f) { sheet.getRange(r, Number(c)).setFormula(f[c]); }
+// The value cells the app owns (everything except the guarded formula columns).
+var _MIRROR_VALUE_COLS = [
+  1, 2, 3, 4, 5, 6, 7, 10, 17, 18, 19, 20, 21, 22   // A-G, J, ROLL, CLOSE, tracking S-V
+];
+
+// Turn one row into a clean, empty formula row: clear its values (removing any
+// leftover strategy code / text "100%" that made #VALUE!) and set the guarded
+// formulas, so an unused row shows blank instead of an error.
+function _resetMirrorRow(sheet, r) {
+  for (var i = 0; i < _MIRROR_VALUE_COLS.length; i++) {
+    sheet.getRange(r, _MIRROR_VALUE_COLS[i]).clearContent();
   }
+  var f = _mirrorFormulas(r);
+  for (var c in f) { sheet.getRange(r, Number(c)).setFormula(f[c]); }
 }
 
-function _firstEmptyMirrorRow(sheet) {
+// A row is "free" when it has no Trade ID - i.e. it isn't a logged app trade.
+function _firstFreeMirrorRow(sheet) {
   for (var r = MIRROR_FIRST_ROW; r <= MIRROR_LAST_ROW; r++) {
-    if (sheet.getRange(r, COL.TICKER).getValue() === "") { return r; }
+    if (sheet.getRange(r, COL.TRADE_ID).getValue() === "") { return r; }
   }
   return -1;   // full
 }
@@ -138,8 +148,12 @@ function _firstEmptyMirrorRow(sheet) {
 function _writeMirrorEntry(m) {
   var sheet = _mirrorSheet();
   if (!sheet) { return; }   // she hasn't made the App Trades tab yet
-  _repairMirrorFormulas(sheet);
-  var r = _firstEmptyMirrorRow(sheet);
+  // Blank every row that isn't a logged app trade (no Trade ID). This wipes the
+  // leftover M(1) sample rows that were showing #VALUE! and keeps real trades.
+  for (var rr = MIRROR_FIRST_ROW; rr <= MIRROR_LAST_ROW; rr++) {
+    if (sheet.getRange(rr, COL.TRADE_ID).getValue() === "") { _resetMirrorRow(sheet, rr); }
+  }
+  var r = _firstFreeMirrorRow(sheet);
   if (r < 0) { return; }    // no free row this month - leave totals untouched
   sheet.getRange(r, COL.TICKER).setValue(m.ticker || "");
   sheet.getRange(r, COL.CODE).setValue(m.code || "");
@@ -177,21 +191,14 @@ function _updateMirrorClose(tradeId, realizedPl) {
   sheet.getRange(r, COL.STATUS).setValue("closed");
 }
 
-// On delete: blank the trade's values, leave the guarded formulas so the row is
-// a clean empty formula row again (never touches your totals or plan).
+// On delete: blank the trade's row back to a clean empty formula row (never
+// touches your totals or plan).
 function _clearMirrorRow(tradeId) {
   var sheet = _mirrorSheet();
   if (!sheet) { return; }
   var r = _findMirrorRow(sheet, tradeId);
   if (r < 0) { return; }
-  var valueCols = [COL.TICKER, COL.CODE, COL.CALL_STRIKE, COL.PUT_STRIKE, COL.PREMIUM,
-                   COL.CONTRACTS, COL.PROFIT_PCT, COL.BP, COL.ROLL, COL.CLOSE,
-                   COL.TRADE_ID, COL.EXPIRATION, COL.DTE, COL.STATUS];
-  for (var i = 0; i < valueCols.length; i++) {
-    sheet.getRange(r, valueCols[i]).clearContent();
-  }
-  var f = _mirrorFormulas(r);
-  for (var c in f) { sheet.getRange(r, Number(c)).setFormula(f[c]); }
+  _resetMirrorRow(sheet, r);
 }
 
 // ------------------------------------------------------------ GET
@@ -210,7 +217,7 @@ function doGet(e) {
       return _json({ ok: true, header: header, rows: rows });
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v5).")
+      .createTextOutput("Options Trading Assistant logger is running (v6).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return _json({ ok: false, error: String(err) });
