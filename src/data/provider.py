@@ -254,6 +254,56 @@ class DataProvider:
 
         return cache.get_or_fetch(f"prem:{symbol}:{target_dte}", _fetch, 300)
 
+    # ---------- open-position pricing (the My trades tab) ----------
+    def price_position(self, position) -> dict:
+        """Live numbers for one open position: what it costs to close now,
+        today's underlying price, and the short leg's current delta.
+
+        Degrades gracefully: on the hosted app Yahoo sometimes blocks option
+        chains, so "priced" may be False while the underlying price still
+        works - the time and strike checks then still run.
+        """
+        out = {"priced": False, "cost_to_close": None,
+               "underlying_price": None, "short_delta": None}
+
+        sym = position.underlying.upper()
+        if self.is_real:
+            try:
+                if self.mode == "schwab":
+                    out["underlying_price"] = self._client.get_price(sym)
+                else:
+                    out["underlying_price"] = cache.get_or_fetch(
+                        f"px:{sym}", lambda: yfinance_client.get_price(sym), 120)
+            except Exception:
+                pass
+
+        dte_left = position.dte_left()
+        if not position.can_track or dte_left is None or dte_left < 0:
+            return out
+
+        chain = None
+        try:
+            if self.mode == "schwab":
+                chain = self.get_chain(sym)
+            elif self.mode == "yahoo":
+                chain = cache.get_or_fetch(
+                    f"poschain:{sym}:{position.expiration}",
+                    lambda: yfinance_client.get_expiration_chain(sym, dte_left), 300)
+        except Exception:
+            chain = None
+        if chain is None:
+            return out
+
+        from src.engine.positions import cost_to_close_from_chain
+        priced = cost_to_close_from_chain(position, chain)
+        if priced is None:
+            return out
+        out.update(priced)
+        out["priced"] = True
+        if out["underlying_price"] is None:
+            out["underlying_price"] = chain.underlying_price or None
+        return out
+
     def get_buying_power_used(self) -> Optional[float]:
         if self.mode == "schwab":
             return self._client.get_buying_power()

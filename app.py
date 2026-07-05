@@ -2,12 +2,14 @@
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Four tabs, all open at once - use them in any order, nothing is locked:
+Five tabs, all open at once - use them in any order, nothing is locked:
 
   📊 Market        - is today a good day to sell premium? (holiday-aware)
   🔎 Find premium  - screen names for the richest, safest option premium
   🔬 Analyze       - any stock/ETF/index: full picture + the strategy that fits it
   🎯 Build & check - pick a strategy, scan real setups, check your SOP rules, log it
+  📒 My trades     - every logged trade tracked live against your own exit rules,
+                     plus your results vs your weekly/monthly goals
 
 It never places trades and never gives buy/sell advice. You place every trade
 yourself in thinkorswim; this just helps you do it correctly.
@@ -105,8 +107,9 @@ def main() -> None:
 
     ctx = provider.get_market_context(MARKET_READ_SYMBOL)
 
-    t_market, t_prem, t_analyze, t_build = st.tabs(
-        ["📊  Market", "🔎  Find premium", "🔬  Analyze a name", "🎯  Build & check"])
+    t_market, t_prem, t_analyze, t_build, t_trades = st.tabs(
+        ["📊  Market", "🔎  Find premium", "🔬  Analyze a name", "🎯  Build & check",
+         "📒  My trades"])
     with t_market:
         _tab_market(provider, ctx, strategies)
     with t_prem:
@@ -115,6 +118,8 @@ def main() -> None:
         _tab_analyze(settings, provider, strategies)
     with t_build:
         _tab_build(settings, strategies, provider)
+    with t_trades:
+        _tab_trades(settings, strategies, provider)
 
 
 # ------------------------------------------------------------------ Market tab
@@ -425,9 +430,9 @@ def _tab_build(settings, strategies, provider) -> None:
     mode = st.radio("How", ["🔎 Find setups for me", "✅ Check a trade I built myself"],
                     horizontal=True, label_visibility="collapsed", key="build_mode")
     if mode.startswith("🔎"):
-        _build_scan(strategy_key, strat, underlyings, provider, contracts, width)
+        _build_scan(strategy_key, strat, underlyings, provider, contracts, width, settings)
     else:
-        _build_manual(strategy_key, strat, underlyings)
+        _build_manual(strategy_key, strat, underlyings, settings)
 
 
 def _spread_event_warnings(underlyings, provider, dte_window=45) -> list:
@@ -463,7 +468,7 @@ def _spread_width(cand) -> float:
     return min(gaps) if gaps else 0.0
 
 
-def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
+def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -> None:
     if not scanner.can_scan(key):
         st.info("This strategy depends on the real shares you already own, so use **Check a "
                 "trade I built myself** above to validate it against your SOP.")
@@ -476,9 +481,11 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
         for _msg in _spread_event_warnings(underlyings, provider):
             st.warning(_msg)
 
-    existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
-                                  value=0.0, step=1000.0,
-                                  help="So the monthly-limit check is realistic.")
+    existing_bp = st.number_input(
+        "Buying power already used this month ($)", min_value=0.0,
+        value=float(st.session_state.get("open_bp_in_use", 0.0)), step=1000.0,
+        help="Auto-filled from your open trades in My trades - adjust if you also have "
+             "positions the app doesn't know about.")
     is_pmcc = strat.get("family") == "diagonal"
     theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
                "each at the delta your SOP calls for."
@@ -549,18 +556,22 @@ def _build_scan(key, strat, underlyings, provider, contracts, width) -> None:
         st.markdown("**Your SOP checklist:**")
         report = validate_trade(chosen.trade, existing_month_bp=existing_bp)
         components.render_checklist(report)
-        _log_button(chosen.trade, strat["name"],
-                    {"credit": chosen.credit, "max_loss": chosen.max_loss,
-                     "buying_power": chosen.buying_power}, report.passed, key="scan")
+        size = {"credit": chosen.credit, "max_loss": chosen.max_loss,
+                "buying_power": chosen.buying_power}
+        _risk_and_payoff(chosen.trade, strat, size, settings)
+        _log_button(chosen.trade, strat["name"], size, report.passed, key="scan")
 
 
-def _build_manual(key, strat, underlyings) -> None:
+def _build_manual(key, strat, underlyings, settings) -> None:
     theme.note("Type in the trade exactly as you set it up in thinkorswim. "
                "Long = you bought it (+), short = you sold it (-).")
     underlying = st.selectbox("Underlying", underlyings or allowed_underlyings_for(key),
                               key="val_underlying")
-    existing_bp = st.number_input("Buying power already used this month ($)", min_value=0.0,
-                                  value=0.0, step=1000.0, key="val_bp")
+    existing_bp = st.number_input(
+        "Buying power already used this month ($)", min_value=0.0,
+        value=float(st.session_state.get("open_bp_in_use", 0.0)), step=1000.0, key="val_bp",
+        help="Auto-filled from your open trades in My trades - adjust if you also have "
+             "positions the app doesn't know about.")
 
     legs: list[Leg] = []
     for i, leg_def in enumerate(strat["legs"]):
@@ -592,8 +603,189 @@ def _build_manual(key, strat, underlyings) -> None:
         with st.container(border=True):
             components.render_checklist(report)
             from src.engine import sizing
-            _log_button(checked, strat["name"], sizing.estimate(checked, strat),
-                        report.passed, key="manual")
+            size = sizing.estimate(checked, strat)
+            _risk_and_payoff(checked, strat, size, settings)
+            _log_button(checked, strat["name"], size, report.passed, key="manual")
+
+
+# ------------------------------------------------------------------ My trades tab
+_SIGNAL_ORDER = {"stop": 0, "time": 1, "profit": 2, "watch": 3, "unpriced": 4, "hold": 5}
+_DEFAULT_EXIT = {"profit_target_pct": 50, "stop_loss_multiple": 2.0, "time_exit_dte": 21}
+
+
+def _load_trade_log() -> tuple[list, list, str]:
+    """The trade log rows, fetched once per session (Refresh re-reads)."""
+    if "trades_rows" not in st.session_state:
+        with st.spinner("Reading your trade log..."):
+            try:
+                from src.logging_tools.trade_logger import fetch_all_rows
+                st.session_state["trades_rows"] = fetch_all_rows()
+            except Exception:
+                st.session_state["trades_rows"] = ([], [], "local")
+    return st.session_state["trades_rows"]
+
+
+def _exit_cfg_for(pos, strategies) -> dict:
+    strat = strategies.get(pos.strategy_key)
+    if strat is None:   # older row - find the strategy by its display name
+        strat = next((s for s in strategies.values()
+                      if s.get("name") == pos.strategy_name), None)
+    return (strat or {}).get("exit", _DEFAULT_EXIT) or _DEFAULT_EXIT
+
+
+def _tab_trades(settings, strategies, provider) -> None:
+    from src.engine import exit_rules
+    from src.engine import positions as pos_mod
+
+    theme.section("Every logged trade, tracked against your own exit rules", "My trades")
+
+    top = st.columns([1, 6])
+    if top[0].button("↻ Refresh", key="trades_refresh"):
+        st.session_state.pop("trades_rows", None)
+    header, rows, source = _load_trade_log()
+
+    all_pos = pos_mod.parse_rows(header, rows)
+    open_pos = pos_mod.open_positions(all_pos)
+    closed = pos_mod.closed_positions(all_pos)
+    legacy = [p for p in all_pos if p.status == "legacy"]
+    bp_used = pos_mod.bp_in_use(all_pos)
+    st.session_state["open_bp_in_use"] = bp_used
+
+    if not all_pos:
+        theme.note("Nothing here yet. When you press **Log this trade** in Build & check, "
+                   "the trade lands here and the app starts watching your exit rules for "
+                   "it: take the win at 50% of the credit, close at 21 days to expiration, "
+                   "stop the loss at 2x the credit.")
+        if source == "local" and not rows:
+            from src.logging_tools import webhook_logger
+            if webhook_logger.is_configured():
+                st.info("Your Google Sheet link is saved, but the log could not be read "
+                        "back. That usually means the sheet still runs the older script - "
+                        "paste the updated **LogTrade.gs** (in the google_apps_script "
+                        "folder) into Apps Script, then Deploy → Manage deployments → "
+                        "Edit → New version → Deploy.")
+        return
+
+    if source == "local":
+        theme.note("Reading the **local backup log** on this computer. To track trades on "
+                   "the hosted app too, update your sheet's script to the new LogTrade.gs "
+                   "(one-time, ~2 minutes) - see the note in the sidebar's Connect Google "
+                   "Sheet box.")
+
+    # ---------------- open positions, priced live
+    theme.note(f"**{len(open_pos)} open** · {len(closed)} closed"
+               + (f" · {len(legacy)} from before tracking" if legacy else ""))
+    items = []
+    if open_pos:
+        bar = st.progress(0.0, text="Pricing your open trades...")
+        for i, p in enumerate(open_pos):
+            live = provider.price_position(p)
+            sig = exit_rules.evaluate(
+                p, _exit_cfg_for(p, strategies),
+                current_cost=live.get("cost_to_close"),
+                underlying_price=live.get("underlying_price"),
+                short_delta=live.get("short_delta"))
+            items.append({"position": p, "live": live, "signal": sig})
+            bar.progress((i + 1) / len(open_pos),
+                         text=f"Priced {p.underlying} ({i + 1}/{len(open_pos)})")
+        bar.empty()
+        items.sort(key=lambda it: _SIGNAL_ORDER.get(it["signal"].action, 9))
+
+        needs_action = [it for it in items if it["signal"].action in ("stop", "time", "profit")]
+        if needs_action:
+            st.error(f"🔔 {len(needs_action)} trade(s) hit an exit rule today - see the "
+                     "What to do column, then close them in thinkorswim.")
+        else:
+            st.success("No exit rule has triggered today.")
+
+        st.dataframe(components.positions_dataframe(items), width="stretch",
+                     hide_index=True, column_config=components.positions_column_config())
+
+        # ---- one position in detail + the close flow
+        st.divider()
+        labels = {
+            f"{it['position'].underlying} · {it['position'].strategy_name}"
+            f" · opened {it['position'].opened}": it for it in items}
+        pick = st.selectbox("Look at one trade", list(labels.keys()), key="trades_pick")
+        it = labels[pick]
+        p, live, sig = it["position"], it["live"], it["signal"]
+        with st.container(border=True):
+            components.render_exit_signal(sig)
+            cols = st.columns(4)
+            cols[0].metric("Credit received", money(p.credit))
+            cols[1].metric("Costs to close now",
+                           money(live["cost_to_close"]) if live.get("cost_to_close")
+                           is not None else "n/a")
+            dte_now = p.dte_left()
+            cols[2].metric("Days left", dte_now if dte_now is not None else "n/a")
+            cols[3].metric("Max loss", money(p.max_loss))
+            if p.legs:
+                strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
+                theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
+                           + (f" · expires {p.expiration}" if p.expiration else ""))
+
+            with st.expander("✔️ Close this trade (records the result)"):
+                theme.note("Close it in thinkorswim first, then record the fill here so "
+                           "your results stay accurate.")
+                default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
+                    is not None else 0.0
+                exit_cost = st.number_input(
+                    "What you paid to close it (total $, from your TOS fill)",
+                    min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
+                    key=f"exit_cost_{p.trade_id}")
+                reason = st.selectbox(
+                    "Why you closed it",
+                    ["Profit target (50%) hit", "21 DTE time exit", "Stop loss hit",
+                     "Rolled to a new position", "Expired worthless", "Other"],
+                    key=f"exit_reason_{p.trade_id}")
+                note = st.text_input("Lesson learned (optional - future you says thanks)",
+                                     key=f"exit_note_{p.trade_id}")
+                realized = p.credit - exit_cost
+                st.markdown(components._esc(
+                    f"Result: **${realized:,.0f}** "
+                    f"({'profit' if realized >= 0 else 'loss'})"))
+                if st.button("Record the close", type="primary",
+                             key=f"close_{p.trade_id}"):
+                    from src.logging_tools.trade_logger import close_trade
+                    dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,
+                                                 exit_cost, realized, reason, note)
+                    st.session_state.pop("trades_rows", None)
+                    st.rerun()
+    else:
+        st.success("No open trades right now. When you log one in **Build & check** it "
+                   "shows up here.")
+
+    if legacy:
+        with st.expander(f"Trades logged before tracking existed ({len(legacy)})"):
+            theme.note("These were logged with an older version of the app, so they can't "
+                       "be tracked live - shown for your records only.")
+            import pandas as pd
+            st.dataframe(pd.DataFrame([{
+                "Date": p.opened, "Symbol": p.underlying, "Strategy": p.strategy_name,
+                "Credit $": p.credit, "Notes": p.note} for p in legacy]),
+                width="stretch", hide_index=True)
+
+    # ---------------- results vs her goals
+    st.divider()
+    theme.section("Are you on pace for your goals?", "Your results")
+    if closed:
+        perf = pos_mod.performance(all_pos)
+        components.render_results_dashboard(
+            perf, settings["targets"], bp_used,
+            float(settings["risk_limits"]["monthly_bp_limit"]))
+        with st.expander(f"All closed trades ({len(closed)})"):
+            st.dataframe(components.closed_dataframe(closed), width="stretch",
+                         hide_index=True)
+    else:
+        theme.note("No closed trades yet - your results dashboard starts building the "
+                   "first time you record a close. Remember: you are paper trading to "
+                   "learn the **process**. Following your rules matters more than the "
+                   "P&L right now.")
+        if bp_used:
+            limit = float(settings["risk_limits"]["monthly_bp_limit"])
+            theme.note(f"Open trades are using **\\${bp_used:,.0f}** of your "
+                       f"**\\${limit:,.0f}** monthly buying-power limit "
+                       f"({bp_used / limit * 100:.0f}%).")
 
 
 # ------------------------------------------------------------------ shared pieces
@@ -647,17 +839,29 @@ def _stock_overview_block(sym, provider, key_prefix="setup"):
     return analysis, earn_info
 
 
+def _risk_and_payoff(trade, strat, size, settings) -> None:
+    """The stop-and-look risk card + profit-zone picture, shown before logging."""
+    from src.engine import payoff
+    prof = payoff.profile(trade, strat)
+    components.render_risk_card(
+        trade, strat, size, payoff_profile=prof,
+        bp_limit=float(settings["risk_limits"]["monthly_bp_limit"]))
+    if prof is not None:
+        st.markdown("**Your profit zone at expiration:**")
+        components.render_payoff_chart(prof, current_price=trade.underlying_price)
+
+
 def _log_button(trade, strategy_name, size, passed, key: str) -> None:
     note = st.text_input("Note (optional)", key=f"note_{key}",
                          placeholder="e.g. VIX low, following the SOP")
     if st.button("Log this trade", key=f"log_{key}"):
         from src.logging_tools.trade_logger import log_trade
-        dest, live = log_trade(trade, strategy_name, size, passed, note)
+        dest, live, trade_id = log_trade(trade, strategy_name, size, passed, note)
+        st.session_state.pop("trades_rows", None)   # My trades reloads fresh
         if live:
-            st.success(f"Logged to your Google Sheet ✅  \n{dest}")
+            st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 My trades**.  \n{dest}")
         else:
-            st.success(f"Saved to {dest}. (Local backup - connect Google Sheets to log online. "
-                       "See the README.)")
+            st.success(f"Saved to the local log and tracked in **📒 My trades**.  \n{dest}")
 
 
 # ------------------------------------------------------------------ sidebar
@@ -743,6 +947,11 @@ def _connect_sheet_ui() -> None:
         theme.note("One-time setup. In your sheet: **Extensions → Apps Script**, paste the "
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
+        if connected:
+            theme.note("**Already set up before July 2026?** The My trades tab needs the "
+                       "newer script (v2). Paste the updated `LogTrade.gs` over the old "
+                       "one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
+                       "version → Deploy**. Your link stays the same.")
         current = webhook_logger.get_url() or ""
         url = st.text_input("Web app link", value=current, key="webhook_url_input",
                             placeholder="https://script.google.com/macros/s/.../exec")

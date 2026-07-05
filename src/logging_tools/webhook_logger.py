@@ -76,3 +76,30 @@ def append(row: list[Any], header: list[str]) -> str:
         if resp.status >= 400:
             raise RuntimeError(f"Sheet web app returned HTTP {resp.status}")
     return sheet_url()
+
+
+def fetch_rows() -> tuple[list[str], list[list[Any]]]:
+    """Read the whole trade log back from the sheet: (header, data rows).
+
+    Needs the updated LogTrade.gs script (the one with doGet returning rows).
+    Raises on any network problem or if the script is the old version, so the
+    caller can fall back to the local Excel log.
+    """
+    url = get_url()
+    if not url:
+        raise RuntimeError("No Google Sheet link saved yet.")
+    sep = "&" if "?" in url else "?"
+    req = urllib.request.Request(url + sep + "mode=rows", method="GET")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            "The sheet script is an older version without read-back. Paste the "
+            "updated LogTrade.gs into Apps Script and deploy a new version."
+        )
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("error", "Sheet web app returned an error.")))
+    header = [str(c) for c in data.get("header", [])]
+    return header, data.get("rows", [])

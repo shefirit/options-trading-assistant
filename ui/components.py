@@ -638,3 +638,273 @@ def candidate_leg_detail(candidate: Candidate) -> pd.DataFrame:
             "DTE": leg.dte,
         })
     return pd.DataFrame(rows)
+
+
+# ================================================================== risk card
+def _dollars(x: float) -> str:
+    return f"&#36;{x:,.0f}"
+
+
+def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
+                     bp_limit: float = 50_000) -> None:
+    """The stop-and-look card shown right before the Log button: the most you
+    can lose in plain dollars, plus the three exit alerts to set in
+    thinkorswim the moment the trade is filled."""
+    credit = float(size.get("credit", 0.0))
+    max_loss = float(size.get("max_loss", 0.0))
+    bp = float(size.get("buying_power", 0.0))
+    contracts = max(int(trade.contracts), 1)
+    exit_cfg = strategy.get("exit", {})
+
+    max_profit = credit
+    breakevens: list[float] = []
+    if payoff_profile is not None:
+        max_profit = max(payoff_profile.max_profit, 0.0)
+        breakevens = payoff_profile.breakevens
+
+    be_txt = " / ".join(f"{b:,.2f}" for b in breakevens) if breakevens else "-"
+    pct_of_limit = (bp / bp_limit * 100) if bp_limit else 0.0
+
+    st.markdown(
+        f"""
+        <div style="border:2px solid {theme.RED};border-radius:14px;padding:14px 18px;
+                    background:#FDF3F2;margin:8px 0 4px;">
+          <div style="font-weight:800;color:{theme.RED};font-size:1.05rem;">
+            ⚠️ Know your risk before you log this</div>
+          <div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:10px;">
+            <div><div style="color:#5B2320;font-weight:600;font-size:.85rem;">MOST YOU CAN LOSE</div>
+                 <div style="font-size:1.5rem;font-weight:800;color:{theme.RED};">{_dollars(max_loss)}</div></div>
+            <div><div style="color:#1F4433;font-weight:600;font-size:.85rem;">MOST YOU CAN MAKE</div>
+                 <div style="font-size:1.5rem;font-weight:800;color:{theme.GREEN};">{_dollars(max_profit)}</div></div>
+            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BREAKEVEN PRICE</div>
+                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{be_txt}</div></div>
+            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BUYING POWER USED</div>
+                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{_dollars(bp)}
+                 <span style="font-size:.9rem;font-weight:600;"> ({pct_of_limit:.0f}% of your monthly limit)</span></div></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True)
+
+    # The three exits, translated into numbers she can type into TOS alerts.
+    lines = []
+    pt = exit_cfg.get("profit_target_pct")
+    if pt and credit > 0:
+        target_cost = credit * (1 - float(pt) / 100)
+        per_share = target_cost / (100 * contracts)
+        lines.append(
+            f"✅ <b>Profit target ({pt:g}%):</b> close when buying it back costs about "
+            f"{_dollars(target_cost)} (&#36;{per_share:,.2f} per share) - you keep "
+            f"{_dollars(credit - target_cost)}.")
+    sl = exit_cfg.get("stop_loss_multiple")
+    if sl and credit > 0:
+        stop_cost = credit * (1 + float(sl))
+        per_share = stop_cost / (100 * contracts)
+        lines.append(
+            f"🛑 <b>Stop loss ({sl:g}x credit):</b> close if buying it back costs "
+            f"{_dollars(stop_cost)} (&#36;{per_share:,.2f} per share) - a "
+            f"{_dollars(float(sl) * credit)} loss. No rolling at that point.")
+    te = exit_cfg.get("time_exit_dte")
+    if te and trade.dte is not None:
+        import datetime as _dt
+        exit_day = _dt.date.today() + _dt.timedelta(days=int(trade.dte) - int(te))
+        if exit_day <= _dt.date.today():
+            lines.append(f"⏰ <b>Time exit:</b> this trade is already inside {int(te)} days "
+                         "to expiration - it needs daily attention from day one.")
+        else:
+            lines.append(f"⏰ <b>Time exit:</b> close by <b>{exit_day:%A, %B %d}</b> "
+                         f"({int(te)} days before expiration) no matter what.")
+    if lines:
+        st.markdown(
+            "<div style='border:1px solid " + theme.BORDER_STRONG + ";border-radius:12px;"
+            "padding:12px 16px;background:#FFFFFF;'>"
+            "<div style='font-weight:700;color:" + theme.INK + ";margin-bottom:6px;'>"
+            "Set these alerts in thinkorswim right after you enter:</div>"
+            + "".join(f"<div style='color:{theme.CAPTION};line-height:1.7;'>{l}</div>"
+                      for l in lines)
+            + "</div>",
+            unsafe_allow_html=True)
+
+
+def render_payoff_chart(payoff_profile, current_price=None) -> None:
+    """The profit-zone picture: where you win (green), where you lose (red),
+    with your breakeven and today's price marked."""
+    p = payoff_profile
+    df = pd.DataFrame({"price": p.prices, "pl": p.values})
+    df["profit"] = df["pl"].clip(lower=0)
+    df["loss"] = df["pl"].clip(upper=0)
+
+    base = alt.Chart(df).encode(
+        x=alt.X("price:Q", title="Underlying price at expiration",
+                scale=alt.Scale(domain=[p.prices[0], p.prices[-1]], nice=False)))
+    win = base.mark_area(color="#10B981", opacity=0.25).encode(
+        y=alt.Y("profit:Q", title="Profit / loss ($)"))
+    lose = base.mark_area(color="#DC2626", opacity=0.22).encode(y="loss:Q")
+    line = base.mark_line(color=theme.INK, strokeWidth=2.5).encode(
+        y="pl:Q",
+        tooltip=[alt.Tooltip("price:Q", title="Price", format=",.2f"),
+                 alt.Tooltip("pl:Q", title="P&L $", format=",.0f")])
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+        color=theme.BORDER_STRONG).encode(y="y:Q")
+
+    layers = [win, lose, line, zero]
+    marks = [{"price": b, "label": f"breakeven {b:,.0f}"} for b in p.breakevens]
+    if current_price:
+        marks.append({"price": float(current_price), "label": f"today {current_price:,.0f}"})
+    if marks:
+        mdf = pd.DataFrame(marks)
+        layers.append(alt.Chart(mdf).mark_rule(color=theme.ACCENT, strokeDash=[5, 4],
+                                               strokeWidth=1.5).encode(x="price:Q"))
+        layers.append(alt.Chart(mdf).mark_text(align="left", dx=4, dy=-6, angle=270,
+                                               color=theme.ACCENT, fontWeight=600,
+                                               fontSize=12).encode(x="price:Q", text="label:N"))
+
+    st.altair_chart(alt.layer(*layers).properties(height=260), use_container_width=True)
+
+    caveats = []
+    if p.loss_grows_below:
+        caveats.append("losses keep growing if price falls below the left edge of the chart")
+    if p.loss_grows_above:
+        caveats.append("losses keep growing if price rises past the right edge")
+    if p.includes_shares:
+        caveats.append("the math includes your 100 shares per contract")
+    if p.approximate:
+        caveats.append("the long-dated LEAPS is estimated at its floor value, so the real "
+                       "picture is usually a bit better than shown")
+    note = ("This is the picture **at expiration** - your SOP normally exits earlier "
+            "(50% profit or 21 days left).")
+    if caveats:
+        note += " Note: " + "; ".join(caveats) + "."
+    theme.note(note)
+
+
+# ================================================================== My trades
+_SIGNAL_WORD = {
+    "stop": "🛑 Close - stop loss",
+    "time": "⏰ Close - time exit",
+    "profit": "✅ Take the win",
+    "watch": "⚠️ Watch closely",
+    "hold": "✋ Hold",
+    "unpriced": "❓ Could not price",
+}
+
+
+def positions_dataframe(items: list[dict]) -> pd.DataFrame:
+    """items: [{"position": Position, "live": dict, "signal": ExitSignal}]"""
+    rows = []
+    for it in items:
+        pos, live, sig = it["position"], it["live"], it["signal"]
+        rows.append({
+            "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
+            "Symbol": pos.underlying,
+            "Strategy": pos.strategy_name,
+            "Opened": pos.opened.isoformat() if pos.opened else "-",
+            "Days left": pos.dte_left(),
+            "Credit $": pos.credit,
+            "Close now $": live.get("cost_to_close"),
+            "P&L $": sig.pl_dollars,
+            "% kept": sig.profit_pct,
+        })
+    return pd.DataFrame(rows)
+
+
+def positions_column_config():
+    return {
+        "What to do": st.column_config.TextColumn(
+            help="Your own exit rules applied to live prices. Red = close, green = take "
+                 "the win, amber = needs eyes on it."),
+        "Days left": st.column_config.NumberColumn(format="%d",
+            help="Days to expiration. Your SOP closes everything at 21."),
+        "Credit $": st.column_config.NumberColumn(format="$%.0f",
+            help="Cash you collected when you opened it."),
+        "Close now $": st.column_config.NumberColumn(format="$%.0f",
+            help="What it costs to buy the position back right now (mid prices)."),
+        "P&L $": st.column_config.NumberColumn(format="$%.0f",
+            help="Credit received minus today's cost to close."),
+        "% kept": st.column_config.NumberColumn(format="%.0f%%",
+            help="How much of the credit is yours so far. Your SOP takes the win at 50%."),
+    }
+
+
+def render_exit_signal(sig) -> None:
+    """One position's instruction, big and clear."""
+    tone_color = {"red": _STATUS_TEXT["FAIL"], "amber": _STATUS_TEXT["WARN"],
+                  "green": _STATUS_TEXT["PASS"], "neutral": theme.INK}[sig.tone]
+    st.markdown(
+        f"<div style='font-size:1.3rem;font-weight:800;color:{tone_color};margin:2px 0;'>"
+        f"{_SIGNAL_WORD.get(sig.action, sig.action)}</div>"
+        f"<div style='color:{theme.CAPTION};line-height:1.6;'>{_htmllib.escape(sig.reason)}</div>",
+        unsafe_allow_html=True)
+    for n in sig.notes:
+        st.warning(_esc(n))
+
+
+def closed_dataframe(closed: list) -> pd.DataFrame:
+    rows = []
+    for p in sorted(closed, key=lambda p: (p.closed_on or p.opened or pd.Timestamp.min.date()),
+                    reverse=True):
+        rows.append({
+            "Closed": p.closed_on.isoformat() if p.closed_on else "-",
+            "Symbol": p.underlying,
+            "Strategy": p.strategy_name,
+            "Opened": p.opened.isoformat() if p.opened else "-",
+            "Credit $": p.credit,
+            "Exit cost $": p.exit_cost,
+            "Result $": p.realized_pl,
+            "Why closed": p.exit_reason,
+        })
+    return pd.DataFrame(rows)
+
+
+def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
+                             bp_limit: float) -> None:
+    """Am I on pace? Realized results vs her weekly/monthly goals, win rate,
+    which strategies earn, and how much buying power is tied up right now."""
+    weekly_goal = float(targets.get("weekly", 0) or 0)
+    monthly_goal = float(targets.get("monthly", 0) or 0)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        wk = perf["week_pl"]
+        st.markdown(_esc(f"**This week:** ${wk:,.0f} of your ${weekly_goal:,.0f} goal"))
+        st.progress(min(max(wk / weekly_goal, 0.0), 1.0) if weekly_goal else 0.0)
+    with c2:
+        mo = perf["month_pl"]
+        st.markdown(_esc(f"**This month:** ${mo:,.0f} of your ${monthly_goal:,.0f} goal"))
+        st.progress(min(max(mo / monthly_goal, 0.0), 1.0) if monthly_goal else 0.0)
+
+    m = st.columns(5)
+    m[0].metric("Closed trades", perf["closed_count"])
+    m[1].metric("All-time result", f"${perf['total_pl']:,.0f}")
+    m[2].metric("Win rate", f"{perf['win_rate'] * 100:.0f}%" if perf["win_rate"] is not None else "-")
+    m[3].metric("Average winner", f"${perf['avg_win']:,.0f}" if perf["avg_win"] is not None else "-")
+    m[4].metric("Average loser", f"${perf['avg_loss']:,.0f}" if perf["avg_loss"] is not None else "-")
+
+    # Buying power tied up across every open trade - the real monthly-limit view.
+    used_pct = (bp_used / bp_limit) if bp_limit else 0.0
+    tone = theme.RED if used_pct > 1.0 else theme.AMBER if used_pct > 0.8 else theme.GREEN
+    st.markdown(
+        f"<div style='margin-top:6px;font-weight:700;color:{tone};'>"
+        f"Open trades are using {_dollars(bp_used)} of your {_dollars(bp_limit)} monthly "
+        f"buying-power limit ({used_pct * 100:.0f}%).</div>",
+        unsafe_allow_html=True)
+    st.progress(min(used_pct, 1.0))
+
+    if perf["by_strategy"]:
+        st.markdown("**By strategy** (which ones actually earn for you):")
+        rows = [{"Strategy": name, "Trades": s["trades"],
+                 "Wins": s["wins"], "Total $": round(s["pl"], 0)}
+                for name, s in sorted(perf["by_strategy"].items(),
+                                      key=lambda kv: -kv[1]["pl"])]
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    if len(perf["cumulative"]) >= 2:
+        df = pd.DataFrame(perf["cumulative"])
+        df["date"] = pd.to_datetime(df["date"])
+        chart = alt.Chart(df).mark_line(color=theme.ACCENT, strokeWidth=2.5,
+                                        point=True).encode(
+            x=alt.X("date:T", title="When you closed each trade"),
+            y=alt.Y("total:Q", title="Running total ($)"),
+            tooltip=[alt.Tooltip("date:T", title="Date"),
+                     alt.Tooltip("total:Q", title="Total $", format=",.0f")])
+        st.altair_chart(chart.properties(height=220), use_container_width=True)
