@@ -54,8 +54,12 @@ def sheet_url() -> str:
     return f"https://docs.google.com/spreadsheets/d/{sid}"
 
 
-def append(row: list[Any], header: list[str]) -> str:
+def append(row: list[Any], header: list[str],
+           mirror: Optional[dict] = None) -> str:
     """Send one row to the Apps Script web app. Returns the sheet's URL.
+
+    mirror, if given, is the field dict the script also writes into the human
+    "App Trades" tab in Rita's format (see app_trades.mirror_fields).
 
     Raises on any network / permission problem, so the caller can fall back to
     the local Excel backup.
@@ -64,7 +68,10 @@ def append(row: list[Any], header: list[str]) -> str:
     if not url:
         raise RuntimeError("No Google Sheet link saved yet.")
 
-    payload = json.dumps({"row": row, "header": header}).encode("utf-8")
+    body: dict[str, Any] = {"row": row, "header": header}
+    if mirror is not None:
+        body["mirror"] = mirror
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"},

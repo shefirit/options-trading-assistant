@@ -36,7 +36,7 @@ def test_falls_back_to_excel_when_nothing_configured(tmp_path, monkeypatch):
 def test_webhook_used_first_when_connected(monkeypatch):
     monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
     monkeypatch.setattr(webhook_logger, "append",
-                        lambda row, header: "https://docs.google.com/spreadsheets/d/XYZ")
+                        lambda row, header, mirror=None: "https://docs.google.com/spreadsheets/d/XYZ")
     dest, went_to_sheet, trade_id = trade_logger.log_trade(
         _trade(), "Put Credit Spread", SIZE, True, "n")
     assert went_to_sheet is True

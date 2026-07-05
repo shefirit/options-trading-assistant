@@ -5,20 +5,24 @@ local Excel backup so you never lose a record.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import date, timedelta
+from typing import Any, Optional
 
 from src.engine.models import Trade
-from src.logging_tools import excel_logger, sheets_logger, webhook_logger
+from src.logging_tools import app_trades, excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import COLUMNS, build_close_row, build_row, new_trade_id
 
 
-def _append(row: list[Any]) -> tuple[str, bool]:
+def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
     """Send one event row wherever it can land: sheet webhook, then service
-    account, then the local Excel backup. Returns (destination, went_to_sheet)."""
+    account, then the local Excel backup. Returns (destination, went_to_sheet).
+
+    mirror (webhook only) is the extra data the Apps Script writes into the
+    human "App Trades" tab in Rita's format."""
     # 1. Apps Script web app (Rita's chosen method).
     if webhook_logger.is_configured():
         try:
-            return webhook_logger.append(row, COLUMNS), True
+            return webhook_logger.append(row, COLUMNS, mirror=mirror), True
         except Exception:
             pass
     # 2. Service-account connection (if a JSON key is ever added instead).
@@ -42,7 +46,11 @@ def log_trade(
     trade_id). The trade_id is what the My trades tab tracks the position by."""
     trade_id = new_trade_id(trade.underlying)
     row = build_row(trade, strategy_name, sizing, passed_sop, note, trade_id=trade_id)
-    dest, live = _append(row)
+    expiration_iso = ""
+    if trade.dte is not None:
+        expiration_iso = (date.today() + timedelta(days=int(trade.dte))).isoformat()
+    mirror = app_trades.mirror_fields(trade, sizing, trade_id, expiration_iso)
+    dest, live = _append(row, mirror=mirror)
     return dest, live, trade_id
 
 
@@ -59,7 +67,10 @@ def close_trade(
     went_to_sheet)."""
     row = build_close_row(trade_id, underlying, strategy_name,
                           exit_cost, realized_pl, reason, note)
-    return _append(row)
+    # Tell the script to also update the App Trades mirror row (set its Profit%
+    # so her Profit$ formula shows the realized result, and mark CLOSE).
+    mirror = {"close": True, "trade_id": trade_id, "realized_pl": realized_pl}
+    return _append(row, mirror=mirror)
 
 
 def delete_trade(trade_id: str) -> tuple[int, str]:
