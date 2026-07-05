@@ -1020,7 +1020,7 @@ def _connect_sheet_ui() -> None:
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         if connected:
-            theme.note("**Keep the script updated (v6).** The newest script logs to a hidden "
+            theme.note("**Keep the script updated (v7).** The newest script logs to a hidden "
                        "tracking tab, mirrors each trade into your **App Trades** tab, and "
                        "enables tracking + deleting. Paste the updated `LogTrade.gs` over the "
                        "old one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "

@@ -1,8 +1,9 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
- * VERSION 6 - logs each trade two ways (and blanks leftover sample rows in
- * App Trades so they stop showing #VALUE!):
+ * VERSION 7 - logs each trade two ways, blanks leftover sample rows so they stop
+ * showing #VALUE!, and finds your totals row automatically so it is never
+ * overwritten even if rows shift:
  *   1. A hidden, machine-readable tab ("Options Assistant Log") that powers the
  *      app's My trades screen (tracking, results, delete). Created automatically.
  *   2. A human row in your "App Trades" tab (a copy of your monthly M(1) sheet),
@@ -137,9 +138,21 @@ function _resetMirrorRow(sheet, r) {
   for (var c in f) { sheet.getRange(r, Number(c)).setFormula(f[c]); }
 }
 
+// The last trade row = the row just ABOVE your green totals row, found by looking
+// for the SUM formula in the totals row's bucket column. This adapts if rows get
+// added/deleted, so the script never overwrites your totals row.
+function _lastDataRow(sheet) {
+  for (var r = MIRROR_FIRST_ROW; r <= MIRROR_FIRST_ROW + 100; r++) {
+    var f = sheet.getRange(r, COL.BUCKET_SP).getFormula();
+    if (f && f.toUpperCase().indexOf("SUM") >= 0) { return r - 1; }
+  }
+  return MIRROR_LAST_ROW;   // fallback if no totals row is found
+}
+
 // A row is "free" when it has no Trade ID - i.e. it isn't a logged app trade.
 function _firstFreeMirrorRow(sheet) {
-  for (var r = MIRROR_FIRST_ROW; r <= MIRROR_LAST_ROW; r++) {
+  var last = _lastDataRow(sheet);
+  for (var r = MIRROR_FIRST_ROW; r <= last; r++) {
     if (sheet.getRange(r, COL.TRADE_ID).getValue() === "") { return r; }
   }
   return -1;   // full
@@ -148,9 +161,10 @@ function _firstFreeMirrorRow(sheet) {
 function _writeMirrorEntry(m) {
   var sheet = _mirrorSheet();
   if (!sheet) { return; }   // she hasn't made the App Trades tab yet
-  // Blank every row that isn't a logged app trade (no Trade ID). This wipes the
-  // leftover M(1) sample rows that were showing #VALUE! and keeps real trades.
-  for (var rr = MIRROR_FIRST_ROW; rr <= MIRROR_LAST_ROW; rr++) {
+  var last = _lastDataRow(sheet);
+  // Blank every trade row that isn't a logged app trade (no Trade ID). This wipes
+  // leftover M(1) sample rows that showed #VALUE! and never touches the totals row.
+  for (var rr = MIRROR_FIRST_ROW; rr <= last; rr++) {
     if (sheet.getRange(rr, COL.TRADE_ID).getValue() === "") { _resetMirrorRow(sheet, rr); }
   }
   var r = _firstFreeMirrorRow(sheet);
@@ -170,7 +184,8 @@ function _writeMirrorEntry(m) {
 }
 
 function _findMirrorRow(sheet, tradeId) {
-  for (var r = MIRROR_FIRST_ROW; r <= MIRROR_LAST_ROW; r++) {
+  var last = _lastDataRow(sheet);
+  for (var r = MIRROR_FIRST_ROW; r <= last; r++) {
     if (String(sheet.getRange(r, COL.TRADE_ID).getValue()) === tradeId) { return r; }
   }
   return -1;
@@ -217,7 +232,7 @@ function doGet(e) {
       return _json({ ok: true, header: header, rows: rows });
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v6).")
+      .createTextOutput("Options Trading Assistant logger is running (v7).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return _json({ ok: false, error: String(err) });
