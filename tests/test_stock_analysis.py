@@ -64,3 +64,25 @@ def test_unprofitable_shrinking_company_has_watch_flags():
     watches = [m for m in a.fundamentals + a.technicals if m.status == "watch"]
     assert len(watches) >= 2
     assert a.suitable is False
+
+
+def test_missing_info_volume_falls_back_to_history_volume():
+    """On the hosted app Yahoo drops the info volume field even for huge names.
+    A liquid stock must not be flagged illiquid when the fallback is supplied."""
+    no_vol = dict(STRONG)
+    no_vol.pop("averageVolume")
+    # Without a fallback, volume is unknown -> flagged not liquid.
+    a = stock_analysis.analyze("NVDA", no_vol, _rising())
+    assert a.liquid is False
+    # With the history-derived fallback (e.g. NVDA ~150M shares/day), it's liquid.
+    b = stock_analysis.analyze("NVDA", no_vol, _rising(), avg_volume=150_000_000)
+    assert b.liquid is True
+    assert b.suitable is True
+    vol_metric = next(m for m in b.technicals if m.label == "Avg daily volume")
+    assert vol_metric.status == "good"
+
+
+def test_info_volume_wins_over_fallback_when_present():
+    a = stock_analysis.analyze("SOLID", STRONG, _rising(), avg_volume=50_000)
+    vol_metric = next(m for m in a.technicals if m.label == "Avg daily volume")
+    assert "8.0M" in vol_metric.value   # used the info field, not the fallback

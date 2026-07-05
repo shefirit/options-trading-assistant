@@ -129,6 +129,22 @@ def get_history_closes(underlying: str, period: str = "1y") -> list[float]:
         return []
 
 
+def get_avg_volume(underlying: str, period: str = "3mo") -> Optional[float]:
+    """Average daily share volume from recent price history.
+
+    A cloud-reliable fallback for the liquidity check: on hosted servers Yahoo
+    often throttles the `t.info` fields (like averageVolume) even for huge names
+    such as NVDA, but the price-history (chart) endpoint - the same one the trend
+    read uses - keeps working. So we can always recover volume from there.
+    """
+    try:
+        hist = _ticker(underlying).history(period=period)
+        vols = [float(x) for x in hist["Volume"].tolist() if x == x and x > 0]
+        return (sum(vols) / len(vols)) if vols else None
+    except Exception:
+        return None
+
+
 def _contracts_from_expiration(t, exp: str, dte: int, spot: float) -> list[OptionContract]:
     """Parse one expiration's calls+puts into OptionContracts (greeks computed)."""
     oc = t.option_chain(exp)

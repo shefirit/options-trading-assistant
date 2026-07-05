@@ -166,7 +166,8 @@ def _liquidity_metric(avg_vol: Optional[float]) -> Metric:
     return Metric(label="Avg daily volume", value=f"{avg_vol/1e6:.1f}M shares", read=read, status=status)
 
 
-def analyze(symbol: str, info: dict[str, Any], closes: list[float]) -> StockAnalysis:
+def analyze(symbol: str, info: dict[str, Any], closes: list[float],
+            avg_volume: Optional[float] = None) -> StockAnalysis:
     price = (info.get("currentPrice") or info.get("regularMarketPrice")
              or (closes[-1] if closes else None))
 
@@ -178,7 +179,11 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float]) -> StockAnal
     ]
 
     s50, s200 = sma(closes, 50), sma(closes, 200)
-    avg_vol = info.get("averageVolume") or info.get("averageDailyVolume10Day")
+    # Prefer Yahoo's info field, but fall back to volume from price history
+    # (avg_volume) - on the hosted app the info field is often missing even for
+    # very liquid names, which used to wrongly flag every stock as illiquid.
+    avg_vol = (info.get("averageVolume") or info.get("averageDailyVolume10Day")
+               or avg_volume)
     technicals = [
         _trend_metric(price or 0, s50, s200),
         _rsi_metric(rsi(closes)),

@@ -153,7 +153,12 @@ class DataProvider:
         def _fetch() -> StockAnalysis:
             info = yfinance_client.get_fundamentals(symbol)
             closes = yfinance_client.get_history_closes(symbol, period="1y")
-            return stock_analysis.analyze(symbol, info, closes)
+            # On the hosted app Yahoo often drops the info volume fields; recover
+            # them from price history so liquid names aren't wrongly flagged.
+            avg_vol = None
+            if not (info.get("averageVolume") or info.get("averageDailyVolume10Day")):
+                avg_vol = yfinance_client.get_avg_volume(symbol)
+            return stock_analysis.analyze(symbol, info, closes, avg_volume=avg_vol)
 
         return cache.get_or_fetch(f"analysis:{symbol}", _fetch, 300)
 
@@ -256,7 +261,11 @@ class DataProvider:
             grade = None
             if stock_universe.is_stock(symbol):   # ETFs have no meaningful grade
                 info = yfinance_client.get_fundamentals(symbol)
-                grade = stock_analysis.analyze(symbol, info, closes).grade
+                avg_vol = None
+                if not (info.get("averageVolume") or info.get("averageDailyVolume10Day")):
+                    avg_vol = yfinance_client.get_avg_volume(symbol)
+                grade = stock_analysis.analyze(symbol, info, closes,
+                                               avg_volume=avg_vol).grade
             return premium_finder.snapshot(symbol, chain, hv, trend, monthly_bp,
                                            earnings_date=earnings, grade=grade)
 
