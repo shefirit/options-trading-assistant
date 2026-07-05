@@ -1,10 +1,12 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
- * VERSION 3 - adds read-back (My trades tab) AND deleting a trade you logged by
- * mistake or while testing. If you installed an older version, paste this whole
- * file over it, then: Deploy -> Manage deployments -> (pencil icon) Edit ->
- * Version: New version -> Deploy. The web app URL stays the same.
+ * VERSION 4 - logs to its OWN dedicated tab (created automatically) so your
+ * trades never mix with other tabs like your capital-doubling plan. Also has
+ * read-back (My trades tab) and deleting a mistaken/test trade. If you had an
+ * older version, paste this whole file over it, then: Deploy -> Manage
+ * deployments -> (pencil icon) Edit -> Version: New version -> Deploy. The web
+ * app URL stays the same.
  *
  * HOW TO INSTALL FROM SCRATCH (about 5 minutes, all inside your Google Sheet):
  *   1. Open your Google Sheet.
@@ -22,16 +24,18 @@
  * read this one tab. Keep the URL private, like a password.
  */
 
-// The specific tab (worksheet) to write into. This is the gid from your sheet URL.
-var TARGET_GID = 2063471337;
+// The app writes ONLY to this tab, so trades stay separate from your other
+// tabs (like your capital-doubling plan). It is created automatically the first
+// time you log a trade - you do not need to make it yourself.
+var TAB_NAME = "Options Assistant Log";
 
 function _sheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var all = ss.getSheets();
-  for (var i = 0; i < all.length; i++) {
-    if (all[i].getSheetId() === TARGET_GID) { return all[i]; }
+  var sheet = ss.getSheetByName(TAB_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(TAB_NAME);
   }
-  return all[0];
+  return sheet;
 }
 
 function _json(obj) {
@@ -112,7 +116,7 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v3).")
+      .createTextOutput("Options Trading Assistant logger is running (v4).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return ContentService

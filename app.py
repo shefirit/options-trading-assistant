@@ -1021,11 +1021,12 @@ def _connect_sheet_ui() -> None:
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         if connected:
-            theme.note("**Set up before? Update the script (v3).** Tracking trades in My "
-                       "trades and deleting a mistaken trade both need the newer script. "
-                       "Paste the updated `LogTrade.gs` over the old one, then **Deploy → "
-                       "Manage deployments → ✏️ Edit → Version: New version → Deploy**. "
-                       "Your link stays the same.")
+            theme.note("**Set up before? Update the script (v4).** The newest script logs to "
+                       "its own dedicated **Options Assistant Log** tab (so trades don't mix "
+                       "with your other tabs) and enables tracking + deleting. Paste the "
+                       "updated `LogTrade.gs` over the old one, then **Deploy → Manage "
+                       "deployments → ✏️ Edit → Version: New version → Deploy**. Your link "
+                       "stays the same.")
         current = webhook_logger.get_url() or ""
         url = st.text_input("Web app link", value=current, key="webhook_url_input",
                             placeholder="https://script.google.com/macros/s/.../exec")
