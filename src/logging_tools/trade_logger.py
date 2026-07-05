@@ -62,6 +62,18 @@ def close_trade(
     return _append(row)
 
 
+def delete_trade(trade_id: str) -> tuple[int, str]:
+    """Remove a logged trade (all its rows) wherever it lives. Returns
+    (rows_removed, source). Deletes from the Google Sheet when connected (that
+    is where fetch reads from), otherwise from the local backup. Raises if the
+    sheet is connected but its script is too old to support delete."""
+    if not trade_id:
+        return 0, "local"
+    if webhook_logger.is_configured():
+        return webhook_logger.delete_trade(trade_id), "sheet"
+    return excel_logger.delete_trade(trade_id), "local"
+
+
 def fetch_all_rows() -> tuple[list[str], list[list[Any]], str]:
     """Read the whole trade log back: (header, rows, source).
 

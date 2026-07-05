@@ -1,8 +1,8 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
- * VERSION 2 - adds read-back so the app's "My trades" tab can see your open
- * positions and results. If you installed the older version, paste this whole
+ * VERSION 3 - adds read-back (My trades tab) AND deleting a trade you logged by
+ * mistake or while testing. If you installed an older version, paste this whole
  * file over it, then: Deploy -> Manage deployments -> (pencil icon) Edit ->
  * Version: New version -> Deploy. The web app URL stays the same.
  *
@@ -34,12 +34,40 @@ function _sheet() {
   return all[0];
 }
 
+function _json(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
+    var sheet = _sheet();
+
+    // Delete every row belonging to one trade (by its Trade ID).
+    if (data.action === "delete" && data.trade_id) {
+      var last = sheet.getLastRow();
+      if (last < 2) {
+        return _json({ ok: true, deleted: 0 });
+      }
+      var values = sheet.getRange(1, 1, last, sheet.getLastColumn()).getValues();
+      var idCol = values[0].indexOf("Trade ID");
+      if (idCol < 0) {
+        return _json({ ok: false, error: "No 'Trade ID' column found." });
+      }
+      var deleted = 0;
+      for (var r = last; r >= 2; r--) {   // bottom-up so row numbers stay valid
+        if (String(values[r - 1][idCol]) === String(data.trade_id)) {
+          sheet.deleteRow(r);
+          deleted++;
+        }
+      }
+      return _json({ ok: true, deleted: deleted });
+    }
+
     var header = data.header || [];
     var row = data.row || [];
-    var sheet = _sheet();
 
     // Write a header row once, if the sheet is empty.
     if (sheet.getLastRow() === 0 && header.length > 0) {
@@ -84,7 +112,7 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v2).")
+      .createTextOutput("Options Trading Assistant logger is running (v3).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return ContentService

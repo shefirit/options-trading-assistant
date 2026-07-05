@@ -87,8 +87,8 @@ def _make_candidate(
         if not (only_delta_broken and near):
             return None
         fits_sop = False
-        note = (f"Delta {short_delta:.2f} is a touch over your {delta_limit:.2f} limit - "
-                "shown so you can compare, not to trade as-is.")
+        note = (f"Delta {short_delta:.2f} is a touch above your {delta_limit:.2f} target - "
+                "still a reasonable range, just slightly more risk. Fine if you're OK with it.")
 
     size = sizing.estimate(trade, strategy)
     if size["max_loss"] <= 0:
@@ -316,14 +316,25 @@ def strategy_dte_window(strategy: dict, underlying: str,
     return lo, hi
 
 
+# How far around the SOP delta the scanner will look for a short strike. Options
+# only exist at set strikes, so it picks the CLOSEST available delta inside this
+# band rather than demanding an exact match - a bit above or a bit below the
+# target is fine (no surgical precision). E.g. for a 0.10 target it accepts about
+# 0.06-0.13; for 0.30, about 0.26-0.33. It never reaches for something far too low.
+SHORT_DELTA_BAND_LOW = 0.04
+SHORT_DELTA_BAND_HIGH = 0.03
+
+
 def _pick_target_short(options: list[OptionContract], target: float) -> Optional[OptionContract]:
-    """The short strike nearest the SOP delta: richest one still within the rule,
-    or the closest just-over if none qualify."""
-    fits = [o for o in options if MIN_SHORT_DELTA <= o.abs_delta <= target + 1e-9]
-    if fits:
-        return max(fits, key=lambda o: o.abs_delta)   # closest to target from below
-    near = [o for o in options if target < o.abs_delta <= target + DELTA_NEAR_MISS + 1e-9]
-    return min(near, key=lambda o: o.abs_delta) if near else None
+    """The short strike whose delta is closest to your SOP target, within a small
+    band around it (about -0.04 / +0.03). Returns None if nothing sits in the band
+    - better to skip that expiration than to sell a strike far too far out."""
+    lo = max(MIN_SHORT_DELTA, target - SHORT_DELTA_BAND_LOW)
+    hi = target + SHORT_DELTA_BAND_HIGH
+    band = [o for o in options if lo <= o.abs_delta <= hi + 1e-9]
+    if not band:
+        return None
+    return min(band, key=lambda o: abs(o.abs_delta - target))
 
 
 def _sample_evenly(values: list[int], k: int) -> list[int]:

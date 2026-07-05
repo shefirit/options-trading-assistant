@@ -367,6 +367,25 @@ def _strategy_about(strat) -> None:
             st.warning(f"⚠️ {strat['warning']}")
 
 
+def _underlying_prices(underlyings, provider) -> None:
+    """Show what each selected underlying is trading at right now, so you can see
+    where the price sits relative to the strikes you're about to sell."""
+    if not underlyings:
+        return
+    if not provider.is_real:
+        theme.note("Current prices need real market data (you're on sample data now).")
+        return
+    cols = st.columns(min(len(underlyings), 4))
+    for i, u in enumerate(underlyings):
+        col = cols[i % len(cols)]
+        try:
+            price, chg = provider.get_price_change(u)
+        except Exception:
+            price, chg = None, None
+        col.metric(f"{u} now", f"${price:,.2f}" if price else "n/a",
+                   f"{chg:+.2f}% today" if chg is not None else None)
+
+
 def _tab_build(settings, strategies, provider) -> None:
     from src.data import stock_universe
     keys = list(strategies.keys())
@@ -392,6 +411,8 @@ def _tab_build(settings, strategies, provider) -> None:
         st.session_state["build_underlyings"] = valid or default_u
     underlyings = top[1].multiselect("Underlying(s)", ordered, key="build_underlyings",
                                      help="Type to search. Pick more than one to scan together.")
+
+    _underlying_prices(underlyings, provider)
 
     if strat.get("family") == "credit_spread":
         theme.note("ℹ️ Per your SOP, credit spreads run on **any liquid stock, ETF, or index**. "
@@ -647,6 +668,29 @@ def _exit_cfg_for(pos, strategies) -> dict:
     return (strat or {}).get("exit", _DEFAULT_EXIT) or _DEFAULT_EXIT
 
 
+def _delete_control(trade_id, what: str, key: str) -> None:
+    """A guarded delete: tick a box, then the button removes the trade's rows
+    from the log (sheet or local backup). For trades logged by mistake / tests."""
+    theme.note(f"This permanently removes **{what}** from your log. Use it only for a "
+               "trade you logged by mistake or while testing - not one you actually "
+               "traded (close that instead, so your results stay honest).")
+    sure = st.checkbox("Yes, I logged this by mistake - delete it", key=f"delsure_{key}")
+    if st.button("🗑️ Delete this trade", key=f"del_{key}", disabled=not sure):
+        from src.logging_tools.trade_logger import delete_trade
+        try:
+            removed, source = delete_trade(trade_id)
+        except Exception as e:
+            st.error(f"Could not delete it: {e}")
+            return
+        st.session_state.pop("trades_rows", None)
+        if removed:
+            st.success(f"Deleted ({removed} row(s) removed from your "
+                       f"{'Google Sheet' if source == 'sheet' else 'local log'}).")
+            st.rerun()
+        else:
+            st.warning("Nothing was deleted - it may already be gone. Press ↻ Refresh.")
+
+
 def _tab_trades(settings, strategies, provider) -> None:
     from src.engine import exit_rules
     from src.engine import positions as pos_mod
@@ -765,6 +809,11 @@ def _tab_trades(settings, strategies, provider) -> None:
                                                  exit_cost, realized, reason, note)
                     st.session_state.pop("trades_rows", None)
                     st.rerun()
+
+            with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
+                _delete_control(p.trade_id,
+                                f"{p.underlying} {p.strategy_name} opened {p.opened}",
+                                key=f"open_{p.trade_id}")
     else:
         st.success("No open trades right now. When you log one in **Build & check** it "
                    "shows up here.")
@@ -790,6 +839,16 @@ def _tab_trades(settings, strategies, provider) -> None:
         with st.expander(f"All closed trades ({len(closed)})"):
             st.dataframe(components.closed_dataframe(closed), width="stretch",
                          hide_index=True)
+            deletable = [p for p in closed if p.trade_id]
+            if deletable:
+                st.divider()
+                theme.note("Delete a closed trade you only entered as a test:")
+                labels = {f"{p.underlying} · {p.strategy_name} · closed {p.closed_on}"
+                          f" · result ${(p.realized_pl or 0):,.0f}": p for p in deletable}
+                choice = st.selectbox("Closed trade to delete", list(labels.keys()),
+                                      key="del_closed_pick")
+                cp = labels[choice]
+                _delete_control(cp.trade_id, choice, key=f"closed_{cp.trade_id}")
     else:
         theme.note("No closed trades yet - your results dashboard starts building the "
                    "first time you record a close. Remember: you are paper trading to "
@@ -962,10 +1021,11 @@ def _connect_sheet_ui() -> None:
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         if connected:
-            theme.note("**Already set up before July 2026?** The My trades tab needs the "
-                       "newer script (v2). Paste the updated `LogTrade.gs` over the old "
-                       "one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
-                       "version → Deploy**. Your link stays the same.")
+            theme.note("**Set up before? Update the script (v3).** Tracking trades in My "
+                       "trades and deleting a mistaken trade both need the newer script. "
+                       "Paste the updated `LogTrade.gs` over the old one, then **Deploy → "
+                       "Manage deployments → ✏️ Edit → Version: New version → Deploy**. "
+                       "Your link stays the same.")
         current = webhook_logger.get_url() or ""
         url = st.text_input("Web app link", value=current, key="webhook_url_input",
                             placeholder="https://script.google.com/macros/s/.../exec")

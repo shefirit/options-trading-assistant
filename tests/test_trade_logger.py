@@ -78,6 +78,25 @@ def test_close_trade_writes_a_close_event(tmp_path, monkeypatch):
     assert 150.0 in row
 
 
+def test_delete_trade_uses_sheet_when_connected(monkeypatch):
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
+    monkeypatch.setattr(webhook_logger, "delete_trade", lambda tid: 2)
+    removed, source = trade_logger.delete_trade("T1")
+    assert removed == 2 and source == "sheet"
+
+
+def test_delete_trade_uses_local_when_no_sheet(monkeypatch):
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: False)
+    monkeypatch.setattr(trade_logger.excel_logger, "delete_trade", lambda tid: 1)
+    removed, source = trade_logger.delete_trade("T1")
+    assert removed == 1 and source == "local"
+
+
+def test_delete_trade_empty_id_is_noop(monkeypatch):
+    removed, source = trade_logger.delete_trade("")
+    assert removed == 0
+
+
 def test_fetch_all_rows_prefers_sheet_then_local(tmp_path, monkeypatch):
     monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
     monkeypatch.setattr(webhook_logger, "fetch_rows",

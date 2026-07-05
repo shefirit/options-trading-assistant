@@ -19,7 +19,8 @@ from src.logging_tools.row import COLUMNS, build_row
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOG = PROJECT_ROOT / "trade_log.xlsx"
 
-__all__ = ["COLUMNS", "append_row", "append_values", "read_rows", "DEFAULT_LOG"]
+__all__ = ["COLUMNS", "append_row", "append_values", "read_rows", "delete_trade",
+           "DEFAULT_LOG"]
 
 
 def _open_or_create(path: Path):
@@ -72,3 +73,24 @@ def read_rows(path: str | Path = DEFAULT_LOG) -> tuple[list[str], list[list[Any]
         return [], []
     header = [str(c) if c is not None else "" for c in rows[0]]
     return header, rows[1:]
+
+
+def delete_trade(trade_id: str, path: str | Path = DEFAULT_LOG) -> int:
+    """Remove every row for one trade (by Trade ID) from the local log.
+    Returns how many rows were removed."""
+    path = Path(path)
+    if not path.exists() or not trade_id:
+        return 0
+    wb = load_workbook(path)
+    ws = wb.active
+    try:
+        id_col = COLUMNS.index("Trade ID") + 1   # openpyxl is 1-based
+    except ValueError:
+        return 0
+    to_delete = [r for r in range(2, ws.max_row + 1)
+                 if str(ws.cell(row=r, column=id_col).value or "") == str(trade_id)]
+    for r in reversed(to_delete):   # bottom-up so row numbers stay valid
+        ws.delete_rows(r, 1)
+    if to_delete:
+        wb.save(path)
+    return len(to_delete)

@@ -78,6 +78,30 @@ def append(row: list[Any], header: list[str]) -> str:
     return sheet_url()
 
 
+def delete_trade(trade_id: str) -> int:
+    """Ask the sheet to delete every row for one trade. Returns how many rows
+    were removed. Needs the v3 LogTrade.gs; raises on an older script so the
+    caller can tell the user to update it."""
+    url = get_url()
+    if not url:
+        raise RuntimeError("No Google Sheet link saved yet.")
+    payload = json.dumps({"action": "delete", "trade_id": trade_id}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            "The sheet script is an older version without delete. Paste the "
+            "updated LogTrade.gs into Apps Script and deploy a new version.")
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("error", "Sheet web app returned an error.")))
+    return int(data.get("deleted", 0))
+
+
 def fetch_rows() -> tuple[list[str], list[list[Any]]]:
     """Read the whole trade log back from the sheet: (header, data rows).
 

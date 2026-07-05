@@ -76,7 +76,7 @@ def test_put_credit_spread_scan_respects_sop(chain):
         else:
             # Near-misses are only slightly over the limit, and say so.
             assert 0.25 < c.short_delta <= 0.28 + 1e-9
-            assert "over" in c.note.lower()
+            assert "above" in c.note.lower()
 
 
 def test_call_credit_spread_scan(chain):
@@ -152,20 +152,19 @@ def test_scan_setups_returns_few_across_dtes(chain):
 
 
 def test_scan_setups_short_leg_at_sop_delta(chain):
-    # SOP put-spread limit is 0.25; setups should sit near it, not far below.
+    # SOP put-spread target is 0.25; setups sit in a band around it (about
+    # -0.04 / +0.03), picking the closest available delta - not far below.
     setups = scanner.scan_setups("put_credit_spread", chain, width=25)
     assert setups
     for c in setups:
-        assert c.short_delta <= 0.25 + 1e-9
-        assert c.short_delta >= 0.10        # near the target, not a far-OTM 0.03
-        assert c.fits_sop
+        assert 0.21 <= c.short_delta <= 0.28 + 1e-9   # band around the 0.25 target
 
 
 def test_scan_setups_csp_uses_030_delta(spy_chain):
     setups = scanner.scan_setups("cash_secured_put", spy_chain, max_setups=3)
     assert setups
     for c in setups:
-        assert 0.22 <= c.short_delta <= 0.30 + 1e-9   # near the 0.30 SOP target
+        assert 0.26 <= c.short_delta <= 0.33 + 1e-9   # band around the 0.30 SOP target
         assert len(c.trade.legs) == 1
 
 
@@ -186,7 +185,7 @@ def test_covered_call_scan_short_call_at_030():
     assert setups
     for c in setups:
         assert len(c.trade.legs) == 1                     # just the short call
-        assert 0.22 <= c.short_delta <= 0.30 + 1e-9       # near the 0.30 SOP target
+        assert 0.26 <= c.short_delta <= 0.33 + 1e-9       # band around the 0.30 SOP target
         assert c.credit > 0                               # premium income
         assert c.buying_power == pytest.approx(20000)     # 100 shares x $200
         assert validate_trade(c.trade).passed

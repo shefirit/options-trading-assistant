@@ -64,6 +64,33 @@ def test_read_rows_missing_file(tmp_path):
     assert header == [] and rows == []
 
 
+def test_delete_trade_removes_its_rows(tmp_path):
+    from src.logging_tools.excel_logger import append_values, delete_trade, read_rows
+    from src.logging_tools.row import build_close_row, build_row
+    path = tmp_path / "log.xlsx"
+    size = {"credit": 300.0, "max_loss": 2200.0, "buying_power": 2200.0}
+    append_values(build_row(_trade(), "Put Credit Spread", size, True, "", trade_id="A"), path)
+    append_values(build_row(_trade(), "Put Credit Spread", size, True, "", trade_id="B"), path)
+    append_values(build_close_row("A", "SPX", "Put Credit Spread", 150, 150, "50%"), path)
+
+    removed = delete_trade("A", path)
+    assert removed == 2                         # the open row and its close row
+    header, rows = read_rows(path)
+    ids = [r[header.index("Trade ID")] for r in rows]
+    assert ids == ["B"]
+
+
+def test_delete_trade_no_match_is_noop(tmp_path):
+    from src.logging_tools.excel_logger import append_values, delete_trade, read_rows
+    from src.logging_tools.row import build_row
+    path = tmp_path / "log.xlsx"
+    size = {"credit": 300.0, "max_loss": 2200.0, "buying_power": 2200.0}
+    append_values(build_row(_trade(), "Put Credit Spread", size, True, "", trade_id="A"), path)
+    assert delete_trade("ZZZ", path) == 0
+    _, rows = read_rows(path)
+    assert len(rows) == 1
+
+
 def test_old_log_header_gets_extended(tmp_path):
     """A log created before the tracker existed gains the new column labels."""
     from openpyxl import Workbook
