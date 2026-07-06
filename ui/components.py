@@ -36,6 +36,29 @@ _STATUS_COLOR = {"good": "green", "ok": "orange", "watch": "red"}
 _STATUS_ICON = {"good": "✅", "ok": "➖", "watch": "⚠️"}
 
 
+def render_market_tiles(tiles: list[dict], market_open: bool = True) -> None:
+    """The index + VIX strip as compact HTML tiles that wrap two-up on a phone
+    (st.columns would stack them into a tall list there, pushing the day's
+    verdict below the fold). VIX colors are inverted: falling fear = green."""
+    cells = []
+    for t in tiles:
+        sym = t["symbol"]
+        label = "VIX (fear)" if sym == "VIX" else sym
+        price = f"{t['price']:,.0f}" if t.get("price") else "n/a"
+        pct = t.get("change_pct")
+        delta_html = ""
+        if market_open and pct is not None:
+            good = (pct <= 0) if sym == "VIX" else (pct >= 0)
+            color = "#0A5C3F" if good else "#C02A1B"
+            arrow = "▲" if pct >= 0 else "▼"
+            delta_html = (f"<div class='ota-tile-delta' style='color:{color};'>"
+                          f"{arrow} {pct:+.2f}%</div>")
+        cells.append(
+            f"<div class='ota-tile'><div class='ota-tile-label'>{label}</div>"
+            f"<div class='ota-tile-value'>{price}</div>{delta_html}</div>")
+    st.markdown(f"<div class='ota-tiles'>{''.join(cells)}</div>", unsafe_allow_html=True)
+
+
 def render_stock_analysis(a: StockAnalysis) -> None:
     """The metric-by-metric checks behind a stock's grade (no header - the
     overview above already shows name, price, and verdict)."""

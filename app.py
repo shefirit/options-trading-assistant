@@ -2,14 +2,16 @@
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Five tabs, all open at once - use them in any order, nothing is locked:
+Six tabs, all open at once - use them in any order, nothing is locked:
 
-  📊 Market        - is today a good day to sell premium? (holiday-aware)
-  🔎 Find premium  - screen names for the richest, safest option premium
-  🔬 Analyze       - any stock/ETF/index: full picture + the strategy that fits it
-  🎯 Build & check - pick a strategy, scan real setups, check your SOP rules, log it
-  📒 My trades     - every logged trade tracked live against your own exit rules,
-                     plus your results vs your weekly/monthly goals
+  📊 Market   - is today a good day to sell premium? (holiday-aware)
+  🔎 Premium  - screen names for the richest, safest option premium
+  🔬 Analyze  - any stock/ETF/index: full picture + the strategy that fits it
+  🎯 Build    - pick a strategy, scan real setups, check your SOP rules, log it
+  📒 Trades   - every logged trade tracked live against your own exit rules,
+                plus your results vs your weekly/monthly goals
+  ⚙️ Settings - connections (Google Sheet, earnings data, Schwab) and your plan
+                numbers, in the main screen where they work on a phone too
 
 It never places trades and never gives buy/sell advice. You place every trade
 yourself in thinkorswim; this just helps you do it correctly.
@@ -90,6 +92,34 @@ def _days_phrase(n) -> str:
 
 
 # ------------------------------------------------------------------ main
+def _mode_badge(provider) -> tuple[str, str]:
+    tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
+    text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
+            "demo": "● DEMO · sample data"}[provider.mode]
+    return text, tone
+
+
+def _log_badge() -> tuple[str, str]:
+    """Where trades land when you press Log - always visible, because on the
+    phone the sidebar (where this used to live) can't be opened."""
+    from src.logging_tools import webhook_logger
+    if webhook_logger.is_configured():
+        return "● Log → Google Sheet", "green"
+    return "● Log: this device only", "amber"
+
+
+def _guard(render, *args) -> None:
+    """One tab hitting an error must not blank the whole app (every tab body
+    runs on every interaction, so an unhandled exception kills all of them)."""
+    try:
+        render(*args)
+    except Exception as e:
+        st.error("This section hit an unexpected snag - the rest of the app still works. "
+                 "Reload the page or try again in a minute.")
+        with st.expander("Technical details"):
+            st.exception(e)
+
+
 def main() -> None:
     settings = load_settings()
     strategies = load_strategies()
@@ -97,29 +127,25 @@ def main() -> None:
 
     _sidebar(settings, provider)
 
-    badge_tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
-    badge_text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
-                  "demo": "● DEMO · sample data"}[provider.mode]
     theme.hero(
         "Options Trading Assistant",
         "Read the market, screen for premium, analyze a name, build and check the trade.",
-        badge_text, badge_tone)
+        [_mode_badge(provider), _log_badge()])
 
-    ctx = provider.get_market_context(MARKET_READ_SYMBOL)
-
-    t_market, t_prem, t_analyze, t_build, t_trades = st.tabs(
-        ["📊  Market", "🔎  Find premium", "🔬  Analyze a name", "🎯  Build & check",
-         "📒  My trades"])
+    t_market, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
+        ["📊 Market", "🔎 Premium", "🔬 Analyze", "🎯 Build", "📒 Trades", "⚙️ Settings"])
     with t_market:
-        _tab_market(provider, ctx, strategies)
+        _guard(_tab_market, provider, strategies)
     with t_prem:
-        _tab_premium(settings, provider)
+        _guard(_tab_premium, settings, provider)
     with t_analyze:
-        _tab_analyze(settings, provider, strategies)
+        _guard(_tab_analyze, settings, provider, strategies)
     with t_build:
-        _tab_build(settings, strategies, provider)
+        _guard(_tab_build, settings, strategies, provider)
     with t_trades:
-        _tab_trades(settings, strategies, provider)
+        _guard(_tab_trades, settings, strategies, provider)
+    with t_settings:
+        _guard(_tab_settings, settings, provider)
 
 
 # ------------------------------------------------------------------ Market tab
@@ -151,7 +177,7 @@ def _trading_verdict(ctx, events):
             "selling premium.")
 
 
-def _tab_market(provider, ctx, strategies) -> None:
+def _tab_market(provider, strategies) -> None:
     import datetime as dt
 
     from src.data import market_calendar as cal
@@ -160,19 +186,14 @@ def _tab_market(provider, ctx, strategies) -> None:
     today = dt.date.today()
     market_open = cal.is_market_open(today)
 
-    tiles = provider.get_market_tiles()
-    cols = st.columns(len(tiles))
-    changes = []
-    for col, t in zip(cols, tiles):
-        price = f"{t['price']:,.0f}" if t["price"] else "n/a"
-        delta = None if not market_open else (
-            f"{t['change_pct']:+.2f}%" if t["change_pct"] is not None else None)
-        label = "VIX (fear)" if t["symbol"] == "VIX" else t["symbol"]
-        if t["symbol"] == "VIX":
-            col.metric(label, price, delta, delta_color="inverse")
-        else:
-            col.metric(label, price, delta)
-            changes.append(t["change_pct"])
+    # Fetched here (not before the tabs) so the header and tab bar paint
+    # immediately - on a phone connection that first second matters.
+    with st.spinner("Reading the market..."):
+        ctx = provider.get_market_context(MARKET_READ_SYMBOL)
+        tiles = provider.get_market_tiles()
+
+    components.render_market_tiles(tiles, market_open)
+    changes = [t["change_pct"] for t in tiles if t["symbol"] != "VIX"]
     if not market_open:
         st.markdown(theme.chip("◷ Showing last close - market closed today", "amber"),
                     unsafe_allow_html=True)
@@ -223,7 +244,7 @@ def _tab_market(provider, ctx, strategies) -> None:
         st.session_state["build_strategy"] = best_key
         st.session_state["build_underlyings"] = ["SPX"]
         st.session_state["_prev_build_strategy"] = best_key
-        st.success("Loaded into **Build & check** - open that tab to scan it.")
+        st.success("Loaded into **🎯 Build** - open that tab to scan it.")
 
     if not provider.is_real:
         st.info("You are offline, so these are sample numbers. Connect to the internet for real "
@@ -300,7 +321,7 @@ def _tab_premium(settings, provider) -> None:
             components.render_premium_detail(detail)
             if st.button(f"Analyze {chosen} in depth ▸", key="prem_to_analyze"):
                 st.session_state["analyze_sym"] = chosen
-                st.success(f"Loaded {chosen} into **Analyze a name** - open that tab.")
+                st.success(f"Loaded {chosen} into **🔬 Analyze** - open that tab.")
 
 
 # ------------------------------------------------------------------ Analyze tab
@@ -331,7 +352,7 @@ def _tab_analyze(settings, provider, strategies) -> None:
                 st.session_state["build_strategy"] = advice.primary.key
                 st.session_state["build_underlyings"] = [sym]
                 st.session_state["_prev_build_strategy"] = advice.primary.key
-                st.success("Loaded into **Build & check** - open that tab to scan and check it.")
+                st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
 
 
 def _symbol_research(sym, provider, settings, key_prefix) -> None:
@@ -587,6 +608,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
             st.warning(f"⚠️ {chosen.note}")
         st.markdown("**Leg-by-leg (build it this way in thinkorswim):**")
         st.dataframe(components.candidate_leg_detail(chosen), width="stretch", hide_index=True)
+        _tos_ticket_block(chosen.trade, strat)
         st.markdown("**Your SOP checklist:**")
         report = validate_trade(chosen.trade, existing_month_bp=existing_bp)
         components.render_checklist(report)
@@ -594,6 +616,24 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                 "buying_power": chosen.buying_power}
         _risk_and_payoff(chosen.trade, strat, size, settings)
         _log_button(chosen.trade, strat["name"], size, report.passed, key="scan")
+
+
+def _tos_ticket_block(trade, strat) -> None:
+    """The one-line order exactly as thinkorswim's Order Entry row shows it,
+    in a copyable box - hold the phone next to TOS and check strike by strike."""
+    from src.engine import tos_ticket
+    line = tos_ticket.ticket_line(trade)
+    if not line:
+        return
+    st.markdown("**The order line you should see in thinkorswim:**")
+    st.code(line, language=None)
+    extra = (" A covered call also needs your 100 shares per contract - this line is "
+             "just the call you sell." if strat.get("family") == "covered_call" else "")
+    theme.note("When you build the order in TOS, its Order Entry row should read like "
+               "this. Check the strikes and the price against it before you send. "
+               "The **date is estimated** from days-to-expiration - confirm it matches "
+               "the expiration you picked, and expect to adjust the @ price a few cents "
+               "to get filled." + extra)
 
 
 def _build_manual(key, strat, underlyings, settings) -> None:
@@ -667,6 +707,42 @@ def _exit_cfg_for(pos, strategies) -> dict:
     return (strat or {}).get("exit", _DEFAULT_EXIT) or _DEFAULT_EXIT
 
 
+def _price_positions(open_pos, provider, strategies) -> tuple[list, str]:
+    """Price every open position and run the exit rules - memoized for a few
+    minutes in the session. Every tap anywhere in the app reruns the whole
+    script (all tabs), so without this the pricing loop would replay on each
+    interaction; with it, only the first look and every ~3 minutes do work.
+    Returns (items, as-of time)."""
+    import datetime as dt
+    import time
+
+    from src.engine import exit_rules
+
+    sig = (tuple(sorted(p.trade_id or f"{p.underlying}|{p.opened}" for p in open_pos)),
+           int(time.time() // 180))
+    cached = st.session_state.get("_priced_positions")
+    if cached and cached["sig"] == sig:
+        return cached["items"], cached["at"]
+
+    items = []
+    bar = st.progress(0.0, text="Pricing your open trades...")
+    for i, p in enumerate(open_pos):
+        live = provider.price_position(p)
+        s = exit_rules.evaluate(
+            p, _exit_cfg_for(p, strategies),
+            current_cost=live.get("cost_to_close"),
+            underlying_price=live.get("underlying_price"),
+            short_delta=live.get("short_delta"))
+        items.append({"position": p, "live": live, "signal": s})
+        bar.progress((i + 1) / len(open_pos),
+                     text=f"Priced {p.underlying} ({i + 1}/{len(open_pos)})")
+    bar.empty()
+    items.sort(key=lambda it: _SIGNAL_ORDER.get(it["signal"].action, 9))
+    at = dt.datetime.now().strftime("%H:%M")
+    st.session_state["_priced_positions"] = {"sig": sig, "items": items, "at": at}
+    return items, at
+
+
 def _delete_control(trade_id, what: str, key: str) -> None:
     """A guarded delete: tick a box, then the button removes the trade's rows
     from the log (sheet or local backup). For trades logged by mistake / tests."""
@@ -691,7 +767,6 @@ def _delete_control(trade_id, what: str, key: str) -> None:
 
 
 def _tab_trades(settings, strategies, provider) -> None:
-    from src.engine import exit_rules
     from src.engine import positions as pos_mod
 
     theme.section("Every logged trade, tracked against your own exit rules", "My trades")
@@ -699,6 +774,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     top = st.columns([1, 6])
     if top[0].button("↻ Refresh", key="trades_refresh"):
         st.session_state.pop("trades_rows", None)
+        st.session_state.pop("_priced_positions", None)
     header, rows, source = _load_trade_log()
 
     all_pos = pos_mod.parse_rows(header, rows)
@@ -709,7 +785,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     st.session_state["open_bp_in_use"] = bp_used
 
     if not all_pos:
-        theme.note("Nothing here yet. When you press **Log this trade** in Build & check, "
+        theme.note("Nothing here yet. When you press **Log this trade** in 🎯 Build, "
                    "the trade lands here and the app starts watching your exit rules for "
                    "it: take the win at 50% of the credit, close at 21 days to expiration, "
                    "stop the loss at 2x the credit.")
@@ -724,29 +800,16 @@ def _tab_trades(settings, strategies, provider) -> None:
         return
 
     if source == "local":
-        theme.note("Reading the **local backup log** on this computer. To track trades on "
-                   "the hosted app too, update your sheet's script to the new LogTrade.gs "
-                   "(one-time, ~2 minutes) - see the note in the sidebar's Connect Google "
-                   "Sheet box.")
+        theme.note("Reading the **local backup log** on this device. To track trades "
+                   "everywhere, connect your Google Sheet in the **⚙️ Settings** tab "
+                   "(one-time, ~2 minutes).")
 
     # ---------------- open positions, priced live
     theme.note(f"**{len(open_pos)} open** · {len(closed)} closed"
                + (f" · {len(legacy)} from before tracking" if legacy else ""))
     items = []
     if open_pos:
-        bar = st.progress(0.0, text="Pricing your open trades...")
-        for i, p in enumerate(open_pos):
-            live = provider.price_position(p)
-            sig = exit_rules.evaluate(
-                p, _exit_cfg_for(p, strategies),
-                current_cost=live.get("cost_to_close"),
-                underlying_price=live.get("underlying_price"),
-                short_delta=live.get("short_delta"))
-            items.append({"position": p, "live": live, "signal": sig})
-            bar.progress((i + 1) / len(open_pos),
-                         text=f"Priced {p.underlying} ({i + 1}/{len(open_pos)})")
-        bar.empty()
-        items.sort(key=lambda it: _SIGNAL_ORDER.get(it["signal"].action, 9))
+        items, priced_at = _price_positions(open_pos, provider, strategies)
 
         needs_action = [it for it in items if it["signal"].action in ("stop", "time", "profit")]
         if needs_action:
@@ -754,6 +817,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                      "What to do column, then close them in thinkorswim.")
         else:
             st.success("No exit rule has triggered today.")
+        theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
+                   "few minutes, or press ↻ Refresh.")
 
         st.dataframe(components.positions_dataframe(items), width="stretch",
                      hide_index=True, column_config=components.positions_column_config())
@@ -776,6 +841,18 @@ def _tab_trades(settings, strategies, provider) -> None:
             dte_now = p.dte_left()
             cols[2].metric("Days left", dte_now if dte_now is not None else "n/a")
             cols[3].metric("Max loss", money(p.max_loss))
+            target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
+            if sig.profit_pct is not None and p.credit > 0:
+                if sig.profit_pct >= 0:
+                    st.progress(min(sig.profit_pct / target_pct, 1.0))
+                    theme.note(f"You've kept **{sig.profit_pct:.0f}%** of the credit so far - "
+                               f"your SOP takes the win at **{target_pct:.0f}%**.")
+                else:
+                    stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
+                    st.progress(0.0)
+                    theme.note(f"Right now closing costs **more** than you collected "
+                               f"({sig.profit_pct:.0f}% of the credit). Your stop-loss rule "
+                               f"says close if that reaches **-{stop_mult * 100:.0f}%**.")
             if p.legs:
                 strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
                 theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
@@ -931,52 +1008,87 @@ def _log_button(trade, strategy_name, size, passed, key: str) -> None:
         dest, live, trade_id = log_trade(trade, strategy_name, size, passed, note)
         st.session_state.pop("trades_rows", None)   # My trades reloads fresh
         if live:
-            st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 My trades**.  \n{dest}")
+            st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 Trades**.  \n{dest}")
         else:
-            st.success(f"Saved to the local log and tracked in **📒 My trades**.  \n{dest}")
+            st.success(f"Saved to the local log and tracked in **📒 Trades**.  \n{dest}")
 
 
-# ------------------------------------------------------------------ sidebar
+# ------------------------------------------ settings (main tab + desktop sidebar)
+def _data_mode_note(provider) -> None:
+    text, tone = _mode_badge(provider)
+    st.markdown(theme.chip(text, tone), unsafe_allow_html=True)
+    if provider.mode == "demo":
+        st.info("Offline - showing sample prices. Connect to the internet for real market "
+                "data, or set up Schwab for true real-time.")
+    elif provider.mode == "yahoo":
+        theme.note("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
+
+
+def _plan_metrics(settings, per_row: int = 2) -> None:
+    acct, tgt, risk = settings["account"], settings["targets"], settings["risk_limits"]
+    vals = [("Capital", money(acct["starting_capital"])),
+            ("Monthly goal", money(tgt["monthly"])),
+            ("Weekly goal", money(tgt["weekly"])),
+            ("BP limit", money(risk["monthly_bp_limit"]))]
+    cols = st.columns(per_row)
+    for i, (label, v) in enumerate(vals):
+        cols[i % per_row].metric(label, v)
+
+
+def _tab_settings(settings, provider) -> None:
+    """Everything that used to live only in the sidebar - which the phone app
+    can't open. Connections, data status, and her plan numbers, in the main
+    screen where they always work."""
+    theme.section("Your connections and your plan - all in one place", "Settings")
+    _data_mode_note(provider)
+
+    st.markdown("#### 🔗 Where your trades log")
+    from src.logging_tools import webhook_logger
+    if not webhook_logger.is_configured():
+        st.warning("Trades are saving **only on this device** right now - they won't reach "
+                   "your Google Sheet or follow you between phone and computer until the "
+                   "sheet is connected below.")
+    _connect_sheet_ui(key_prefix="main")
+
+    st.markdown("#### 📡 Data sources")
+    _connect_earnings_ui(key_prefix="main")
+    _connect_schwab_ui(provider, key_prefix="main")
+
+    st.divider()
+    st.markdown("#### 🎯 Your plan")
+    _plan_metrics(settings, per_row=4)
+    theme.note("These numbers come from `config/settings.yaml` - your capital, income goals, "
+               "and the monthly buying-power limit every checklist enforces.")
+    st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
+    theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
+
+
 def _sidebar(settings, provider) -> None:
     with st.sidebar:
         st.markdown("### Trading Assistant")
-        tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
-        text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
-                "demo": "● DEMO · sample data"}[provider.mode]
-        st.markdown(theme.chip(text, tone), unsafe_allow_html=True)
-        if provider.mode == "demo":
-            st.info("Offline - showing sample prices. Connect to the internet for real market "
-                    "data, or set up Schwab for true real-time.")
-        elif provider.mode == "yahoo":
-            theme.note("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
-
+        _data_mode_note(provider)
         st.divider()
         st.markdown("**Your plan**")
-        acct, tgt, risk = settings["account"], settings["targets"], settings["risk_limits"]
-        a, b = st.columns(2)
-        a.metric("Capital", money(acct["starting_capital"]))
-        b.metric("Monthly goal", money(tgt["monthly"]))
-        a.metric("Weekly goal", money(tgt["weekly"]))
-        b.metric("BP limit", money(risk["monthly_bp_limit"]))
-
+        _plan_metrics(settings, per_row=2)
         st.divider()
-        _connect_schwab_ui(provider)
-        _connect_earnings_ui()
-        _connect_sheet_ui()
+        _connect_schwab_ui(provider, key_prefix="sb")
+        _connect_earnings_ui(key_prefix="sb")
+        _connect_sheet_ui(key_prefix="sb")
         st.divider()
         st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
         theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
 
 
-def _connect_schwab_ui(provider) -> None:
+def _connect_schwab_ui(provider, key_prefix: str = "main") -> None:
     live = provider.mode == "schwab"
     label = "⚡ Schwab: connected ✅" if live else "⚡ Connect Schwab (real-time)"
     with st.expander(label, expanded=False):
         if live:
             st.success("You are on real-time Schwab data.")
             return
-        theme.note("Right now you have real Yahoo data (~15 min delayed), which is fine for "
-                   "your trades. To get true real-time from your own account:")
+        theme.note("Right now you have real market data (~15 min delayed), which is fine for "
+                   "your trades. To get true real-time from your own account (only works on "
+                   "a computer, not the hosted app):")
         st.markdown(
             "1. Go to **developer.schwab.com** and sign in with your Schwab login.\n"
             "2. Create an app - choose **Trader API - Individual**.\n"
@@ -989,7 +1101,7 @@ def _connect_schwab_ui(provider) -> None:
         theme.note("Your keys stay on your PC. Full details are in the README.")
 
 
-def _connect_earnings_ui() -> None:
+def _connect_earnings_ui(key_prefix: str = "main") -> None:
     """Paste a free Alpha Vantage key to pull years of earnings history (works on
     the hosted app, where Yahoo's earnings endpoint is blocked)."""
     from src.data import alphavantage_client as av
@@ -999,9 +1111,9 @@ def _connect_earnings_ui() -> None:
         theme.note("Gets years of expected-vs-delivered EPS for the Analyze tab. Yahoo blocks "
                    "this on the hosted app, so a free Alpha Vantage key fills it in.")
         current = av.get_key() or ""
-        key = st.text_input("Alpha Vantage key", value=current, key="av_key_input",
+        key = st.text_input("Alpha Vantage key", value=current, key=f"{key_prefix}_av_key",
                             type="password", placeholder="paste your key")
-        if st.button("Save key", key="save_av"):
+        if st.button("Save key", key=f"{key_prefix}_save_av"):
             if key.strip():
                 av.set_key(key.strip())
                 st.success("Saved. The earnings chart will now show years of history.")
@@ -1011,7 +1123,7 @@ def _connect_earnings_ui() -> None:
                    "it under **Settings → Secrets** as:  alphavantage_key = \"YOUR_KEY\"")
 
 
-def _connect_sheet_ui() -> None:
+def _connect_sheet_ui(key_prefix: str = "main") -> None:
     from src.logging_tools import webhook_logger
     connected = webhook_logger.is_configured()
     label = "🔗 Google Sheet: connected ✅" if connected else "🔗 Connect Google Sheet"
@@ -1026,17 +1138,21 @@ def _connect_sheet_ui() -> None:
                        "old one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
                        "version → Deploy**. Your link stays the same.")
         current = webhook_logger.get_url() or ""
-        url = st.text_input("Web app link", value=current, key="webhook_url_input",
+        url = st.text_input("Web app link", value=current, key=f"{key_prefix}_webhook_url",
                             placeholder="https://script.google.com/macros/s/.../exec")
         c1, c2 = st.columns(2)
-        if c1.button("Save link", key="save_webhook"):
+        if c1.button("Save link", key=f"{key_prefix}_save_webhook"):
             if url.strip().startswith("https://"):
                 webhook_logger.set_url(url.strip())
                 st.success("Saved. Your trades will now log to your Google Sheet.")
             else:
                 st.error("That does not look like a link. It should start with https://")
-        if connected and c2.button("Test it", key="test_webhook"):
+        if connected and c2.button("Test it", key=f"{key_prefix}_test_webhook"):
             _test_sheet_connection()
+        theme.note("On the **hosted** app the link comes from **Settings → Secrets** "
+                   "(share.streamlit.io → your app → ⋮ → Settings → Secrets) as:  "
+                   "google_sheet_webhook = \"https://script.google.com/...\"  - the box "
+                   "above only covers this device.")
 
 
 def _test_sheet_connection() -> None:

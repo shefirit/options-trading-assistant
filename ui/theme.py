@@ -205,6 +205,23 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
     border-color: {ACCENT} !important; box-shadow: 0 0 0 3px rgba(11,122,84,.15) !important;
 }}
 [data-testid="stAlert"] {{ border-radius: 12px; }}
+/* Streamlit's own alert text (st.success/warning/error/info) ships at ~4.1-4.5:1
+   on its tinted backgrounds - under AA and far under this app's floor. Darken to
+   the same accessible tones the chips use. */
+[data-testid="stAlertContentSuccess"], [data-testid="stAlertContentSuccess"] p,
+[data-testid="stAlertContentSuccess"] div {{ color: #0A5C3F !important; }}
+[data-testid="stAlertContentWarning"], [data-testid="stAlertContentWarning"] p,
+[data-testid="stAlertContentWarning"] div {{ color: #7A4207 !important; }}
+[data-testid="stAlertContentError"], [data-testid="stAlertContentError"] p,
+[data-testid="stAlertContentError"] div {{ color: #99271A !important; }}
+[data-testid="stAlertContentInfo"], [data-testid="stAlertContentInfo"] p,
+[data-testid="stAlertContentInfo"] div {{ color: #0B5566 !important; }}
+/* st.metric deltas: Streamlit's green/red also sit just under AA on the tile
+   fill - darken each direction (VIX no longer uses an inverse metric). */
+[data-testid="stMetricDelta"]:has([data-testid="stMetricDeltaIcon-Up"]) {{
+    color: #0A5C3F !important; }}
+[data-testid="stMetricDelta"]:has([data-testid="stMetricDeltaIcon-Down"]) {{
+    color: #A6301C !important; }}
 [data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 12px; }}
 [data-baseweb="slider"] [role="slider"] {{ background: {ACCENT} !important; }}
 hr {{ border-color: {BORDER}; }}
@@ -236,6 +253,38 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-chip-red    {{ background: #FDECE9; border-color: #F6C7BF; color: #99271A; }}
 .ota-chip-amber  {{ background: #FBF0DA; border-color: #F1D8A5; color: #874A08; }}
 .ota-chip-indigo {{ background: #E1F0F3; border-color: #B7DBE3; color: #0B5566; }}
+
+/* ---------------- market tiles (HTML flex - wraps 2-up on phones) ---------------- */
+.ota-tiles {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+.ota-tile {{
+    flex: 1 1 150px; min-width: 140px;
+    background: {TILE}; border: 1px solid {BORDER}; border-radius: 14px;
+    padding: 10px 14px;
+}}
+.ota-tile-label {{ font-size: 0.78rem; font-weight: 700; color: {SECONDARY};
+                   text-transform: uppercase; letter-spacing: 0.05em; }}
+.ota-tile-value {{ font-size: 1.45rem; font-weight: 800; color: {INK}; line-height: 1.3; }}
+.ota-tile-delta {{ font-size: 0.95rem; font-weight: 700; }}
+
+/* ---------------- phones (Rita uses the app mobile-first) ---------------- */
+@media (max-width: 640px) {{
+    .block-container {{ padding-left: 0.9rem; padding-right: 0.9rem; padding-top: 0.5rem; }}
+    .ota-hero-title {{ font-size: 1.4rem; }}
+    .ota-hero-sub {{ font-size: 0.95rem; }}
+    /* the tab bar becomes a swipeable strip instead of six squeezed slivers */
+    .stTabs [data-baseweb="tab-list"] {{
+        overflow-x: auto; -webkit-overflow-scrolling: touch;
+        padding: 6px; gap: 6px; scrollbar-width: none;
+    }}
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
+    .stTabs [data-baseweb="tab"] {{
+        flex: 0 0 auto !important; min-height: 44px; padding: 8px 13px;
+    }}
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
+    .stTabs [data-baseweb="tab"] p {{ font-size: 0.98rem !important; }}
+    .ota-tile {{ flex: 1 1 42%; min-width: 42%; }}
+    .ota-section-title {{ font-size: 1.35rem; }}
+}}
 </style>
 """
 
@@ -256,8 +305,12 @@ def note(text: str) -> None:
         unsafe_allow_html=True)
 
 
-def hero(title: str, subtitle: str, badge_text: str, badge_tone: str = "green") -> None:
-    """The app's top header: name, one-line promise, and the data-mode badge."""
+def hero(title: str, subtitle: str, badges: list[tuple[str, str]]) -> None:
+    """The app's top header: name, one-line promise, and status badges.
+
+    badges: [(text, tone), ...] - e.g. the data mode and where trades log to,
+    so both are visible on the phone where the sidebar can't be opened."""
+    chips = "".join(chip(text, tone) for text, tone in badges)
     st.markdown(
         f"""
         <div class="ota-hero">
@@ -265,7 +318,7 @@ def hero(title: str, subtitle: str, badge_text: str, badge_tone: str = "green") 
             <div class="ota-hero-title">{title}</div>
             <div class="ota-hero-sub">{subtitle}</div>
           </div>
-          <div><span class="ota-chip ota-chip-{badge_tone}">{badge_text}</span></div>
+          <div>{chips}</div>
         </div>
         """,
         unsafe_allow_html=True,
