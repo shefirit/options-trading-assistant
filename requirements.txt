@@ -1,19 +1,22 @@
-# Pinned exactly: the tab component's internal markup changed in later Streamlit
-# releases, which broke the tab styling AND the hide-inactive-panel behavior on
-# the hosted app (tabs looked plain and the selected tab showed another tab's
-# content). 1.58.0 is verified good. Bump this deliberately, never let it float.
+# Every runtime dep is pinned EXACTLY (not >=). On Streamlit Cloud an unpinned
+# dep silently upgrades on each rebuild, which can break the app while local
+# stays fine - this bit us when a floating Streamlit (>=1.40) shipped a newer
+# tab component that broke the tab styling AND the hide-inactive-panel behavior
+# (tabs looked plain and the selected tab showed another tab's content).
+# These versions are all verified-good (local runs + 171 passing tests).
+# To move up: bump the number here, test locally, then push. Never use >=.
 streamlit==1.58.0
-altair>=5.0
-pandas>=2.2
-yfinance>=0.2.50
+altair==6.2.2
+pandas==3.0.3
+yfinance==1.5.1
 # Lets yfinance impersonate a real browser (TLS + headers), so Yahoo throttles
 # the hosted app far less. The app still works without it, just gets blocked more.
-curl_cffi>=0.7
-tradingview-ta>=3.3.0
-pydantic>=2.9
-PyYAML>=6.0
-python-dotenv>=1.0
-openpyxl>=3.1
+curl_cffi==0.15.0
+tradingview-ta==3.3.0
+pydantic==2.13.4
+PyYAML==6.0.3
+python-dotenv==1.2.2
+openpyxl==3.1.5
 
 # Optional extras (NOT needed for the hosted app - install locally only):
 #   schwab-py      # live real-time Schwab data (local only, its login needs your PC)
