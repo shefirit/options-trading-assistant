@@ -602,6 +602,9 @@ def _picks_risk_block(max_loss, bp, settings, liquidity_line, settlement, events
 
 
 def _index_pick_detail(pick, strategies, settings) -> None:
+    if pick.price:
+        st.markdown(components._esc(
+            f"**{pick.symbol}** is trading at **${pick.price:,.2f}** right now."))
     for w in pick.why:
         theme.note("• " + w)
     theme.note("🗓️ " + pick.expiry_note)

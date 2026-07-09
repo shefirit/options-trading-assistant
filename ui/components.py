@@ -942,7 +942,8 @@ def picks_index_dataframe(picks: list) -> pd.DataFrame:
         c = p.candidate
         note = p.error or ("" if c is None or c.fits_sop else "delta a touch over")
         rows.append({
-            "Index": p.symbol,
+            "Symbol": p.symbol,
+            "Price": round(p.price, 2) if p.price else None,
             "Today's fit": p.strategy_name,
             "Trend": p.trend,
             "Premium deal": p.richness,
@@ -957,6 +958,8 @@ def picks_index_dataframe(picks: list) -> pd.DataFrame:
 
 def picks_index_column_config():
     return {
+        "Price": st.column_config.NumberColumn(format="$%.2f",
+            help="The underlying's current level/price (about 15 minutes delayed)."),
         "Today's fit": st.column_config.TextColumn(
             help="The strategy from YOUR playbook that fits this index's trend today."),
         "Premium deal": st.column_config.TextColumn(
@@ -993,6 +996,7 @@ def picks_income_dataframe(picks: list) -> pd.DataFrame:
             continue
         rows.append({
             "Symbol": s.symbol,
+            "Price": round(s.price, 2) if s.price else None,
             "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
             "Quality": s.grade or "ETF",
             "Fits your SOP": _STRATEGY_SHORT.get(p.strategy_key, p.strategy_key),
@@ -1008,6 +1012,8 @@ def picks_income_dataframe(picks: list) -> pd.DataFrame:
 
 def picks_income_column_config():
     cfg = premium_column_config()
+    cfg["Price"] = st.column_config.NumberColumn(format="$%.2f",
+        help="The share price now (about 15 minutes delayed). 100 shares cost this x100.")
     cfg["Fits your SOP"] = st.column_config.TextColumn(
         help="The strategy from YOUR playbook this name points to: a Cash Secured Put when "
              "it's affordable and steady, a PMCC when 100 shares cost too much, a covered "
