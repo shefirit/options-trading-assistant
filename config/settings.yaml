@@ -19,6 +19,22 @@ risk_limits:
   monthly_bp_limit: 50000       # do not use more than this in buying power per month
   position_delta_red_flag: 90   # if a position's net delta passes this, it is a red flag
 
+# The "Picks" tab's market screen - the bar a name must clear before the app
+# spends an option-chain fetch on it. Your bar: credible, LARGE, liquid.
+picks:
+  min_dollar_volume: 200000000  # avg dollars traded per day - thin names have costly option spreads
+  min_market_cap: 10000000000   # stocks only: at least $10B - large companies only
+  min_price: 15                 # skip junk-priced names (assignment traps)
+  hv_min: 0.12                  # calmer than 12%/yr pays too little premium to bother
+  hv_max: 0.80                  # wilder than 80%/yr is "great premium, great danger"
+  max_stock_finalists: 20       # how many stocks get the full option-chain analysis
+  max_etf_finalists: 10         # how many ETFs get it
+  quick_etfs:                   # the Quick scan's ETF list (the 4 indexes are always included)
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+
 # Underlyings the app is allowed to scan, grouped by option style.
 # European-style = cash settled, no early assignment (good for credit spreads).
 # US-style = you can be assigned early; you must own 100 real shares for covered calls.

@@ -931,3 +931,89 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
             tooltip=[alt.Tooltip("date:T", title="Date"),
                      alt.Tooltip("total:Q", title="Total $", format=",.0f")])
         st.altair_chart(chart.properties(height=220), use_container_width=True)
+
+
+# ================================================================== Today's picks
+def picks_index_dataframe(picks: list) -> pd.DataFrame:
+    """The index-plays table: one row per cash-settled index with its
+    trend-fitting strategy and the real scanned monthly setup's numbers."""
+    rows = []
+    for p in picks:
+        c = p.candidate
+        note = p.error or ("" if c is None or c.fits_sop else "delta a touch over")
+        rows.append({
+            "Index": p.symbol,
+            "Today's fit": p.strategy_name,
+            "Trend": p.trend,
+            "Premium deal": p.richness,
+            "Credit $": round(c.credit, 0) if c else None,
+            "Max loss $": round(c.max_loss, 0) if c else None,
+            "Return/Risk": f"{c.return_on_risk * 100:.1f}%" if c else "-",
+            "Days": c.dte if c else None,
+            "Note": note or "—",
+        })
+    return pd.DataFrame(rows)
+
+
+def picks_index_column_config():
+    return {
+        "Today's fit": st.column_config.TextColumn(
+            help="The strategy from YOUR playbook that fits this index's trend today."),
+        "Premium deal": st.column_config.TextColumn(
+            help="Rich = options pay more than this index's usual moves justify (good for the "
+                 "seller). Thin = pays little. Fair = normal."),
+        "Credit $": st.column_config.NumberColumn(format="$%d",
+            help="Cash collected for one contract of the scanned setup."),
+        "Max loss $": st.column_config.NumberColumn(format="$%d",
+            help="The worst case for one contract - defined up front on a credit spread."),
+        "Return/Risk": st.column_config.TextColumn(
+            help="Credit divided by max loss - the premium you earn per dollar at risk."),
+        "Days": st.column_config.NumberColumn(format="%d",
+            help="Days to the expiration used (the monthly when it fits your SOP window)."),
+    }
+
+
+# Short labels for the income table's "Fits your SOP" column.
+_STRATEGY_SHORT = {
+    "cash_secured_put": "Cash Secured Put",
+    "poor_mans_covered_call": "PMCC",
+    "covered_call_model_1": "Covered Call M1 (collar)",
+    "covered_call_model_2": "Covered Call M2",
+    "covered_call_model_3": "Covered Call M3",
+}
+
+
+def picks_income_dataframe(picks: list) -> pd.DataFrame:
+    """The stock/ETF income table: verdict-first, with the dividend alongside."""
+    rows = []
+    for p in picks:
+        s = p.snapshot
+        if s.error:
+            rows.append({"Symbol": s.symbol, "Verdict": "— " + s.error})
+            continue
+        rows.append({
+            "Symbol": s.symbol,
+            "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
+            "Quality": s.grade or "ETF",
+            "Fits your SOP": _STRATEGY_SHORT.get(p.strategy_key, p.strategy_key),
+            "Income $/mo": s.credit_dollars,
+            "Yield %/mo": s.monthly_yield_pct,
+            "Premium deal": s.richness,
+            "Dividend %/yr": p.dividend.yield_pct,
+            "Watch out": ("⚠ earnings first" if s.earnings_before_expiry
+                          else "⚠ hard to trade" if s.liquidity == "Thin" else "—"),
+        })
+    return pd.DataFrame(rows)
+
+
+def picks_income_column_config():
+    cfg = premium_column_config()
+    cfg["Fits your SOP"] = st.column_config.TextColumn(
+        help="The strategy from YOUR playbook this name points to: a Cash Secured Put when "
+             "it's affordable and steady, a PMCC when 100 shares cost too much, a covered "
+             "call model when the trend is down (income only if you own the shares).")
+    cfg["Dividend %/yr"] = st.column_config.NumberColumn(format="%.2f%%",
+        help="Cash the fund or company pays its shareholders each year, as a % of the price. "
+             "A nice extra if you ever end up owning the shares - it is NOT part of the "
+             "option premium. Blank = pays none.")
+    return cfg

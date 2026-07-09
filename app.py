@@ -2,9 +2,12 @@
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Six tabs, all open at once - use them in any order, nothing is locked:
+Seven tabs, all open at once - use them in any order, nothing is locked:
 
   📊 Market   - is today a good day to sell premium? (holiday-aware)
+  💡 Picks    - WHAT looks good today: scans the indexes, the big ETFs, and the
+                S&P 500 for SOP-fitting monthly premium candidates, ranked,
+                with dividends and a risk picture
   🔎 Premium  - screen names for the richest, safest option premium
   🔬 Analyze  - any stock/ETF/index: full picture + the strategy that fits it
   🎯 Build    - pick a strategy, scan real setups, check your SOP rules, log it
@@ -129,13 +132,17 @@ def main() -> None:
 
     theme.hero(
         "Options Trading Assistant",
-        "Read the market, screen for premium, analyze a name, build and check the trade.",
+        "Read the market, get today's picks, screen premium, analyze a name, build and "
+        "check the trade.",
         [_mode_badge(provider), _log_badge()])
 
-    t_market, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
-        ["📊 Market", "🔎 Premium", "🔬 Analyze", "🎯 Build", "📒 Trades", "⚙️ Settings"])
+    t_market, t_picks, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
+        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Build", "📒 Trades",
+         "⚙️ Settings"])
     with t_market:
         _guard(_tab_market, provider, strategies)
+    with t_picks:
+        _guard(_tab_picks, settings, strategies, provider)
     with t_prem:
         _guard(_tab_premium, settings, provider)
     with t_analyze:
@@ -249,6 +256,361 @@ def _tab_market(provider, strategies) -> None:
     if not provider.is_real:
         st.info("You are offline, so these are sample numbers. Connect to the internet for real "
                 "market data (or set up Schwab for true real-time).")
+
+
+# ------------------------------------------------------------------ Today's picks tab
+def _tab_picks(settings, strategies, provider) -> None:
+    """WHAT looks good today: scan the allowed universe, rank the SOP fits."""
+    import time as _time
+
+    from src.engine import recommender
+
+    theme.section("Who looks good to sell premium on right now?", "Today's picks")
+    theme.note("One button scans your allowed universe - the 4 cash-settled indexes, the big "
+               "liquid ETFs, and the whole S&P 500 - and ranks who fits your SOP for a "
+               "monthly premium trade today: generous premium, sane risk, and a dividend "
+               "when there is one. These are **candidates with reasons, not instructions** - "
+               "you check the winner in 🎯 Build and you decide.")
+
+    if not provider.is_real:
+        st.info("Today's picks need real market data - connect to the internet first. "
+                "(Sample data has nothing real to recommend.)")
+        return
+
+    monthly = recommender.monthly_target()
+    ctx = provider.get_market_context(MARKET_READ_SYMBOL)
+    events = provider.get_macro_events(trade_dte=monthly.dte)
+    headline, tone, _ = _trading_verdict(ctx, events)
+    icon = {"green": "✅", "amber": "⚠️", "red": "🛑"}[tone]
+    bits = [theme.chip(f"{icon}  {headline}", tone)]
+    if ctx.vix is not None:
+        bits.append(theme.chip(f"VIX {ctx.vix:.0f}", "indigo"))
+    bits.append(theme.chip(f"🗓️ Target: {monthly.label}", "neutral"))
+    st.markdown(" ".join(bits), unsafe_allow_html=True)
+    if tone == "red":
+        theme.note("Your SOP calls today a sit-out day. The scan still works - just treat "
+                   "anything it finds as homework for later, not a trade for right now.")
+
+    scope = st.radio(
+        "How wide should the scan look?",
+        ["⚡ Quick look - the 4 indexes + your core ETFs (seconds)",
+         "🌐 Full market sweep - all S&P 500 stocks + ~45 big ETFs (a couple of minutes "
+         "the first time each day)"],
+        key="picks_scope")
+    full = scope.startswith("🌐")
+
+    if st.button("💡 Find today's candidates", type="primary", key="picks_go"):
+        st.session_state["picks_report"] = _run_picks_scan(
+            provider, settings, strategies, monthly, ctx.vix, full)
+        st.session_state["picks_report_at"] = _time.time()
+
+    report = st.session_state.get("picks_report")
+    if report is None:
+        theme.note("Press the button and the app builds today's ranked shortlist for you.")
+        return
+
+    age_min = (_time.time() - st.session_state.get("picks_report_at", 0)) / 60
+    theme.note(f"Scanned at **{report.generated_at}** - numbers are ~15 minutes delayed."
+               + (" It's been a while - press the button again for fresh numbers."
+                  if age_min > 15 else ""))
+    if report.funnel_note:
+        theme.note("🔬 " + report.funnel_note)
+
+    # ---------- Section A: index plays ----------
+    st.divider()
+    st.markdown("### 🏛️ Index plays - credit spreads and iron condors")
+    theme.note("Cash-settled indexes: no shares ever change hands and no early assignment - "
+               "the cleanest home for credit spreads. XSP is the mini S&P 500: the same "
+               "trade at about one tenth the size, easier on buying power.")
+    if report.index_picks:
+        st.dataframe(components.picks_index_dataframe(report.index_picks),
+                     width="stretch", hide_index=True,
+                     column_config=components.picks_index_column_config())
+        chosen = st.selectbox("Look closer at one index",
+                              [p.symbol for p in report.index_picks],
+                              key="picks_index_detail")
+        pick = next(p for p in report.index_picks if p.symbol == chosen)
+        with st.container(border=True):
+            _index_pick_detail(pick, strategies, settings)
+    else:
+        theme.note("No index picks came back this scan - see the skipped list below.")
+
+    # ---------- Section B: stock & ETF income plays ----------
+    st.divider()
+    st.markdown("### 💰 Stock and ETF plays - puts and covered calls for income")
+    theme.note("For each name that passed the screen: the one-month put you'd sell (~0.30 "
+               "delta), which of YOUR strategies it points to, and the dividend as a bonus. "
+               "Ranked by the verdict first, then income - a dividend only breaks near-ties.")
+    valid_income = [p for p in report.income_picks if not p.snapshot.error]
+    if valid_income:
+        st.dataframe(components.picks_income_dataframe(report.income_picks),
+                     width="stretch", hide_index=True,
+                     column_config=components.picks_income_column_config())
+        chosen2 = st.selectbox("See the full plan for one name",
+                               [p.snapshot.symbol for p in valid_income],
+                               key="picks_income_detail")
+        pick2 = next(p for p in valid_income if p.snapshot.symbol == chosen2)
+        with st.container(border=True):
+            _income_pick_detail(pick2, strategies, settings, provider)
+    else:
+        theme.note("No stock or ETF picks this scan - the screen may have filtered "
+                   "everything out today, or the data source was briefly unavailable.")
+
+    if report.skipped:
+        with st.expander(f"Names skipped this scan ({len(report.skipped)})"):
+            for line in report.skipped:
+                theme.note("• " + line)
+
+    with st.expander("🎓 How these picks are chosen (and ranked)"):
+        st.markdown(components._esc(
+            "**The funnel, in order:**\n"
+            "1. **Universe** - the 4 cash-settled indexes, ~45 large major-issuer ETFs, and "
+            "every S&P 500 stock.\n"
+            "2. **The screen (stocks and ETFs)** - a name must be large (stocks: market cap "
+            "over $10B), trade real dollars daily (over $200M - thin names have costly "
+            "option spreads), cost over $15, move enough to pay premium but not wildly "
+            "(12%-80% yearly volatility), and NOT be in a downtrend. Every threshold lives "
+            "in your config file.\n"
+            "3. **The deep look** - the top names by traded dollars get a real option-chain "
+            "read: premium richness, the ~0.30-delta put's income, liquidity, earnings "
+            "timing, and the dividend.\n"
+            "4. **Ranking** - indexes: SOP-fitting setups first, then return on risk. Stocks "
+            "and ETFs: the verdict first (good to sell > okay > skip), then monthly yield; "
+            "between two names within half a percent of each other, the dividend payer "
+            "wins.\n\n"
+            "The app never places trades and never says 'buy this' - it shortlists what "
+            "fits your own rules today, with the reasons, and you decide."))
+
+
+def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
+    """Stage 1 (screen the market) + stage 2 (option-chain read on the survivors)."""
+    import datetime as dt
+    import time as _time
+
+    from src.data import cache, market_screener, premium_finder, stock_universe
+    from src.engine import recommender
+
+    indexes = list(settings["underlyings"]["european_style"])
+    picks_cfg = settings.get("picks", {}) or {}
+    rules = market_screener.rules_from_config(picks_cfg)
+    monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
+
+    report = recommender.PicksReport(
+        monthly=monthly, vix=vix, scope="full" if full else "quick",
+        generated_at=_time.strftime("%H:%M"))
+
+    # ---- stage 1: who earns an option-chain fetch ----
+    if full:
+        with st.spinner("Screening the whole market (price, size, volume, trend)..."):
+            screen = provider.get_screen(f"full:{dt.date.today().isoformat()}",
+                                         stock_universe.sp500(),
+                                         stock_universe.liquid_etfs(), rules)
+        if screen is None:
+            finalists = ([(s, "etf") for s in settings["underlyings"]["us_style"]]
+                         + [(s, "stock") for s in settings["underlyings"]["stocks"]])
+            report.funnel_note = ("The whole-market screen couldn't download today (the "
+                                  "data source throttled it) - screening your curated "
+                                  "shortlists instead. Try the Full sweep again later.")
+        else:
+            finalists = [(r.symbol, r.kind) for r in screen["finalists"]]
+            report.funnel_note = market_screener.funnel_note(screen["results"],
+                                                             screen["finalists"])
+    else:
+        finalists = [(s, "etf") for s in picks_cfg.get("quick_etfs",
+                                                       ["SPY", "QQQ", "IWM", "DIA"])]
+        report.funnel_note = ("Quick look: the 4 cash-settled indexes plus your core ETFs. "
+                              "Run the 🌐 Full market sweep to screen the whole S&P 500.")
+
+    total = max(len(indexes) + len(finalists), 1)
+    done = 0
+    bar = st.progress(0.0, text="Reading option chains...")
+
+    # ---- indexes: trend-fitting strategy + a real scanned monthly setup ----
+    for sym in indexes:
+        try:
+            ictx = provider.get_market_context(sym)
+            hv = premium_finder.annualized_vol(provider.get_history_closes(sym))
+            chain = provider.get_chain(sym, dte_min=max(monthly.dte - 3, 0),
+                                       dte_max=monthly.dte + 3)
+            exact = recommender.chain_for_expiration(chain, monthly.expiration)
+            pick = recommender.build_index_pick(sym, ictx, exact, hv, monthly)
+            if pick.candidate is None and ictx.best_strategy_key in strategies:
+                # The monthly sits outside this strategy's SOP window (or has no
+                # fitting strike) - scan the normal SOP window and say so.
+                lo, hi = scanner.strategy_dte_window(strategies[ictx.best_strategy_key], sym)
+                fallback = provider.get_chain(sym, dte_min=lo, dte_max=hi)
+                pick = recommender.build_index_pick(sym, ictx, exact, hv, monthly,
+                                                    fallback_chain=fallback)
+            report.index_picks.append(pick)
+        except Exception as e:
+            report.skipped.append(f"{sym} - {str(e)[:80]}")
+        done += 1
+        bar.progress(done / total, text=f"Checked {sym} ({done}/{total})")
+
+    # ---- stocks & ETFs: premium snapshot + dividend + risk ----
+    for sym, kind in finalists:
+        try:
+            snap = provider.get_premium_snapshot(sym, target_dte=monthly.dte,
+                                                 monthly_bp=monthly_bp)
+            if snap.error:
+                report.skipped.append(f"{sym} - {snap.error}")
+            else:
+                info = provider.get_raw_info(sym)
+                report.income_picks.append(recommender.build_income_pick(
+                    snap, kind, info, monthly, monthly_bp=monthly_bp,
+                    bp_limit=monthly_bp, vix=vix))
+        except Exception as e:
+            report.skipped.append(f"{sym} - {str(e)[:80]}")
+        finally:
+            # A parsed full chain is big; only the indexes stay cached (for Build).
+            cache.clear(f"cfull:{sym}")
+        done += 1
+        bar.progress(done / total, text=f"Checked {sym} ({done}/{total})")
+
+    bar.empty()
+    report.index_picks = recommender.rank_index_picks(report.index_picks)
+    report.income_picks = recommender.rank_income_picks(report.income_picks)
+    report.generated_at = _time.strftime("%H:%M")   # stamp the END - a sweep takes minutes
+    return report
+
+
+def _sop_block(notes: list) -> None:
+    if not notes:
+        return
+    st.markdown("**What your SOP says here:**")
+    for n in notes:
+        theme.note("• " + n)
+
+
+def _liquidity_line(liquidity, spread_pct, open_interest) -> str:
+    line = f"Liquidity: {liquidity}"
+    if spread_pct is not None:
+        line += f" - bid-ask spread {spread_pct:.0f}% of mid"
+        if open_interest:
+            line += f", open interest {open_interest:,}"
+    return line + "."
+
+
+def _picks_risk_block(max_loss, bp, settings, liquidity_line, settlement, events,
+                      extra=None) -> None:
+    """One candidate's risk picture: worst case, buying power vs the monthly
+    limit, liquidity, settlement style, and the events inside the window."""
+    bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
+    loss_txt = f"&#36;{max_loss:,.0f}" if max_loss is not None else "see Build"
+    bp_txt = (f"&#36;{bp:,.0f} <span style='font-size:.9rem;font-weight:600;'>"
+              f"({bp / bp_limit * 100:.0f}% of your &#36;{bp_limit:,.0f} monthly limit)"
+              "</span>" if bp is not None else "see Build")
+    st.markdown(
+        f"""
+        <div style="border:2px solid {theme.RED};border-radius:14px;padding:12px 16px;
+                    background:#FDF3F2;margin:8px 0 4px;">
+          <div style="font-weight:800;color:{theme.RED};">⚠️ Risk picture (1 contract)</div>
+          <div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:8px;">
+            <div><div style="color:#5B2320;font-weight:600;font-size:.85rem;">MOST YOU CAN LOSE</div>
+                 <div style="font-size:1.35rem;font-weight:800;color:{theme.RED};">{loss_txt}</div></div>
+            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BUYING POWER NEEDED</div>
+                 <div style="font-size:1.35rem;font-weight:800;color:{theme.INK};">{bp_txt}</div></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True)
+    theme.note("• " + settlement)
+    theme.note("• " + liquidity_line)
+    for line in (extra or []):
+        theme.note("• " + line)
+    in_window = [e for e in events if e.in_window]
+    st.markdown("**Events inside this trade window:**")
+    components.render_events(in_window, empty_note="None - a clean window.")
+
+
+def _index_pick_detail(pick, strategies, settings) -> None:
+    for w in pick.why:
+        theme.note("• " + w)
+    theme.note("🗓️ " + pick.expiry_note)
+    if pick.error and pick.candidate is None:
+        st.warning(components._esc(pick.error + " Use 🎯 Build to scan other expirations."))
+    c = pick.candidate
+    if c is not None:
+        m = st.columns(4)
+        m[0].metric("Credit (1 contract)", f"${c.credit:,.0f}")
+        m[1].metric("Max loss", f"${c.max_loss:,.0f}")
+        m[2].metric("Return on risk", f"{c.return_on_risk * 100:.0f}%",
+                    help="The credit as a % of the worst case - the premium you earn per "
+                         "dollar at risk.")
+        m[3].metric("Short delta", f"{c.short_delta:.2f}",
+                    help="Roughly the chance the short strike finishes in the money - "
+                         "lower is safer.")
+        st.markdown("**Leg-by-leg (how it looks in thinkorswim):**")
+        st.dataframe(components.candidate_leg_detail(c), width="stretch", hide_index=True)
+    _sop_block(pick.sop_notes)
+    for w in pick.warnings:
+        st.warning(components._esc(w))
+    _picks_risk_block(
+        max_loss=(c.max_loss if c else None), bp=(c.buying_power if c else None),
+        settings=settings,
+        liquidity_line=_liquidity_line(pick.liquidity, pick.spread_pct, pick.open_interest),
+        settlement="Cash-settled index: no shares ever change hands and no early "
+                   "assignment - if it expires in the money you just settle the "
+                   "difference in cash.",
+        events=pick.events)
+    _strategy_about(strategies[pick.strategy_key])
+    if st.button(f"Set up {pick.strategy_name} on {pick.symbol} in 🎯 Build ▸",
+                 type="primary", key="picks_ix_to_build"):
+        st.session_state["build_strategy"] = pick.strategy_key
+        st.session_state["build_underlyings"] = [pick.symbol]
+        st.session_state["_prev_build_strategy"] = pick.strategy_key
+        st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
+
+
+def _income_pick_detail(pick, strategies, settings, provider) -> None:
+    import datetime as dt
+
+    s = pick.snapshot
+    components.render_premium_detail(s)
+
+    st.markdown("**💵 Dividend:**")
+    div_line = pick.dividend.note
+    if pick.dividend.pays and pick.dividend.ex_div_date:
+        when = pick.dividend.ex_div_date
+        div_line += (f" Next ex-dividend: {when:%b %d}." if when >= dt.date.today()
+                     else f" Last ex-dividend was {when:%b %d}.")
+    if pick.dividend.pays:
+        div_line += (" A dividend only lands in your pocket while you own the shares - "
+                     "covered calls, or a put that assigned you.")
+    theme.note(div_line)
+
+    _sop_block(pick.sop_notes)
+    for w in pick.warnings:
+        st.warning(components._esc(w))
+
+    extra = []
+    if pick.strategy_key == "poor_mans_covered_call":
+        extra.append("A PMCC's real risk is the long-dated call you buy - scan it in Build "
+                     "to see the actual dollars.")
+    if pick.strategy_key.startswith("covered_call"):
+        extra.append("Covered calls need 100 real shares per contract - the worst case is "
+                     "the shares themselves falling.")
+    _picks_risk_block(
+        max_loss=pick.bp_required, bp=pick.bp_required, settings=settings,
+        liquidity_line=_liquidity_line(s.liquidity, s.spread_pct, s.open_interest),
+        settlement="American-style options: assignment before expiration is possible - "
+                   "most likely deep in the money or right before an ex-dividend date.",
+        events=pick.events, extra=extra)
+
+    with st.expander(f"🔬 Full strategy read for {s.symbol} (trend + technicals + playbook)"):
+        try:
+            components.render_advice(_compute_advice(s.symbol, pick.kind, provider, settings))
+        except Exception:
+            theme.note("Couldn't load the full read right now - the 🔬 Analyze tab has it.")
+
+    _strategy_about(strategies[pick.strategy_key])
+    label = components._STRATEGY_SHORT.get(pick.strategy_key, pick.strategy_key)
+    if st.button(f"Set up {label} on {s.symbol} in 🎯 Build ▸",
+                 type="primary", key="picks_inc_to_build"):
+        st.session_state["build_strategy"] = pick.strategy_key
+        st.session_state["build_underlyings"] = [s.symbol]
+        st.session_state["_prev_build_strategy"] = pick.strategy_key
+        st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
 
 
 # ------------------------------------------------------------------ Find premium tab

@@ -1,0 +1,56 @@
+{
+  "_comment": "Curated ETF universe for the Picks tab. Selection bar (Rita, 2026-07-08): credible major issuer + LARGE fund (roughly $2B+ assets at curation) + genuinely liquid OPTIONS (fund size alone is not enough - VTI/VOO are huge but their options are thin, so they stay out). Excluded on purpose: leveraged funds (TQQQ, SOXL, SQQQ...), volatility products (VXX, UVXY, SVXY), and crypto ETFs - too gappy/wild for premium selling. aum_b = approximate assets in $ billions when curated; the daily screen re-checks real trading volume anyway, so a stale number degrades safely. Refresh by editing this file.",
+  "as_of": "2026-07-08",
+  "etfs": [
+    {"symbol": "SPY", "name": "S&P 500", "issuer": "State Street", "aum_b": 630},
+    {"symbol": "QQQ", "name": "Nasdaq-100", "issuer": "Invesco", "aum_b": 360},
+    {"symbol": "IWM", "name": "Russell 2000", "issuer": "iShares", "aum_b": 70},
+    {"symbol": "DIA", "name": "Dow 30", "issuer": "State Street", "aum_b": 40},
+    {"symbol": "MDY", "name": "S&P MidCap 400", "issuer": "State Street", "aum_b": 24},
+
+    {"symbol": "XLK", "name": "Technology sector", "issuer": "State Street", "aum_b": 75},
+    {"symbol": "XLF", "name": "Financials sector", "issuer": "State Street", "aum_b": 50},
+    {"symbol": "XLV", "name": "Healthcare sector", "issuer": "State Street", "aum_b": 38},
+    {"symbol": "XLE", "name": "Energy sector", "issuer": "State Street", "aum_b": 35},
+    {"symbol": "XLC", "name": "Communications sector", "issuer": "State Street", "aum_b": 25},
+    {"symbol": "XLY", "name": "Consumer discretionary", "issuer": "State Street", "aum_b": 22},
+    {"symbol": "XLI", "name": "Industrials sector", "issuer": "State Street", "aum_b": 20},
+    {"symbol": "XLU", "name": "Utilities sector", "issuer": "State Street", "aum_b": 18},
+    {"symbol": "XLP", "name": "Consumer staples", "issuer": "State Street", "aum_b": 16},
+    {"symbol": "XLRE", "name": "Real estate sector", "issuer": "State Street", "aum_b": 7},
+    {"symbol": "XLB", "name": "Materials sector", "issuer": "State Street", "aum_b": 5},
+
+    {"symbol": "SMH", "name": "Semiconductors", "issuer": "VanEck", "aum_b": 26},
+    {"symbol": "GDX", "name": "Gold miners", "issuer": "VanEck", "aum_b": 16},
+    {"symbol": "GDXJ", "name": "Junior gold miners", "issuer": "VanEck", "aum_b": 6},
+    {"symbol": "ARKK", "name": "ARK Innovation", "issuer": "ARK", "aum_b": 7},
+    {"symbol": "IBB", "name": "Biotech", "issuer": "iShares", "aum_b": 7},
+    {"symbol": "XBI", "name": "Biotech equal-weight", "issuer": "State Street", "aum_b": 6},
+    {"symbol": "KRE", "name": "Regional banks", "issuer": "State Street", "aum_b": 4},
+    {"symbol": "IYR", "name": "U.S. real estate", "issuer": "iShares", "aum_b": 4},
+    {"symbol": "XOP", "name": "Oil and gas producers", "issuer": "State Street", "aum_b": 3},
+    {"symbol": "ITB", "name": "Home construction", "issuer": "iShares", "aum_b": 3},
+    {"symbol": "OIH", "name": "Oil services", "issuer": "VanEck", "aum_b": 2.5},
+    {"symbol": "KBE", "name": "Banks", "issuer": "State Street", "aum_b": 2},
+    {"symbol": "XME", "name": "Metals and mining", "issuer": "State Street", "aum_b": 2},
+    {"symbol": "XRT", "name": "Retail", "issuer": "State Street", "aum_b": 2},
+    {"symbol": "XHB", "name": "Homebuilders", "issuer": "State Street", "aum_b": 2},
+
+    {"symbol": "TLT", "name": "20+ year Treasuries", "issuer": "iShares", "aum_b": 50},
+    {"symbol": "IEF", "name": "7-10 year Treasuries", "issuer": "iShares", "aum_b": 34},
+    {"symbol": "LQD", "name": "Investment-grade bonds", "issuer": "iShares", "aum_b": 30},
+    {"symbol": "HYG", "name": "High-yield bonds", "issuer": "iShares", "aum_b": 16},
+    {"symbol": "EMB", "name": "Emerging-market bonds", "issuer": "iShares", "aum_b": 15},
+
+    {"symbol": "GLD", "name": "Gold", "issuer": "State Street", "aum_b": 95},
+    {"symbol": "SLV", "name": "Silver", "issuer": "iShares", "aum_b": 15},
+
+    {"symbol": "EFA", "name": "Developed international", "issuer": "iShares", "aum_b": 55},
+    {"symbol": "EEM", "name": "Emerging markets", "issuer": "iShares", "aum_b": 17},
+    {"symbol": "EWJ", "name": "Japan", "issuer": "iShares", "aum_b": 16},
+    {"symbol": "FXI", "name": "China large-cap", "issuer": "iShares", "aum_b": 7},
+    {"symbol": "KWEB", "name": "China internet", "issuer": "KraneShares", "aum_b": 6},
+    {"symbol": "EWZ", "name": "Brazil", "issuer": "iShares", "aum_b": 4},
+    {"symbol": "EWW", "name": "Mexico", "issuer": "iShares", "aum_b": 2}
+  ]
+}

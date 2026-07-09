@@ -1,7 +1,12 @@
 """Refresh the S&P 500 and Nasdaq-100 ticker lists from Wikipedia.
 
 Run occasionally to keep the tradable universe current:
-    python tools/refresh_universe.py
+    python tools/refresh_universe.py          # ticker lists only
+    python tools/refresh_universe.py caps     # market caps only (slow, ~5-10 min)
+    python tools/refresh_universe.py all      # both
+
+The market caps feed the Picks tab's "large companies only" screen. They only
+need to be roughly right, so refreshing them every month or two is plenty.
 """
 
 from __future__ import annotations
@@ -55,5 +60,47 @@ def refresh() -> None:
     print(f"Saved {len(sp500)} S&P 500 and {len(nasdaq100)} Nasdaq-100 tickers to {OUT}")
 
 
+def refresh_market_caps() -> None:
+    """Fetch every S&P 500 name's market cap into sample_data/market_caps.json.
+
+    One Yahoo call per ticker - run it locally (residential IP), not on the
+    cloud. Names that fail are simply left out; the screen falls back to
+    dollar volume as its size proxy for them.
+    """
+    import datetime as dt
+
+    import yfinance as yf
+
+    from src.data import stock_universe
+
+    tickers = stock_universe.sp500()
+    caps: dict[str, float] = {}
+    for i, sym in enumerate(tickers, 1):
+        try:
+            cap = float(yf.Ticker(sym).fast_info["market_cap"])
+            if cap > 0:
+                caps[sym] = cap
+        except Exception:
+            pass
+        if i % 50 == 0:
+            print(f"  ...{i}/{len(tickers)} ({len(caps)} caps so far)")
+    payload = {
+        "_comment": ("Approximate market caps in dollars for the Picks tab's "
+                     "'large companies only' screen. Regenerate with: "
+                     "python tools/refresh_universe.py caps"),
+        "as_of": dt.date.today().isoformat(),
+        "caps": caps,
+    }
+    (OUT / "market_caps.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    print(f"Saved {len(caps)} market caps to {OUT / 'market_caps.json'}")
+
+
 if __name__ == "__main__":
-    refresh()
+    arg = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
+    if arg == "caps":
+        refresh_market_caps()
+    elif arg == "all":
+        refresh()
+        refresh_market_caps()
+    else:
+        refresh()

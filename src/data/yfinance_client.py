@@ -187,6 +187,64 @@ def get_avg_volume(underlying: str, period: str = "3mo") -> Optional[float]:
         return None
 
 
+def batch_history(tickers: list[str], period: str = "3mo",
+                  chunk: int = 100) -> dict[str, tuple[list[float], list[float]]]:
+    """Daily (closes, volumes) for MANY tickers in a few batched requests -
+    the Picks tab's whole-market screen. Rides Yahoo's chart endpoint (the one
+    that stays reliable from cloud hosts). A failed chunk is skipped, never
+    fatal - the caller decides what to do with missing names."""
+    import yfinance as yf
+
+    out: dict[str, tuple[list[float], list[float]]] = {}
+    for i in range(0, len(tickers), chunk):
+        names = [t.upper() for t in tickers[i:i + chunk]]
+        block = [yahoo_symbol(t) for t in names]
+        try:
+            df = _with_retry(lambda b=block: _download_block(yf, b, period))
+        except Exception:
+            continue
+        if df is None or len(df) == 0:
+            continue
+        multi = hasattr(df.columns, "levels")   # MultiIndex when >1 ticker came back
+        for name, ysym in zip(names, block):
+            try:
+                sub = df[ysym] if multi else df
+            except Exception:
+                continue
+            closes, vols = _closes_and_volumes(sub)
+            if closes:
+                out[name] = (closes, vols)
+    return out
+
+
+def _download_block(yf, block: list[str], period: str):
+    """One yf.download call; passes the browser-look session when supported."""
+    kwargs = dict(period=period, interval="1d", group_by="ticker",
+                  auto_adjust=True, progress=False, threads=True)
+    sess = _session()
+    if sess is not None:
+        try:
+            return yf.download(block, session=sess, **kwargs)
+        except TypeError:
+            pass   # this yfinance build's download() takes no session
+    return yf.download(block, **kwargs)
+
+
+def _closes_and_volumes(sub) -> tuple[list[float], list[float]]:
+    """Aligned (closes, volumes) lists from one ticker's frame, NaN rows dropped."""
+    try:
+        cs = sub["Close"].tolist()
+        vs = sub["Volume"].tolist()
+    except Exception:
+        return [], []
+    closes, vols = [], []
+    for c, v in zip(cs, vs):
+        if c is not None and c == c:            # NaN-safe
+            closes.append(float(c))
+            vols.append(float(v) if (v is not None and v == v) else 0.0)
+    return closes, vols
+
+
 def _contracts_from_expiration(t, exp: str, dte: int, spot: float) -> list[OptionContract]:
     """Parse one expiration's calls+puts into OptionContracts (greeks computed)."""
     oc = t.option_chain(exp)

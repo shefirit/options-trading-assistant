@@ -183,6 +183,49 @@ class DataProvider:
         # demo: the sample chain is local and cheap, so use it for a richer read.
         return context_from_chain(self.get_chain(underlying), vix=13.5, trend="sideways")
 
+    def get_history_closes(self, symbol: str) -> list[float]:
+        """Daily closes, oldest first (a year) - same cache the market read uses."""
+        if self.mode != "yahoo":
+            return []
+        return cache.get_or_fetch(f"hist:{symbol}",
+                                  lambda: yfinance_client.get_history_closes(symbol), 300)
+
+    # ---------- stage-1 market screen (the Picks tab's funnel) ----------
+    def get_screen(self, cache_key: str, stocks: list[str], etfs: list[str],
+                   rules) -> Optional[dict]:
+        """Screen the whole universe with one batched history download.
+
+        Returns {"results": [ScreenResult...], "finalists": [ScreenResult...]},
+        cached for 6 hours (volume/trend barely move intraday). Returns None
+        when the batch download came back empty (Yahoo throttling) - and does
+        NOT cache that, so the next press retries.
+        """
+        if self.mode != "yahoo":
+            return None
+
+        def _fetch():
+            from src.data import market_screener, stock_universe
+            symbols = list(dict.fromkeys([*etfs, *stocks]))
+            history = yfinance_client.batch_history(symbols)
+            if not history:
+                return None
+            caps = stock_universe.market_caps()
+            results = []
+            for sym in etfs:
+                closes, vols = history.get(sym.upper(), ([], []))
+                results.append(market_screener.build_result(sym, "etf", closes, vols, rules))
+            for sym in stocks:
+                closes, vols = history.get(sym.upper(), ([], []))
+                results.append(market_screener.build_result(sym, "stock", closes, vols, rules,
+                                                            market_cap=caps.get(sym.upper())))
+            return {"results": results,
+                    "finalists": market_screener.finalists(results, rules)}
+
+        out = cache.get_or_fetch(f"screen:{cache_key}", _fetch, 6 * 3600)
+        if out is None:
+            cache.clear(f"screen:{cache_key}")   # a throttled download must not stick for 6h
+        return out
+
     # ---------- per-stock fundamental + technical analysis ----------
     def get_stock_analysis(self, symbol: str) -> Optional[StockAnalysis]:
         """Only meaningful with real data (Yahoo). Returns None in demo mode."""
