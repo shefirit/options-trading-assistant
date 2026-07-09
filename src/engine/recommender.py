@@ -370,16 +370,21 @@ def build_index_pick(
     )
 
 
-def is_strong_bearish_stock(kind: str, symbol: str, grade: Optional[str],
-                            trend: str, biggest: set) -> bool:
-    """True only for a downtrending name that is a big, strong STOCK - the only
-    kind that earns a single-stock bear call spread. Everything else in a
+def is_strong_bearish_stock(kind: str, symbol: str, trend: str, biggest: set) -> bool:
+    """True only for a downtrending name that is one of the biggest, strongest
+    STOCKS - measured by membership in the top-market-cap set (mega-caps: the
+    largest, most established, most liquid companies). Everything else in a
     downtrend is left out (a bearish index play is the cleaner route).
+
+    We gate on market cap, NOT the fundamentals letter grade: a downtrend already
+    docks that grade, and Yahoo throttles the fundamentals fields on the hosted
+    app - so an A/B grade gate hid essentially every bearish play there. For a
+    defined-risk bear call spread (you never own the shares) big and liquid is
+    what matters, and the top-cap set captures both.
 
     biggest: the set of top-market-cap tickers eligible for the bearish path.
     """
-    return (trend == "down" and kind == "stock"
-            and symbol.upper() in biggest and grade in ("A", "B"))
+    return trend == "down" and kind == "stock" and symbol.upper() in biggest
 
 
 # ------------------------------------------------------------------ income picks (stocks/ETFs)

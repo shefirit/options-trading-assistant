@@ -294,15 +294,14 @@ def test_keep_best_filters_bearish_picks_like_indexes():
 
 def test_is_strong_bearish_stock_gate():
     big = {"NVDA", "MSFT"}
-    # A big, strong, downtrending stock qualifies.
-    assert rec.is_strong_bearish_stock("stock", "NVDA", "A", "down", big)
-    assert rec.is_strong_bearish_stock("stock", "msft", "B", "down", big)   # case-insensitive
+    # A big, downtrending stock qualifies (gated on market cap, not the grade -
+    # a downtrend docks the grade and the hosted app throttles fundamentals).
+    assert rec.is_strong_bearish_stock("stock", "NVDA", "down", big)
+    assert rec.is_strong_bearish_stock("stock", "msft", "down", big)   # case-insensitive
     # Disqualifiers, one each:
-    assert not rec.is_strong_bearish_stock("stock", "NVDA", "A", "up", big)      # not down
-    assert not rec.is_strong_bearish_stock("etf", "NVDA", "A", "down", big)      # not a stock
-    assert not rec.is_strong_bearish_stock("stock", "F", "A", "down", big)       # not biggest
-    assert not rec.is_strong_bearish_stock("stock", "NVDA", "C", "down", big)    # not strong
-    assert not rec.is_strong_bearish_stock("stock", "NVDA", None, "down", big)   # no grade
+    assert not rec.is_strong_bearish_stock("stock", "NVDA", "up", big)     # not down
+    assert not rec.is_strong_bearish_stock("etf", "NVDA", "down", big)     # not a stock
+    assert not rec.is_strong_bearish_stock("stock", "F", "down", big)      # not biggest
 
 
 def test_build_bearish_stock_pick_is_a_call_credit_spread(chain):

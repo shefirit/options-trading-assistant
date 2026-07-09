@@ -345,8 +345,9 @@ def _tab_picks(settings, strategies, provider) -> None:
                    "would be a trap (you'd be assigned a falling stock). Instead: a **Call "
                    "Credit Spread** - you sell a call above the price and keep the credit as "
                    "long as it does **not** rally back. Defined risk. Shown only for the "
-                   "largest, A/B-quality names, because a single-stock spread can be assigned "
-                   "early and gaps on news - so the underlying has to be rock-solid.")
+                   "largest, most-established names (the biggest by market value), because a "
+                   "single-stock spread can be assigned early and gaps on news - so the "
+                   "underlying has to be rock-solid.")
         st.dataframe(components.picks_index_dataframe(report.bearish_picks),
                      width="stretch", hide_index=True,
                      column_config=components.picks_index_column_config())
@@ -416,8 +417,8 @@ def _tab_picks(settings, strategies, provider) -> None:
             "weak company, thin premium) is left out of the tables and listed separately "
             "with the reason, so you only scan real candidates.\n"
             "6. **Downtrends** - selling puts into a faller is a trap, so a downtrending "
-            "stock is normally left out. The exception: the biggest, A/B-quality names get "
-            "a defined-risk bearish Call Credit Spread instead (the 📉 Bearish plays "
+            "stock is normally left out. The exception: the biggest names by market value "
+            "get a defined-risk bearish Call Credit Spread instead (the 📉 Bearish plays "
             "section) - you win if they do not rally back.\n\n"
             "The app never places trades and never says 'buy this' - it shortlists what "
             "fits your own rules today, with the reasons, and you decide."))
@@ -513,8 +514,7 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
                                                  monthly_bp=monthly_bp)
             if snap.error:
                 report.skipped.append(f"{sym} - {snap.error}")
-            elif recommender.is_strong_bearish_stock(kind, sym, snap.grade,
-                                                     snap.trend, bearish_pool):
+            elif recommender.is_strong_bearish_stock(kind, sym, snap.trend, bearish_pool):
                 # A big, strong stock heading down: sell puts would be a trap, so
                 # scan a defined-risk bear Call Credit Spread instead (same cached
                 # chain the snapshot just used).

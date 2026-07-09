@@ -35,8 +35,9 @@ picks:
   quick_top_etfs: 15
   quick_top_stocks: 20
   # A downtrending stock only gets a bearish Call Credit Spread if it is this big
-  # (top N by market cap) AND grade A/B - single-stock bear spreads need a
-  # rock-solid name. Lower this to be stricter about which fallers qualify.
+  # - one of the top N by market cap (the largest, most-established, most liquid
+  # mega-caps). Single-stock bear spreads need a rock-solid name; lower this to be
+  # stricter about which fallers qualify.
   bearish_top_stocks: 20
 
 # Underlyings the app is allowed to scan, grouped by option style.
