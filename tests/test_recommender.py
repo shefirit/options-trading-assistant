@@ -246,6 +246,84 @@ def test_rank_income_verdict_dominates_and_dividend_breaks_near_ties():
     assert [p.snapshot.monthly_yield_pct for p in ranked] == [2.0, 1.2, 1.0, 5.0, 9.9]
 
 
+def test_keep_best_drops_skips_and_thin_indexes_with_reasons():
+    def cand(fits=True) -> Candidate:
+        return Candidate(trade=Trade(strategy_key="put_credit_spread", underlying="SPX"),
+                         credit=100, max_loss=1000, buying_power=1000,
+                         return_on_risk=0.1, short_delta=0.2, fits_sop=fits)
+
+    good_ix = rec.IndexPick(symbol="SPX", strategy_key="put_credit_spread",
+                            strategy_name="PCS", candidate=cand(), liquidity="Good")
+    thin_ix = rec.IndexPick(symbol="NDX", strategy_key="put_credit_spread",
+                            strategy_name="PCS", candidate=cand(), liquidity="Thin")
+    nosetup_ix = rec.IndexPick(symbol="RUT", strategy_key="iron_condor",
+                               strategy_name="IC", candidate=None,
+                               error="No setup at your SOP delta.")
+
+    sell = _income("sell", 1.5, None)
+    okay = _income("okay", 1.0, None)
+    skip = IncomePick(
+        snapshot=PremiumSnapshot(symbol="ZZ", verdict="skip",
+                                 verdict_reason="Hard to trade - wide bid-ask spread."),
+        kind="etf", strategy_key="cash_secured_put", dividend=DividendView())
+
+    kept_ix, kept_inc, kept_bear, left_out = rec.keep_best(
+        [good_ix, thin_ix, nosetup_ix], [sell, okay, skip])
+    assert [p.symbol for p in kept_ix] == ["SPX"]
+    assert [p.snapshot.verdict for p in kept_inc] == ["sell", "okay"]
+    assert kept_bear == []
+    joined = " ".join(left_out)
+    assert "NDX" in joined and "hard to trade" in joined.lower()
+    assert "RUT" in joined and "No setup" in joined
+    assert "ZZ" in joined and "wide bid-ask" in joined
+
+
+def test_keep_best_filters_bearish_picks_like_indexes():
+    def cand() -> Candidate:
+        return Candidate(trade=Trade(strategy_key="call_credit_spread", underlying="NVDA"),
+                         credit=80, max_loss=420, buying_power=420,
+                         return_on_risk=0.19, short_delta=0.1, fits_sop=True)
+    good = rec.IndexPick(symbol="NVDA", american=True, strategy_key="call_credit_spread",
+                         strategy_name="CCS", candidate=cand(), liquidity="Good")
+    thin = rec.IndexPick(symbol="AVGO", american=True, strategy_key="call_credit_spread",
+                         strategy_name="CCS", candidate=cand(), liquidity="Thin")
+    _, _, kept_bear, left_out = rec.keep_best([], [], [good, thin])
+    assert [p.symbol for p in kept_bear] == ["NVDA"]
+    assert any("AVGO (bearish)" in s for s in left_out)
+
+
+def test_is_strong_bearish_stock_gate():
+    big = {"NVDA", "MSFT"}
+    # A big, strong, downtrending stock qualifies.
+    assert rec.is_strong_bearish_stock("stock", "NVDA", "A", "down", big)
+    assert rec.is_strong_bearish_stock("stock", "msft", "B", "down", big)   # case-insensitive
+    # Disqualifiers, one each:
+    assert not rec.is_strong_bearish_stock("stock", "NVDA", "A", "up", big)      # not down
+    assert not rec.is_strong_bearish_stock("etf", "NVDA", "A", "down", big)      # not a stock
+    assert not rec.is_strong_bearish_stock("stock", "F", "A", "down", big)       # not biggest
+    assert not rec.is_strong_bearish_stock("stock", "NVDA", "C", "down", big)    # not strong
+    assert not rec.is_strong_bearish_stock("stock", "NVDA", None, "down", big)   # no grade
+
+
+def test_build_bearish_stock_pick_is_a_call_credit_spread(chain):
+    """A downtrend context on a (stock) chain yields a bear Call Credit Spread,
+    flagged american, with earnings-in-window warned per the SOP."""
+    down_ctx = build_context("NVDA", 5100.0, vix=18.0, trend="down")
+    assert down_ctx.best_strategy_key == "call_credit_spread"
+    monthly_chain = rec.chain_for_expiration(chain, dt.date(2026, 8, 16))
+    earnings = TODAY + dt.timedelta(days=20)   # inside the ~45-day trade
+    pick = rec.build_index_pick("NVDA", down_ctx, monthly_chain, hv=0.4,
+                                monthly=MONTHLY_45, today=TODAY,
+                                earnings_date=earnings, american=True)
+    assert pick.american
+    assert pick.strategy_key == "call_credit_spread"
+    assert pick.candidate is not None
+    short = pick.candidate.trade.short_legs[0]
+    assert short.option_type.value == "call"       # a bear CALL spread
+    assert pick.candidate.credit > 0 and pick.candidate.max_loss > 0
+    assert any("no credit spreads through earnings" in w for w in pick.warnings)
+
+
 def test_rank_index_fitting_setups_first_errors_last():
     def cand(fits: bool, ror: float) -> Candidate:
         return Candidate(trade=Trade(strategy_key="put_credit_spread", underlying="SPX"),

@@ -50,9 +50,14 @@ class DividendView(BaseModel):
 
 
 class IndexPick(BaseModel):
-    """One cash-settled index with its trend-fitting strategy and a real setup."""
+    """A defined-risk credit-spread candidate with a real scanned setup.
+
+    Usually a cash-settled index; also used for a bearish Call Credit Spread on a
+    big, strong stock (american=True) when it is trending down.
+    """
 
     symbol: str
+    american: bool = False                    # True = stock/ETF (early assignment possible)
     price: Optional[float] = None
     trend: str = "unknown"
     strategy_key: str
@@ -96,8 +101,10 @@ class PicksReport(BaseModel):
     vix: Optional[float] = None
     funnel_note: str = ""
     index_picks: list[IndexPick] = Field(default_factory=list)
+    bearish_picks: list[IndexPick] = Field(default_factory=list)   # bear call spreads on strong fallers
     income_picks: list[IncomePick] = Field(default_factory=list)
-    skipped: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)     # no data / errored
+    left_out: list[str] = Field(default_factory=list)     # dropped for quality (with reason)
 
 
 # ------------------------------------------------------------------ the monthly expiration
@@ -266,8 +273,13 @@ def build_index_pick(
     monthly: MonthlyTarget,
     today: Optional[dt.date] = None,
     fallback_chain: Optional[OptionChain] = None,
+    earnings_date: Optional[dt.date] = None,
+    american: bool = False,
 ) -> IndexPick:
-    """One index candidate: the trend-fitting strategy plus a REAL scanned setup.
+    """One credit-spread candidate: the trend-fitting strategy plus a REAL scanned
+    setup. Used for cash-settled indexes and for a bearish Call Credit Spread on a
+    strong, big stock (american=True, which adds early-assignment and earnings
+    warnings).
 
     Scans the monthly expiration first; if that sits outside the strategy's SOP
     window (it happens the week before expiration), scans the normal SOP window
@@ -307,9 +319,10 @@ def build_index_pick(
         if contract is not None:
             spread_pct, oi, liq = premium_finder._liquidity(contract)
 
+    dte = cand.dte if cand else monthly.dte
     events = market_events.upcoming_events(
-        from_date=today, horizon_days=max(45, (cand.dte if cand else monthly.dte)),
-        trade_dte=(cand.dte if cand else monthly.dte))
+        from_date=today, horizon_days=max(45, dte), trade_dte=dte,
+        earnings_date=earnings_date)
 
     why: list[str] = [f"{symbol} is {_TREND_WORD.get(ctx.trend, ctx.trend)} - "
                       f"{ctx.recommendation_reason}"]
@@ -324,7 +337,7 @@ def build_index_pick(
     else:
         error = "No setup at your SOP delta on this expiration right now."
     if richness in ("Rich", "Fair", "Thin"):
-        why.append({"Rich": "Premium is Rich - you are paid more than this index's usual "
+        why.append({"Rich": "Premium is Rich - you are paid more than its usual "
                             "moves would justify.",
                     "Fair": "Premium is Fair - about normal for how much it moves.",
                     "Thin": "Premium is Thin - it pays little for the risk right now.",
@@ -335,12 +348,18 @@ def build_index_pick(
     if liq == "Thin":
         warnings.append("The short strike is hard to trade right now (wide bid-ask spread).")
     for e in events:
-        if e.in_window and e.kind in ("fomc", "jobs"):
+        if not e.in_window:
+            continue
+        if e.kind in ("fomc", "jobs"):
             warnings.append(f"{e.label} on {e.date:%b %d} lands inside this trade window - "
                             f"{e.note}")
+        elif e.kind == "earnings":
+            warnings.append(f"Earnings on {e.date:%b %d} land inside this trade - your SOP "
+                            "says no credit spreads through earnings. Pick an expiration "
+                            "before it, or skip this name.")
 
     return IndexPick(
-        symbol=symbol, price=price, trend=ctx.trend,
+        symbol=symbol, american=american, price=price, trend=ctx.trend,
         strategy_key=strategy_key, strategy_name=strategy.get("name", strategy_key),
         strategy_reason=ctx.recommendation_reason,
         candidate=cand, expiry_note=expiry_note,
@@ -349,6 +368,18 @@ def build_index_pick(
         events=events, why=why, sop_notes=sop_summary(strategy),
         warnings=warnings, error=error,
     )
+
+
+def is_strong_bearish_stock(kind: str, symbol: str, grade: Optional[str],
+                            trend: str, biggest: set) -> bool:
+    """True only for a downtrending name that is a big, strong STOCK - the only
+    kind that earns a single-stock bear call spread. Everything else in a
+    downtrend is left out (a bearish index play is the cleaner route).
+
+    biggest: the set of top-market-cap tickers eligible for the bearish path.
+    """
+    return (trend == "down" and kind == "stock"
+            and symbol.upper() in biggest and grade in ("A", "B"))
 
 
 # ------------------------------------------------------------------ income picks (stocks/ETFs)
@@ -438,3 +469,43 @@ def rank_income_picks(picks: list[IncomePick]) -> list[IncomePick]:
         y = s.monthly_yield_pct or 0.0
         return (ok, verdict, int(y / 0.5), p.dividend.yield_pct or 0.0, y)
     return sorted(picks, key=key, reverse=True)
+
+
+def _keep_spreads(picks: list[IndexPick], label: str, left_out: list[str]) -> list[IndexPick]:
+    """Keep spread picks that have a real, tradeable setup; drop the rest with a reason."""
+    kept = []
+    for p in picks:
+        if p.candidate is None:
+            left_out.append(f"{p.symbol} ({label}) - "
+                            f"{p.error or 'no setup at your SOP delta right now'}")
+        elif p.liquidity == "Thin":
+            left_out.append(f"{p.symbol} ({label}) - hard to trade "
+                            "(wide bid-ask spread on the short strike)")
+        else:
+            kept.append(p)
+    return kept
+
+
+def keep_best(index_picks: list[IndexPick], income_picks: list[IncomePick],
+              bearish_picks: Optional[list[IndexPick]] = None):
+    """Show only the best candidates, not the "skip"s.
+
+    Drops (with a plain-English reason, so nothing is hidden):
+      - income names the SOP grades "skip" - hard to trade, downtrend, weak
+        company, or thin premium
+      - index / bearish picks with no setup at the SOP delta, or a short strike
+        that is hard to trade (a thin, wide bid-ask market)
+
+    Returns (kept_index, kept_income, kept_bearish, left_out) in ranked order.
+    """
+    left_out: list[str] = []
+    kept_ix = _keep_spreads(index_picks, "index", left_out)
+    kept_bear = _keep_spreads(bearish_picks or [], "bearish", left_out)
+    kept_inc = []
+    for p in income_picks:
+        if p.snapshot.verdict == "skip":
+            reason = p.snapshot.verdict_reason or "not a good candidate right now"
+            left_out.append(f"{p.snapshot.symbol} - {reason}")
+        else:
+            kept_inc.append(p)
+    return kept_ix, kept_inc, kept_bear, left_out

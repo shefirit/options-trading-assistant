@@ -293,9 +293,10 @@ def _tab_picks(settings, strategies, provider) -> None:
 
     scope = st.radio(
         "How wide should the scan look?",
-        ["⚡ Quick look - the 4 indexes + your core ETFs (seconds)",
-         "🌐 Full market sweep - all S&P 500 stocks + ~45 big ETFs (a couple of minutes "
-         "the first time each day)"],
+        ["⚡ Quick look - the indexes, the biggest ETFs, and the largest, most-traded "
+         "stocks (about a minute)",
+         "🌐 Full market sweep - screen every S&P 500 stock + ~45 big ETFs for hidden "
+         "gems (a few minutes the first time each day)"],
         key="picks_scope")
     full = scope.startswith("🌐")
 
@@ -333,14 +334,37 @@ def _tab_picks(settings, strategies, provider) -> None:
         with st.container(border=True):
             _index_pick_detail(pick, strategies, settings)
     else:
-        theme.note("No index picks came back this scan - see the skipped list below.")
+        theme.note("No index looks clean enough to sell right now - any that were close are "
+                   "in the 'left out' list below with the reason.")
+
+    # ---------- Section A2: bearish plays on strong fallers (only when any) ----------
+    if report.bearish_picks:
+        st.divider()
+        st.markdown("### 📉 Bearish plays - strong stocks heading down")
+        theme.note("When a big, top-quality stock is trending **down**, selling puts on it "
+                   "would be a trap (you'd be assigned a falling stock). Instead: a **Call "
+                   "Credit Spread** - you sell a call above the price and keep the credit as "
+                   "long as it does **not** rally back. Defined risk. Shown only for the "
+                   "largest, A/B-quality names, because a single-stock spread can be assigned "
+                   "early and gaps on news - so the underlying has to be rock-solid.")
+        st.dataframe(components.picks_index_dataframe(report.bearish_picks),
+                     width="stretch", hide_index=True,
+                     column_config=components.picks_index_column_config())
+        chosenb = st.selectbox("Look closer at one bearish play",
+                               [p.symbol for p in report.bearish_picks],
+                               key="picks_bearish_detail")
+        pickb = next(p for p in report.bearish_picks if p.symbol == chosenb)
+        with st.container(border=True):
+            _index_pick_detail(pickb, strategies, settings)
 
     # ---------- Section B: stock & ETF income plays ----------
     st.divider()
     st.markdown("### 💰 Stock and ETF plays - puts and covered calls for income")
-    theme.note("For each name that passed the screen: the one-month put you'd sell (~0.30 "
-               "delta), which of YOUR strategies it points to, and the dividend as a bonus. "
-               "Ranked by the verdict first, then income - a dividend only breaks near-ties.")
+    theme.note("Only the names actually worth selling are shown - anything hard to trade, in a "
+               "downtrend, weak, or paying thin premium is left out (listed at the bottom). "
+               "For each: the one-month put you'd sell (~0.30 delta), the strategy it points "
+               "to, and the dividend as a bonus. Ranked by verdict, then income; a dividend "
+               "only breaks near-ties.")
     valid_income = [p for p in report.income_picks if not p.snapshot.error]
     if valid_income:
         st.dataframe(components.picks_income_dataframe(report.income_picks),
@@ -353,11 +377,21 @@ def _tab_picks(settings, strategies, provider) -> None:
         with st.container(border=True):
             _income_pick_detail(pick2, strategies, settings, provider)
     else:
-        theme.note("No stock or ETF picks this scan - the screen may have filtered "
-                   "everything out today, or the data source was briefly unavailable.")
+        theme.note("Nothing cleared the bar to sell this scan - everything scanned was hard to "
+                   "trade, trending down, weak, or paying thin premium (see 'left out' below). "
+                   "On a quiet day that can happen; try the Full market sweep for more names.")
+
+    if report.left_out:
+        with st.expander(f"Left out - not among the best right now ({len(report.left_out)})"):
+            theme.note("These were scanned but didn't make the cut - shown here so nothing is "
+                       "hidden. If you disagree with one, you can still build it in 🎯 Build.")
+            for line in report.left_out:
+                theme.note("• " + line)
 
     if report.skipped:
-        with st.expander(f"Names skipped this scan ({len(report.skipped)})"):
+        with st.expander(f"No data this scan ({len(report.skipped)})"):
+            theme.note("The app couldn't read option data for these right now (often a brief "
+                       "data-source hiccup) - try again in a minute.")
             for line in report.skipped:
                 theme.note("• " + line)
 
@@ -375,9 +409,16 @@ def _tab_picks(settings, strategies, provider) -> None:
             "read: premium richness, the ~0.30-delta put's income, liquidity, earnings "
             "timing, and the dividend.\n"
             "4. **Ranking** - indexes: SOP-fitting setups first, then return on risk. Stocks "
-            "and ETFs: the verdict first (good to sell > okay > skip), then monthly yield; "
+            "and ETFs: the verdict first (good to sell > okay), then monthly yield; "
             "between two names within half a percent of each other, the dividend payer "
-            "wins.\n\n"
+            "wins.\n"
+            "5. **Only the best shown** - anything the SOP grades 'skip' (hard to trade, "
+            "weak company, thin premium) is left out of the tables and listed separately "
+            "with the reason, so you only scan real candidates.\n"
+            "6. **Downtrends** - selling puts into a faller is a trap, so a downtrending "
+            "stock is normally left out. The exception: the biggest, A/B-quality names get "
+            "a defined-risk bearish Call Credit Spread instead (the 📉 Bearish plays "
+            "section) - you win if they do not rally back.\n\n"
             "The app never places trades and never says 'buy this' - it shortlists what "
             "fits your own rules today, with the reasons, and you decide."))
 
@@ -388,12 +429,16 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     import time as _time
 
     from src.data import cache, market_screener, premium_finder, stock_universe
+    from src.data.market_context import build_context
     from src.engine import recommender
 
     indexes = list(settings["underlyings"]["european_style"])
     picks_cfg = settings.get("picks", {}) or {}
     rules = market_screener.rules_from_config(picks_cfg)
     monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
+    # The only names allowed a single-stock bear call spread: the biggest by
+    # market cap (then grade-gated to A/B strong when scanned).
+    bearish_pool = set(stock_universe.largest_stocks(int(picks_cfg.get("bearish_top_stocks", 20))))
 
     report = recommender.PicksReport(
         monthly=monthly, vix=vix, scope="full" if full else "quick",
@@ -416,10 +461,24 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
             report.funnel_note = market_screener.funnel_note(screen["results"],
                                                              screen["finalists"])
     else:
-        finalists = [(s, "etf") for s in picks_cfg.get("quick_etfs",
-                                                       ["SPY", "QQQ", "IWM", "DIA"])]
-        report.funnel_note = ("Quick look: the 4 cash-settled indexes plus your core ETFs. "
-                              "Run the 🌐 Full market sweep to screen the whole S&P 500.")
+        # Quick look = a curated shortlist, no whole-market screen: the biggest ETFs
+        # (by assets) and the biggest stocks (by market cap). Falls back to the
+        # curated config lists if the data files are missing.
+        etf_list = (stock_universe.largest_etfs(int(picks_cfg.get("quick_top_etfs", 15)))
+                    or settings["underlyings"]["us_style"])
+        stock_list = (stock_universe.largest_stocks(int(picks_cfg.get("quick_top_stocks", 20)))
+                      or settings["underlyings"]["stocks"])
+        finalists = ([(s, "etf") for s in etf_list]
+                     + [(s, "stock") for s in stock_list])
+        report.funnel_note = (
+            f"Quick look: the {len(indexes)} cash-settled indexes, the {len(etf_list)} "
+            f"largest ETFs, and the {len(stock_list)} biggest, most-traded stocks - no "
+            "whole-market screen. Run the 🌐 Full market sweep to screen every S&P 500 name.")
+
+    # Always evaluate the biggest stocks too, even if the screen dropped them for
+    # trending down - a strong big-cap in a downtrend earns a bearish call spread.
+    have = {s for s, _ in finalists}
+    finalists += [(s, "stock") for s in bearish_pool if s not in have]
 
     total = max(len(indexes) + len(finalists), 1)
     done = 0
@@ -454,6 +513,20 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
                                                  monthly_bp=monthly_bp)
             if snap.error:
                 report.skipped.append(f"{sym} - {snap.error}")
+            elif recommender.is_strong_bearish_stock(kind, sym, snap.grade,
+                                                     snap.trend, bearish_pool):
+                # A big, strong stock heading down: sell puts would be a trap, so
+                # scan a defined-risk bear Call Credit Spread instead (same cached
+                # chain the snapshot just used).
+                down_ctx = build_context(sym, snap.price or 0.0, vix=vix, trend="down")
+                chain = provider.get_chain(sym, dte_min=max(monthly.dte - 3, 0),
+                                           dte_max=monthly.dte + 3)
+                exact = recommender.chain_for_expiration(chain, monthly.expiration)
+                lo, hi = scanner.strategy_dte_window(strategies["call_credit_spread"], sym)
+                fallback = provider.get_chain(sym, dte_min=lo, dte_max=hi)
+                report.bearish_picks.append(recommender.build_index_pick(
+                    sym, down_ctx, exact, snap.hv, monthly, fallback_chain=fallback,
+                    earnings_date=snap.earnings_date, american=True))
             else:
                 info = provider.get_raw_info(sym)
                 report.income_picks.append(recommender.build_income_pick(
@@ -468,8 +541,13 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
         bar.progress(done / total, text=f"Checked {sym} ({done}/{total})")
 
     bar.empty()
-    report.index_picks = recommender.rank_index_picks(report.index_picks)
-    report.income_picks = recommender.rank_income_picks(report.income_picks)
+    ranked_ix = recommender.rank_index_picks(report.index_picks)
+    ranked_bear = recommender.rank_index_picks(report.bearish_picks)
+    ranked_inc = recommender.rank_income_picks(report.income_picks)
+    # Show only the best - drop the "skip" verdicts (hard to trade, downtrend,
+    # weak, thin premium) into a transparent "left out" list.
+    (report.index_picks, report.income_picks, report.bearish_picks,
+     report.left_out) = recommender.keep_best(ranked_ix, ranked_inc, ranked_bear)
     report.generated_at = _time.strftime("%H:%M")   # stamp the END - a sweep takes minutes
     return report
 
@@ -545,17 +623,20 @@ def _index_pick_detail(pick, strategies, settings) -> None:
     _sop_block(pick.sop_notes)
     for w in pick.warnings:
         st.warning(components._esc(w))
+    settlement = ("American-style stock options: the short call can be assigned early if it "
+                  "goes in the money (you'd end up short 100 shares), most likely deep in the "
+                  "money or right before an ex-dividend date. Your loss is still capped by the "
+                  "long call above it." if pick.american else
+                  "Cash-settled index: no shares ever change hands and no early assignment - "
+                  "if it expires in the money you just settle the difference in cash.")
     _picks_risk_block(
         max_loss=(c.max_loss if c else None), bp=(c.buying_power if c else None),
         settings=settings,
         liquidity_line=_liquidity_line(pick.liquidity, pick.spread_pct, pick.open_interest),
-        settlement="Cash-settled index: no shares ever change hands and no early "
-                   "assignment - if it expires in the money you just settle the "
-                   "difference in cash.",
-        events=pick.events)
+        settlement=settlement, events=pick.events)
     _strategy_about(strategies[pick.strategy_key])
     if st.button(f"Set up {pick.strategy_name} on {pick.symbol} in 🎯 Build ▸",
-                 type="primary", key="picks_ix_to_build"):
+                 type="primary", key=f"picks_spread_build_{pick.symbol}"):
         st.session_state["build_strategy"] = pick.strategy_key
         st.session_state["build_underlyings"] = [pick.symbol]
         st.session_state["_prev_build_strategy"] = pick.strategy_key

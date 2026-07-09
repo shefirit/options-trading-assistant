@@ -29,11 +29,15 @@ picks:
   hv_max: 0.80                  # wilder than 80%/yr is "great premium, great danger"
   max_stock_finalists: 20       # how many stocks get the full option-chain analysis
   max_etf_finalists: 10         # how many ETFs get it
-  quick_etfs:                   # the Quick scan's ETF list (the 4 indexes are always included)
-    - SPY
-    - QQQ
-    - IWM
-    - DIA
+  # The Quick scan (no whole-market screen): the 4 indexes are always included,
+  # plus this many of the biggest ETFs (by assets) and biggest stocks (by market
+  # cap). Raise these for a wider quick scan, lower them for a faster one.
+  quick_top_etfs: 15
+  quick_top_stocks: 20
+  # A downtrending stock only gets a bearish Call Credit Spread if it is this big
+  # (top N by market cap) AND grade A/B - single-stock bear spreads need a
+  # rock-solid name. Lower this to be stricter about which fallers qualify.
+  bearish_top_stocks: 20
 
 # Underlyings the app is allowed to scan, grouped by option style.
 # European-style = cash settled, no early assignment (good for credit spreads).

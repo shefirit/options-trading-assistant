@@ -49,17 +49,37 @@ def all_stocks() -> list[str]:
 
 
 @functools.lru_cache(maxsize=1)
-def liquid_etfs() -> list[str]:
-    """The curated large, major-issuer ETFs with deep options markets that the
-    Picks tab screens (sample_data/etfs.json - edit that file to change the set)."""
+def _etf_entries() -> list[tuple[str, float]]:
+    """(symbol, assets-in-$B) for the curated ETFs, largest fund first."""
     path = DATA_DIR / "etfs.json"
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return [str(e["symbol"]).upper() for e in data.get("etfs", []) if e.get("symbol")]
+        pairs = [(str(e["symbol"]).upper(), float(e.get("aum_b", 0) or 0))
+                 for e in data.get("etfs", []) if e.get("symbol")]
+        return sorted(pairs, key=lambda p: p[1], reverse=True)
     except Exception:
         return []
+
+
+def liquid_etfs() -> list[str]:
+    """The curated large, major-issuer ETFs with deep options markets that the
+    Picks tab screens (sample_data/etfs.json - edit that file to change the set)."""
+    return [sym for sym, _ in _etf_entries()]
+
+
+def largest_etfs(n: int) -> list[str]:
+    """The n biggest curated ETFs by assets - the Quick scan's ETF set."""
+    return [sym for sym, _ in _etf_entries()[:max(n, 0)]]
+
+
+def largest_stocks(n: int) -> list[str]:
+    """The n biggest S&P 500 stocks by market cap (from market_caps.json), the
+    most-traded large names. Empty when the caps file is missing - callers then
+    fall back to the curated quality list."""
+    ordered = sorted(market_caps().items(), key=lambda kv: kv[1], reverse=True)
+    return [sym for sym, _ in ordered[:max(n, 0)]]
 
 
 @functools.lru_cache(maxsize=1)
