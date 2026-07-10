@@ -266,6 +266,21 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-tile-value {{ font-size: 1.45rem; font-weight: 800; color: {INK}; line-height: 1.3; }}
 .ota-tile-delta {{ font-size: 0.95rem; font-weight: 700; }}
 
+/* ---------------- sector pulse (smaller tinted tiles, wraps on phones) ---------------- */
+.ota-pulse-group {{ font-size: 0.8rem; font-weight: 800; letter-spacing: 0.12em;
+                    text-transform: uppercase; color: {ACCENT_DARK}; margin: 12px 0 6px; }}
+.ota-pulse {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.ota-pulse-tile {{
+    flex: 1 1 118px; min-width: 112px;
+    background: {TILE}; border: 1px solid {BORDER}; border-radius: 12px;
+    padding: 8px 12px;
+}}
+.ota-pulse-up   {{ background: #E6F6EE; border-color: #BCE5CF; }}
+.ota-pulse-down {{ background: #FCEFEC; border-color: #F3CFC7; }}
+.ota-pulse-label {{ font-size: 0.8rem; font-weight: 700; color: #213229; }}
+.ota-pulse-sym  {{ font-size: 0.72rem; font-weight: 600; color: #35463D; }}
+.ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK}; }}
+
 /* ---------------- phones (Rita uses the app mobile-first) ---------------- */
 @media (max-width: 640px) {{
     .block-container {{ padding-left: 0.9rem; padding-right: 0.9rem; padding-top: 0.5rem; }}
@@ -283,6 +298,7 @@ a {{ color: {ACCENT_DARK}; }}
     .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
     .stTabs [data-baseweb="tab"] p {{ font-size: 0.98rem !important; }}
     .ota-tile {{ flex: 1 1 42%; min-width: 42%; }}
+    .ota-pulse-tile {{ flex: 1 1 30%; min-width: 30%; }}
     .ota-section-title {{ font-size: 1.35rem; }}
 }}
 </style>

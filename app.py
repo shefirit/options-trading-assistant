@@ -84,14 +84,7 @@ def _compute_advice(sym, kind, provider, settings):
         monthly_bp=float(settings["risk_limits"]["monthly_bp_limit"]))
 
 
-def _days_phrase(n) -> str:
-    if n is None:
-        return ""
-    if n <= 0:
-        return "today"
-    if n == 1:
-        return "tomorrow"
-    return f"in {n} days"
+from src.data.market_read import days_phrase as _days_phrase  # noqa: E402
 
 
 # ------------------------------------------------------------------ main
@@ -140,7 +133,7 @@ def main() -> None:
         ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Build", "📒 Trades",
          "⚙️ Settings"])
     with t_market:
-        _guard(_tab_market, provider, strategies)
+        _guard(_tab_market, settings, provider, strategies)
     with t_picks:
         _guard(_tab_picks, settings, strategies, provider)
     with t_prem:
@@ -157,34 +150,13 @@ def main() -> None:
 
 # ------------------------------------------------------------------ Market tab
 def _trading_verdict(ctx, events):
-    vix = ctx.vix
-    big_soon = next((e for e in events
-                     if e.kind in ("fomc", "jobs") and e.days_away is not None
-                     and e.days_away <= 2), None)
-    if vix is not None and vix >= 28:
-        return ("Sit this one out", "red",
-                f"Fear is high (VIX {vix:.0f}). Big, fast swings can blow right through your "
-                "strikes. Premium sellers do best when things are calm - wait for the VIX to "
-                "settle back down before selling new premium.")
-    if big_soon is not None:
-        return ("Trade carefully today", "amber",
-                f"{big_soon.label} is {_days_phrase(big_soon.days_away)}. A surprise there can "
-                "move the whole market. If you do trade, keep size small and deltas low - or "
-                "wait until it has passed.")
-    if vix is not None and vix >= 20:
-        return ("Okay - but keep size small", "amber",
-                f"Volatility is a bit elevated (VIX {vix:.0f}). Premiums are richer, but so are "
-                "the swings. Fine to sell premium, just trade smaller and stay at low delta.")
-    if vix is not None:
-        return ("Good conditions to sell premium", "green",
-                f"The market is calm (VIX {vix:.0f}) with no big event in the next couple of "
-                "days. A comfortable backdrop for your 21-45 day premium-selling trades.")
-    return ("Read the market before you trade", "amber",
-            "Live volatility is unavailable right now, so check conditions yourself before "
-            "selling premium.")
+    """The day's verdict - same thresholds as always, now read from
+    config/settings.yaml (market_read:) so the rule lives with your other rules."""
+    from src.data import market_read
+    return market_read.trading_verdict(ctx, events, market_read.read_cfg(load_settings()))
 
 
-def _tab_market(provider, strategies) -> None:
+def _tab_market(settings, provider, strategies) -> None:
     import datetime as dt
 
     from src.data import market_calendar as cal
@@ -241,21 +213,123 @@ def _tab_market(provider, strategies) -> None:
         theme.note(sent_note)
         components.render_events(events)
 
-    # Today's best index play, with a one-click handoff to Build.
+    st.divider()
+    _soft(_market_fit_section, ctx, strategies, what="strategy board")
+    st.divider()
+    _soft(_market_vol_section, settings, provider, ctx, what="volatility panel")
+    st.divider()
+    _soft(_market_pulse_section, settings, provider, market_open, what="sector pulse")
+
+    if not provider.is_real:
+        st.info("You are offline, so these are sample numbers. Connect to the internet for real "
+                "market data (or set up Schwab for true real-time).")
+
+
+def _soft(render, *args, what: str) -> None:
+    """One section failing must not blank the Market tab. The data fetchers
+    already return None/[] on failure; this catches anything unexpected on top."""
+    try:
+        render(*args)
+    except Exception:
+        theme.note(f"The {what} could not load right now - the rest of this tab still "
+                   "works. Try again in a minute.")
+
+
+def _market_fit_section(ctx, strategies) -> None:
+    """Every index strategy ranked against today's trend and volatility -
+    the old single 'best play' line, upgraded to show the reasoning."""
+    st.markdown("### 🧭 Strategy fit today")
+    theme.note("The app ranks your three index strategies against today's trend and "
+               "volatility. These are reasons, not instructions - you check the winner "
+               "in 🎯 Build and you decide.")
+    if ctx.suggestions:
+        components.render_strategy_fit(ctx.suggestions)
     best_key = ctx.best_strategy_key or list(strategies.keys())[0]
     best_name = ctx.best_strategy_name or strategies[best_key]["name"]
-    st.divider()
-    c1, c2 = st.columns([5, 2])
-    c1.info(f"💡 Today's market leans toward **{best_name}** on an index - {ctx.recommendation_reason}")
-    if c2.button("Set this up in Build ▸", use_container_width=True, key="mkt_to_build"):
+    if st.button(f"Set up {best_name} in Build ▸", type="primary", key="mkt_to_build"):
         st.session_state["build_strategy"] = best_key
         st.session_state["build_underlyings"] = ["SPX"]
         st.session_state["_prev_build_strategy"] = best_key
         st.success("Loaded into **🎯 Build** - open that tab to scan it.")
 
-    if not provider.is_real:
-        st.info("You are offline, so these are sample numbers. Connect to the internet for real "
-                "market data (or set up Schwab for true real-time).")
+
+def _market_vol_section(settings, provider, ctx) -> None:
+    """The fear gauge: a year of VIX against Rita's comfort zone, plus what SPX
+    options pay right now (richness) and the move they price in (expected move)."""
+    from src.data import market_read, premium_finder
+    from src.engine import recommender
+
+    cfg = market_read.read_cfg(settings)
+    st.markdown("### 😨 The fear gauge (VIX)")
+    theme.note("VIX is the market's 'fear gauge' - how big it expects S&P 500 swings to "
+               "be over the next 30 days. Higher VIX means richer option premiums but "
+               "wilder moves. Your plan's comfort zone is "
+               f"{cfg['vix_zone_low']:g}-{cfg['vix_zone_high']:g}.")
+    _zone, chip_text, tone = market_read.classify_vix_zone(
+        ctx.vix, cfg["vix_zone_low"], cfg["vix_zone_high"])
+    st.markdown(theme.chip(chip_text, tone), unsafe_allow_html=True)
+
+    with st.spinner("Loading a year of VIX history..."):
+        frame = provider.get_vix_frame()
+    if frame is not None and len(frame) > 5:
+        components.render_vix_chart(frame, cfg["vix_zone_low"], cfg["vix_zone_high"])
+    else:
+        theme.note("VIX history is unavailable right now - the chip above still shows "
+                   "where today stands.")
+
+    with st.spinner("Reading SPX option prices..."):
+        atm_iv = ctx.atm_iv or provider.get_atm_iv(MARKET_READ_SYMBOL, target_dte=45)
+        hv = premium_finder.annualized_vol(provider.get_history_closes(MARKET_READ_SYMBOL))
+    if atm_iv is None:
+        theme.note("Couldn't read SPX option prices right now, so premium richness and "
+                   "the expected move are unavailable - they will be back in a minute "
+                   "or two.")
+        return
+
+    richness, iv_hv = market_read.richness_read(atm_iv, hv)
+    monthly = recommender.monthly_target()
+    em = market_read.expected_move(ctx.price, atm_iv, monthly.dte)
+
+    detail = (f"pays {atm_iv * 100:.0f}%/yr vs moved {hv * 100:.0f}%/yr (x{iv_hv:.2f})"
+              if iv_hv is not None else f"options pay about {atm_iv * 100:.0f}%/yr")
+    tiles = [f"<div class='ota-tile'><div class='ota-tile-label'>SPX premium richness</div>"
+             f"<div class='ota-tile-value'>{richness}</div>"
+             f"<div class='ota-tile-delta'>{detail}</div></div>"]
+    if em is not None:
+        pts, pct = em
+        tiles.append(
+            f"<div class='ota-tile'>"
+            f"<div class='ota-tile-label'>Expected move by {monthly.expiration:%b %d}</div>"
+            f"<div class='ota-tile-value'>&plusmn; {pts:,.0f} pts</div>"
+            f"<div class='ota-tile-delta'>about {pct:.1f}% in {monthly.dte} days</div></div>")
+    st.markdown(f"<div class='ota-tiles'>{''.join(tiles)}</div>", unsafe_allow_html=True)
+    theme.note("**Premium richness** compares what SPX options PAY (implied volatility - "
+               "the market's guess at future movement) with how much SPX ACTUALLY moved "
+               "lately (realized volatility). Rich means sellers get paid extra for the "
+               "risk; Thin means the pay is skimpy.")
+    if em is not None:
+        theme.note("**Expected move** is the range options are pricing in by the monthly "
+                   "expiration - real moves land inside it about 2 times in 3. Your SOP's "
+                   "low-delta short strikes usually sit OUTSIDE this range, so it is a "
+                   "quick sanity check when you pick strikes.")
+
+
+def _market_pulse_section(settings, provider, market_open) -> None:
+    """Where money flowed today across the big index, sector, and asset ETFs."""
+    from src.data import market_read
+
+    syms = list(settings["underlyings"]["us_style"])
+    st.markdown("### 🗺️ Sector pulse")
+    theme.note("Today's move for the big index, sector, and asset ETFs on your list - "
+               "context for where premium lives, not a signal to trade.")
+    with st.spinner("Reading today's sector moves..."):
+        history = provider.get_market_pulse(syms)
+    rows = market_read.build_pulse_rows(history, syms)
+    if not rows:
+        theme.note("Couldn't download today's sector moves (the free data source "
+                   "sometimes throttles) - try again in a minute or two.")
+        return
+    components.render_pulse_grid(rows, market_open)
 
 
 # ------------------------------------------------------------------ Today's picks tab

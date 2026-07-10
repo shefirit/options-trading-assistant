@@ -59,6 +59,113 @@ def render_market_tiles(tiles: list[dict], market_open: bool = True) -> None:
     st.markdown(f"<div class='ota-tiles'>{''.join(cells)}</div>", unsafe_allow_html=True)
 
 
+def render_vix_chart(frame, zone_low: float, zone_high: float) -> None:
+    """A year of VIX with Rita's comfort zone shaded, hover tooltip, and the
+    latest value marked - so 'where does today sit?' is answered at a glance.
+    Same visual language as render_price_chart (thin line, zoomed y-axis)."""
+    df = frame.reset_index()
+    df.columns = ["Date", "Close"]
+
+    band = alt.Chart(pd.DataFrame({"lo": [zone_low], "hi": [zone_high]})).mark_rect(
+        color="#0B7A54", opacity=0.10,
+    ).encode(y="lo:Q", y2="hi:Q")   # a rect with only y/y2 spans the full width
+    band_label = alt.Chart(pd.DataFrame({"y": [(zone_low + zone_high) / 2]})).mark_text(
+        text=f"Your comfort zone ({zone_low:g}-{zone_high:g})",
+        align="left", dx=6, fontSize=11, fontWeight="bold", color="#0A5C3F",
+    ).encode(y="y:Q", x=alt.value(6))
+
+    base = alt.Chart(df).encode(
+        x=alt.X("Date:T", axis=alt.Axis(title=None, format="%b '%y", grid=False,
+                                        labelColor="#35463D", domainColor="#DAE7E0")),
+    )
+    line = base.mark_line(color="#0B5566", strokeWidth=2, interpolate="monotone").encode(
+        y=alt.Y("Close:Q",
+                scale=alt.Scale(zero=False, nice=True),
+                axis=alt.Axis(title=None, format=",.0f", labelColor="#35463D",
+                              gridColor="#EEF2F7", domainOpacity=0)),
+    )
+    hover = alt.selection_point(fields=["Date"], nearest=True,
+                                on="pointerover", empty=False)
+    points = base.mark_point(size=75, filled=True, color="#0B5566").encode(
+        y="Close:Q",
+        opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+    )
+    rule = base.mark_rule(color="#94A3B8", strokeDash=[3, 3]).encode(
+        opacity=alt.condition(hover, alt.value(0.7), alt.value(0)),
+        tooltip=[alt.Tooltip("Date:T", format="%b %d, %Y"),
+                 alt.Tooltip("Close:Q", format=".1f", title="VIX")],
+    ).add_params(hover)
+
+    last = df.tail(1)
+    last_pt = alt.Chart(last).mark_point(size=70, filled=True, color="#0B5566").encode(
+        x="Date:T", y="Close:Q")
+    last_txt = alt.Chart(last).mark_text(
+        align="right", dx=-8, fontSize=12, fontWeight="bold", color="#0B1F16",
+    ).encode(x="Date:T", y="Close:Q",
+             text=alt.Text("Close:Q", format=".1f"))
+
+    chart = alt.layer(band, band_label, line, points, rule, last_pt, last_txt
+                      ).properties(height=240).configure_view(strokeOpacity=0)
+    try:
+        st.altair_chart(chart, width="stretch")
+    except TypeError:  # older Streamlit
+        st.altair_chart(chart, use_container_width=True)
+
+
+def render_strategy_fit(suggestions: list) -> None:
+    """The ranked strategy board: every index strategy with a fit chip and the
+    one-line reason - a vertical list, so it reads the same on a phone."""
+    fit_tags = [("green", "Best fit today"), ("indigo", "Also workable"),
+                ("amber", "Weaker fit today")]
+    for i, s in enumerate(suggestions[:3]):
+        tone, tag = fit_tags[i] if i < len(fit_tags) else ("neutral", "Also possible")
+        st.markdown(
+            theme.chip(f"{i + 1} · {tag}", tone)
+            + f" <b>{_htmllib.escape(s.name)}</b>",
+            unsafe_allow_html=True)
+        theme.note(s.reason)
+
+
+def render_pulse_grid(rows: list[dict], market_open: bool = True) -> None:
+    """The sector-pulse color grid: small tinted tiles grouped Indexes /
+    Sectors / Other assets. The number stays dark ink on every tile - the
+    arrow and the +/- sign carry the direction, so color is never the only
+    signal. rows come from market_read.build_pulse_rows."""
+    from src.data.market_read import GROUP_ORDER
+
+    suffix = "" if market_open else (" <span style='font-weight:600;letter-spacing:0;"
+                                     "text-transform:none;color:#35463D;'>"
+                                     "(last close - market closed)</span>")
+    parts = []
+    for gi, group in enumerate(GROUP_ORDER):
+        tiles = [r for r in rows if r["group"] == group]
+        if not tiles:
+            continue
+        parts.append(f"<div class='ota-pulse-group'>{group}"
+                     f"{suffix if gi == 0 else ''}</div>")
+        cells = []
+        for r in tiles:
+            pct = r["change_pct"]
+            label = _htmllib.escape(r["label"])
+            sym = _htmllib.escape(r["symbol"])
+            if pct is None:
+                cls, val = "ota-pulse-tile", "n/a"
+            elif pct > 0:
+                cls = "ota-pulse-tile ota-pulse-up"
+                val = f"<span style='color:#0A5C3F;'>▲</span> +{pct:.2f}%"
+            elif pct < 0:
+                cls = "ota-pulse-tile ota-pulse-down"
+                val = f"<span style='color:#C02A1B;'>▼</span> {pct:.2f}%"
+            else:
+                cls, val = "ota-pulse-tile", "0.00%"
+            cells.append(
+                f"<div class='{cls}'><div class='ota-pulse-label'>{label} "
+                f"<span class='ota-pulse-sym'>{sym}</span></div>"
+                f"<div class='ota-pulse-val'>{val}</div></div>")
+        parts.append(f"<div class='ota-pulse'>{''.join(cells)}</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
 def render_stock_analysis(a: StockAnalysis) -> None:
     """The metric-by-metric checks behind a stock's grade (no header - the
     overview above already shows name, price, and verdict)."""

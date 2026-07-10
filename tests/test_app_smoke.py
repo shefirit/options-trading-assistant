@@ -31,6 +31,22 @@ def test_all_seven_tabs_render_without_a_snag(demo_app):
     assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
 
 
+def test_market_tab_new_sections_render_in_demo(demo_app):
+    """The strategy fit board, fear-gauge panel, and sector pulse must all
+    render real demo content - not their soft-fail notes - with no network."""
+    at = demo_app.run()
+    assert not at.exception
+    all_md = " ".join(str(m.value) for m in at.markdown)
+    assert "Strategy fit today" in all_md
+    assert "fear gauge" in all_md
+    assert "comfort zone" in all_md
+    assert "Sector pulse" in all_md
+    # The _soft wrapper prints this only when a section crashed.
+    assert "could not load right now" not in all_md
+    snags = [e for e in at.error if "unexpected snag" in str(e.value)]
+    assert not snags
+
+
 def test_picks_tab_stays_offline_in_demo_mode(demo_app):
     """In demo mode the Picks tab must show its needs-real-data note and stop -
     it must never try to scan (the smoke suite runs with no network)."""

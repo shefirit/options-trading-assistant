@@ -40,6 +40,16 @@ picks:
   # stricter about which fallers qualify.
   bearish_top_stocks: 20
 
+# The Market tab's VIX read - YOUR comfort numbers, change them as your plan
+# changes. VIX is the market's "fear gauge" (expected size of S&P 500 swings
+# over the next 30 days). The zone shades the chart; caution/stop drive the
+# day's verdict card.
+market_read:
+  vix_zone_low: 13      # bottom of your comfort zone (below this premiums run thin)
+  vix_zone_high: 25     # top of your comfort zone (above this swings get big)
+  vix_caution: 20       # the day's verdict turns cautious ("keep size small") here
+  vix_stop: 28          # the day's verdict says "sit this one out" here
+
 # Underlyings the app is allowed to scan, grouped by option style.
 # European-style = cash settled, no early assignment (good for credit spreads).
 # US-style = you can be assigned early; you must own 100 real shares for covered calls.
