@@ -160,6 +160,7 @@ def _tab_market(settings, provider, strategies) -> None:
     import datetime as dt
 
     from src.data import market_calendar as cal
+    from src.data import market_read
     from src.data.market_context import daily_sentiment
 
     today = dt.date.today()
@@ -197,7 +198,7 @@ def _tab_market(settings, provider, strategies) -> None:
             st.markdown(f"<div style='margin-top:10px;font-size:1.05rem'>{why}</div>",
                         unsafe_allow_html=True)
 
-    sent_label, sent_note = daily_sentiment(changes, ctx.vix)
+    sent_label, _sent_note = daily_sentiment(changes, ctx.vix)
     low = sent_label.lower()
     sent_tone = "green" if "positive" in low else "red" if "negative" in low else "amber"
     nxt_ev = events[0] if events else None
@@ -209,16 +210,25 @@ def _tab_market(settings, provider, strategies) -> None:
     st.write("")
     st.markdown(" ".join(bits), unsafe_allow_html=True)
 
-    with st.expander("What's coming up (events that move the market)"):
-        theme.note(sent_note)
-        components.render_events(events)
+    # The sector pulse is fetched once here and shared by the brief and the grid
+    # (it is cached, so this is a single request).
+    syms = list(settings["underlyings"]["us_style"])
+    with st.spinner("Reading today's sector moves..."):
+        try:
+            pulse_rows = market_read.build_pulse_rows(provider.get_market_pulse(syms), syms)
+        except Exception:
+            pulse_rows = []
 
+    st.divider()
+    _soft(_market_brief_section, changes, ctx, pulse_rows, events, settings, what="market brief")
     st.divider()
     _soft(_market_fit_section, ctx, strategies, what="strategy board")
     st.divider()
-    _soft(_market_vol_section, settings, provider, ctx, what="volatility panel")
+    _soft(_market_radar_section, events, what="economic radar")
     st.divider()
-    _soft(_market_pulse_section, settings, provider, market_open, what="sector pulse")
+    _soft(_market_pulse_section, pulse_rows, market_open, what="sector pulse")
+    st.divider()
+    _soft(_market_news_section, provider, what="market news")
 
     if not provider.is_real:
         st.info("You are offline, so these are sample numbers. Connect to the internet for real "
@@ -253,83 +263,54 @@ def _market_fit_section(ctx, strategies) -> None:
         st.success("Loaded into **🎯 Build** - open that tab to scan it.")
 
 
-def _market_vol_section(settings, provider, ctx) -> None:
-    """The fear gauge: a year of VIX against Rita's comfort zone, plus what SPX
-    options pay right now (richness) and the move they price in (expected move)."""
-    from src.data import market_read, premium_finder
-    from src.engine import recommender
-
-    cfg = market_read.read_cfg(settings)
-    st.markdown("### 😨 The fear gauge (VIX)")
-    theme.note("VIX is the market's 'fear gauge' - how big it expects S&P 500 swings to "
-               "be over the next 30 days. Higher VIX means richer option premiums but "
-               "wilder moves. Your plan's comfort zone is "
-               f"{cfg['vix_zone_low']:g}-{cfg['vix_zone_high']:g}.")
-    _zone, chip_text, tone = market_read.classify_vix_zone(
-        ctx.vix, cfg["vix_zone_low"], cfg["vix_zone_high"])
-    st.markdown(theme.chip(chip_text, tone), unsafe_allow_html=True)
-
-    with st.spinner("Loading a year of VIX history..."):
-        frame = provider.get_vix_frame()
-    if frame is not None and len(frame) > 5:
-        components.render_vix_chart(frame, cfg["vix_zone_low"], cfg["vix_zone_high"])
-    else:
-        theme.note("VIX history is unavailable right now - the chip above still shows "
-                   "where today stands.")
-
-    with st.spinner("Reading SPX option prices..."):
-        atm_iv = ctx.atm_iv or provider.get_atm_iv(MARKET_READ_SYMBOL, target_dte=45)
-        hv = premium_finder.annualized_vol(provider.get_history_closes(MARKET_READ_SYMBOL))
-    if atm_iv is None:
-        theme.note("Couldn't read SPX option prices right now, so premium richness and "
-                   "the expected move are unavailable - they will be back in a minute "
-                   "or two.")
-        return
-
-    richness, iv_hv = market_read.richness_read(atm_iv, hv)
-    monthly = recommender.monthly_target()
-    em = market_read.expected_move(ctx.price, atm_iv, monthly.dte)
-
-    detail = (f"pays {atm_iv * 100:.0f}%/yr vs moved {hv * 100:.0f}%/yr (x{iv_hv:.2f})"
-              if iv_hv is not None else f"options pay about {atm_iv * 100:.0f}%/yr")
-    tiles = [f"<div class='ota-tile'><div class='ota-tile-label'>SPX premium richness</div>"
-             f"<div class='ota-tile-value'>{richness}</div>"
-             f"<div class='ota-tile-delta'>{detail}</div></div>"]
-    if em is not None:
-        pts, pct = em
-        tiles.append(
-            f"<div class='ota-tile'>"
-            f"<div class='ota-tile-label'>Expected move by {monthly.expiration:%b %d}</div>"
-            f"<div class='ota-tile-value'>&plusmn; {pts:,.0f} pts</div>"
-            f"<div class='ota-tile-delta'>about {pct:.1f}% in {monthly.dte} days</div></div>")
-    st.markdown(f"<div class='ota-tiles'>{''.join(tiles)}</div>", unsafe_allow_html=True)
-    theme.note("**Premium richness** compares what SPX options PAY (implied volatility - "
-               "the market's guess at future movement) with how much SPX ACTUALLY moved "
-               "lately (realized volatility). Rich means sellers get paid extra for the "
-               "risk; Thin means the pay is skimpy.")
-    if em is not None:
-        theme.note("**Expected move** is the range options are pricing in by the monthly "
-                   "expiration - real moves land inside it about 2 times in 3. Your SOP's "
-                   "low-delta short strikes usually sit OUTSIDE this range, so it is a "
-                   "quick sanity check when you pick strikes.")
-
-
-def _market_pulse_section(settings, provider, market_open) -> None:
-    """Where money flowed today across the big index, sector, and asset ETFs."""
+def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:
+    """A plain-English read of the market today, built from the numbers already
+    on this tab (no extra fetch)."""
     from src.data import market_read
 
-    syms = list(settings["underlyings"]["us_style"])
+    st.markdown("### 📋 Today's brief")
+    cfg = market_read.read_cfg(settings)
+    big = market_read.next_big_event(events)
+    brief = market_read.build_brief(changes, ctx.vix, ctx.trend, pulse_rows, big, cfg,
+                                    underlying=MARKET_READ_SYMBOL)
+    theme.note(brief)
+
+
+def _market_radar_section(events) -> None:
+    """The scheduled events and data that move volatility - shown openly (not in
+    an expander) so the calendar is the first thing she sees."""
+    st.markdown("### 🗓️ What's coming (events and data that move volatility)")
+    theme.note("Selling premium right into a big event is risky - a surprise can blow "
+               "through your strikes. Anything inside your trade window is flagged.")
+    if events:
+        components.render_events(events)
+    else:
+        theme.note("Nothing major on the calendar in the next several weeks.")
+
+
+def _market_pulse_section(pulse_rows, market_open) -> None:
+    """Where money flowed today across the big index, sector, and asset ETFs."""
     st.markdown("### 🗺️ Sector pulse")
     theme.note("Today's move for the big index, sector, and asset ETFs on your list - "
                "context for where premium lives, not a signal to trade.")
-    with st.spinner("Reading today's sector moves..."):
-        history = provider.get_market_pulse(syms)
-    rows = market_read.build_pulse_rows(history, syms)
-    if not rows:
+    if not pulse_rows:
         theme.note("Couldn't download today's sector moves (the free data source "
                    "sometimes throttles) - try again in a minute or two.")
         return
-    components.render_pulse_grid(rows, market_open)
+    components.render_pulse_grid(pulse_rows, market_open)
+
+
+def _market_news_section(provider) -> None:
+    """Recent market headlines from free public feeds - context, not signals."""
+    st.markdown("### 📰 Market news")
+    theme.note("Recent market and economy headlines, for context - not trade signals. "
+               "Tap one to read it at the source.")
+    with st.spinner("Loading recent headlines..."):
+        items = provider.get_news(limit=6)
+    if not items:
+        theme.note("Couldn't load headlines right now - try again in a minute or two.")
+        return
+    components.render_news(items)
 
 
 # ------------------------------------------------------------------ Today's picks tab

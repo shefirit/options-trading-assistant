@@ -1,10 +1,9 @@
-"""The Market tab's read logic: config thresholds, the VIX comfort zone, the
-day's verdict (must behave exactly like the old hardcoded version), expected
-move math, premium richness, the sector pulse rows, and the demo data builders.
+"""The Market tab's read logic: config thresholds, the day's verdict (must
+behave exactly like the old hardcoded version), the plain-English brief, the
+sector-pulse rows, and the demo data builder.
 """
 
 import datetime as dt
-import math
 
 import pytest
 
@@ -13,12 +12,17 @@ from src.data.market_context import build_context
 from src.data.market_events import Event
 
 
+def _event(kind: str, days_away: int, label: str = "", in_window: bool = False) -> Event:
+    return Event(date=dt.date(2026, 7, 15), days_away=days_away,
+                 label=label or ("FOMC rate decision" if kind == "fomc" else "Event"),
+                 kind=kind, in_window=in_window)
+
+
 # ------------------------------------------------------------------ config
 def test_read_cfg_defaults():
     cfg = market_read.read_cfg({})
     assert cfg == {"vix_zone_low": 13.0, "vix_zone_high": 25.0,
                    "vix_caution": 20.0, "vix_stop": 28.0}
-    # None settings behaves the same as empty settings.
     assert market_read.read_cfg(None) == cfg
 
 
@@ -27,85 +31,23 @@ def test_read_cfg_partial_override_keeps_other_defaults():
     assert cfg["vix_stop"] == 30.0
     assert cfg["vix_caution"] == 20.0
     assert cfg["vix_zone_low"] == 13.0
-    assert cfg["vix_zone_high"] == 25.0
-
-
-# ------------------------------------------------------------------ VIX zone
-def test_zone_below_inside_above_and_unknown():
-    zone, text, tone = market_read.classify_vix_zone(11.0, 13, 25)
-    assert (zone, tone) == ("below", "amber") and "11.0" in text
-
-    zone, text, tone = market_read.classify_vix_zone(17.4, 13, 25)
-    assert (zone, tone) == ("inside", "green") and "13-25" in text
-
-    zone, text, tone = market_read.classify_vix_zone(27.0, 13, 25)
-    assert (zone, tone) == ("above", "red")
-
-    zone, _text, tone = market_read.classify_vix_zone(None, 13, 25)
-    assert (zone, tone) == ("unknown", "amber")
-
-
-def test_zone_boundaries_count_as_inside():
-    assert market_read.classify_vix_zone(13.0, 13, 25)[0] == "inside"
-    assert market_read.classify_vix_zone(25.0, 13, 25)[0] == "inside"
-
-
-# ------------------------------------------------------------------ expected move
-def test_expected_move_math():
-    em = market_read.expected_move(5000.0, 0.20, 30)
-    assert em is not None
-    points, pct = em
-    assert points == pytest.approx(5000 * 0.20 * math.sqrt(30 / 365))
-    assert pct == pytest.approx(points / 5000 * 100)
-
-
-def test_expected_move_needs_all_positive_inputs():
-    assert market_read.expected_move(None, 0.2, 30) is None
-    assert market_read.expected_move(0, 0.2, 30) is None
-    assert market_read.expected_move(5000, None, 30) is None
-    assert market_read.expected_move(5000, 0.0, 30) is None
-    assert market_read.expected_move(5000, 0.2, 0) is None
-    assert market_read.expected_move(5000, 0.2, None) is None
-
-
-# ------------------------------------------------------------------ richness
-def test_richness_read_reuses_premium_finder_thresholds():
-    assert market_read.richness_read(0.40, 0.20) == ("Rich", 2.0)   # >= 1.15
-    assert market_read.richness_read(0.18, 0.20) == ("Fair", 0.9)   # >= 0.80
-    assert market_read.richness_read(0.10, 0.20) == ("Thin", 0.5)
-
-    # No realized vol -> falls back to the raw IV level.
-    label, ratio = market_read.richness_read(0.45, None)
-    assert (label, ratio) == ("Rich", None)
-    label, ratio = market_read.richness_read(None, 0.2)
-    assert (label, ratio) == ("n/a", None)
 
 
 # ------------------------------------------------------------------ verdict
-def _event(kind: str, days_away: int) -> Event:
-    return Event(date=dt.date(2026, 7, 15), days_away=days_away,
-                 label="FOMC rate decision" if kind == "fomc" else "Jobs report",
-                 kind=kind)
-
-
 def test_verdict_identical_to_old_hardcoded_behavior():
     cfg = market_read.read_cfg({})
 
     ctx = build_context("SPX", 5000.0, vix=28.0)
-    headline, tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert (headline, tone) == ("Sit this one out", "red")
+    assert market_read.trading_verdict(ctx, [], cfg)[:2] == ("Sit this one out", "red")
 
     ctx = build_context("SPX", 5000.0, vix=20.0)
-    headline, tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert (headline, tone) == ("Okay - but keep size small", "amber")
+    assert market_read.trading_verdict(ctx, [], cfg)[:2] == ("Okay - but keep size small", "amber")
 
     ctx = build_context("SPX", 5000.0, vix=14.0)
-    headline, tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert (headline, tone) == ("Good conditions to sell premium", "green")
+    assert market_read.trading_verdict(ctx, [], cfg)[:2] == ("Good conditions to sell premium", "green")
 
     ctx = build_context("SPX", 5000.0, vix=None)
-    headline, tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert (headline, tone) == ("Read the market before you trade", "amber")
+    assert market_read.trading_verdict(ctx, [], cfg)[:2] == ("Read the market before you trade", "amber")
 
 
 def test_verdict_big_event_beats_calm_vix():
@@ -115,28 +57,77 @@ def test_verdict_big_event_beats_calm_vix():
     assert (headline, tone) == ("Trade carefully today", "amber")
     assert "tomorrow" in why
 
-    # ...but a stop-level VIX still wins over the event.
     ctx = build_context("SPX", 5000.0, vix=29.0)
-    headline, _tone, _why = market_read.trading_verdict(ctx, [_event("fomc", 1)], cfg)
-    assert headline == "Sit this one out"
+    assert market_read.trading_verdict(ctx, [_event("fomc", 1)], cfg)[0] == "Sit this one out"
 
 
 def test_verdict_respects_config_thresholds():
     ctx = build_context("SPX", 5000.0, vix=30.0)
     cfg = market_read.read_cfg({"market_read": {"vix_stop": 35}})
-    headline, tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert (headline, tone) == ("Okay - but keep size small", "amber")
+    assert market_read.trading_verdict(ctx, [], cfg)[:2] == ("Okay - but keep size small", "amber")
 
     ctx = build_context("SPX", 5000.0, vix=16.0)
     cfg = market_read.read_cfg({"market_read": {"vix_caution": 15}})
-    headline, _tone, _why = market_read.trading_verdict(ctx, [], cfg)
-    assert headline == "Okay - but keep size small"
+    assert market_read.trading_verdict(ctx, [], cfg)[0] == "Okay - but keep size small"
+
+
+# ------------------------------------------------------------------ next big event
+def test_next_big_event_picks_first_market_mover():
+    evs = [_event("opex", 3, "Opex"), _event("cpi", 5, "CPI inflation report"),
+           _event("fomc", 10, "FOMC")]
+    assert market_read.next_big_event(evs).kind == "cpi"
+
+
+def test_next_big_event_none_when_only_minor_events():
+    evs = [_event("opex", 1, "Opex"), _event("earnings", 2, "Earnings")]
+    assert market_read.next_big_event(evs) is None
+
+
+# ------------------------------------------------------------------ today's brief
+_PULSE = [
+    {"symbol": "SPY", "label": "S&P 500", "group": "Indexes", "change_pct": 0.8},
+    {"symbol": "XLK", "label": "Tech", "group": "Sectors", "change_pct": 1.9},
+    {"symbol": "XLE", "label": "Energy", "group": "Sectors", "change_pct": -1.4},
+]
+
+
+def test_brief_weaves_trend_leader_laggard_and_event():
+    cfg = market_read.read_cfg({})
+    ev = _event("cpi", 4, "CPI inflation report", in_window=True)
+    text = market_read.build_brief([0.5, 0.6], 14.0, "up", _PULSE, ev, cfg)
+    assert "leaning up" in text                     # trend word
+    assert "Tech" in text and "led" in text         # leader
+    assert "Energy" in text and "lagged" in text     # laggard
+    assert "CPI inflation report" in text            # next big event
+    # deterministic
+    assert text == market_read.build_brief([0.5, 0.6], 14.0, "up", _PULSE, ev, cfg)
+
+
+def test_brief_takeaway_calm_vs_nervous():
+    cfg = market_read.read_cfg({})
+    calm = market_read.build_brief([0.2], 14.0, "sideways", [], None, cfg)
+    assert "comfortable" in calm.lower()
+    nervous = market_read.build_brief([-0.2], 30.0, "down", [], None, cfg)
+    assert "fear is high" in nervous.lower()
+
+
+def test_brief_event_in_window_drives_the_caution():
+    cfg = market_read.read_cfg({})
+    ev = _event("fomc", 2, "Fed interest-rate decision (FOMC)", in_window=True)
+    text = market_read.build_brief([0.1], 15.0, "up", [], ev, cfg)
+    assert "trade window" in text.lower()
+    assert "FOMC" in text
+
+
+def test_brief_survives_missing_vix_and_empty_pulse():
+    cfg = market_read.read_cfg({})
+    text = market_read.build_brief([], None, "unknown", [], None, cfg)
+    assert isinstance(text, str) and text.strip()
 
 
 # ------------------------------------------------------------------ sector pulse
 def test_pulse_rows_from_batch_history_shape():
-    history = {"SPY": ([100.0, 101.0], [1.0, 1.0]),
-               "QQQ": ([50.0], [1.0])}
+    history = {"SPY": ([100.0, 101.0], [1.0, 1.0]), "QQQ": ([50.0], [1.0])}
     rows = market_read.build_pulse_rows(history, ["SPY", "QQQ", "GLD"])
     by_sym = {r["symbol"]: r for r in rows}
 
@@ -164,18 +155,6 @@ def test_pulse_rows_zero_prev_close_gives_none():
 
 
 # ------------------------------------------------------------------ demo data
-def test_demo_vix_frame_deterministic_and_shaped_like_yahoo():
-    day = dt.date(2026, 7, 10)
-    a = market_read.demo_vix_frame(today=day)
-    b = market_read.demo_vix_frame(today=day)
-    assert a.equals(b)
-    assert list(a.columns) == ["Close"]
-    assert len(a) == 252
-    assert float(a["Close"].iloc[-1]) == 13.5        # matches the demo VIX tile
-    assert float(a["Close"].min()) > 9               # stays in a believable range
-    assert float(a["Close"].max()) < 30
-
-
 def test_demo_pulse_history_deterministic_small_moves():
     syms = ["SPY", "QQQ", "GLD", "XLE"]
     a = market_read.demo_pulse_history(syms)
@@ -183,5 +162,4 @@ def test_demo_pulse_history_deterministic_small_moves():
     for sym in syms:
         closes, vols = a[sym]
         assert len(closes) == 2 and len(vols) == 2
-        change = (closes[-1] / closes[-2] - 1) * 100
-        assert abs(change) <= 2.0
+        assert abs((closes[-1] / closes[-2] - 1) * 100) <= 2.0

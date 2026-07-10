@@ -1,18 +1,16 @@
-"""The Market tab's read logic: your VIX comfort zone, the day's verdict, the
-expected move, premium richness, and the sector pulse.
+"""The Market tab's read logic: the day's verdict, the plain-English brief, and
+the sector pulse.
 
 Pure functions only - no Streamlit, no network - so every rule here is unit
-tested. The threshold numbers live in config/settings.yaml (market_read:),
+tested. The VIX threshold numbers live in config/settings.yaml (market_read:),
 not in code, matching the rest of your rules.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-import math
 from typing import Any, Optional
 
-from src.data import premium_finder
+from src.data.market_context import daily_sentiment
 
 # Used when config/settings.yaml has no market_read block - these reproduce
 # the app's original behavior exactly (verdict amber at 20, red at 28).
@@ -22,6 +20,9 @@ DEFAULTS: dict[str, float] = {
     "vix_caution": 20.0,
     "vix_stop": 28.0,
 }
+
+# The scheduled events big enough to headline the brief and drive the verdict.
+BIG_EVENT_KINDS = {"fomc", "cpi", "pce", "gdp", "jobs"}
 
 
 def read_cfg(settings: Optional[dict[str, Any]]) -> dict[str, float]:
@@ -76,49 +77,78 @@ def trading_verdict(ctx, events, cfg: dict[str, float]) -> tuple[str, str, str]:
             "selling premium.")
 
 
-def classify_vix_zone(vix: Optional[float], low: float,
-                      high: float) -> tuple[str, str, str]:
-    """Where today's VIX sits against YOUR comfort zone.
+# ------------------------------------------------------------------ today's brief
+def next_big_event(events):
+    """The soonest market-moving scheduled event (Fed, CPI, jobs, PCE, GDP),
+    or None. `events` is already sorted soonest-first by upcoming_events."""
+    return next((e for e in events if e.kind in BIG_EVENT_KINDS), None)
 
-    Returns (zone, chip_text, tone); zone is "below" / "inside" / "above" /
-    "unknown", and the boundaries themselves count as inside.
+
+_TREND_WORDS = {
+    "up": "leaning up (its 20-day average is above its 50-day)",
+    "down": "leaning down (its 20-day average is below its 50-day)",
+    "sideways": "moving sideways",
+    "unknown": "hard to read right now",
+}
+
+
+def build_brief(index_changes: list[Optional[float]], vix: Optional[float],
+                trend: str, pulse_rows: list[dict], next_event,
+                cfg: dict[str, float], underlying: str = "SPX") -> str:
+    """A few plain-English sentences reading the market today - built entirely
+    from numbers the tab already has, so it costs no extra fetch.
+
+    Weaves together the index move + mood, the trend, today's sector leader and
+    laggard, the next big scheduled event, and what it means for selling premium.
+    Returns a **-bold-friendly string (theme.note renders the bold).
     """
-    if vix is None:
-        return ("unknown", "VIX unavailable right now - check it in thinkorswim", "amber")
-    if vix < low:
-        return ("below",
-                f"VIX {vix:.1f} - below your comfort zone ({low:g}-{high:g}): "
-                "calm, but premiums run thin", "amber")
-    if vix > high:
-        return ("above",
-                f"VIX {vix:.1f} - above your comfort zone ({low:g}-{high:g}): "
-                "rich premiums, big swings", "red")
-    return ("inside",
-            f"VIX {vix:.1f} - inside your comfort zone ({low:g}-{high:g})", "green")
+    parts: list[str] = []
+
+    # 1. The day's move and mood (reuses the same read as the chips above).
+    _label, note = daily_sentiment(index_changes, vix)
+    if note:
+        parts.append(note)
+
+    # 2. Trend.
+    parts.append(f"{underlying} is {_TREND_WORDS.get(trend, _TREND_WORDS['unknown'])}.")
+
+    # 3. Today's sector leader and laggard, from the pulse.
+    rows = [r for r in pulse_rows if r.get("change_pct") is not None]
+    if len(rows) >= 2:
+        top = max(rows, key=lambda r: r["change_pct"])
+        bot = min(rows, key=lambda r: r["change_pct"])
+        if top["symbol"] != bot["symbol"]:
+            parts.append(
+                f"**{top['label']}** led today ({top['change_pct']:+.2f}%) and "
+                f"**{bot['label']}** lagged ({bot['change_pct']:+.2f}%).")
+
+    # 4. The next big scheduled event.
+    if next_event is not None:
+        parts.append(f"Next big event: **{next_event.label}** "
+                     f"{days_phrase(next_event.days_away)}.")
+
+    # 5. What it means for premium selling (decision support, not a directive).
+    parts.append(_takeaway(vix, next_event, cfg))
+
+    return " ".join(p for p in parts if p)
 
 
-def expected_move(price: Optional[float], atm_iv: Optional[float],
-                  dte: Optional[int]) -> Optional[tuple[float, float]]:
-    """(points, pct): how far options price the underlying to typically move by
-    an expiration dte days away. The standard one-standard-deviation estimate:
-    price * IV * sqrt(days / 365) - real moves land inside it about 2 times in 3.
-    """
-    if not price or price <= 0 or not atm_iv or atm_iv <= 0 or not dte or dte <= 0:
-        return None
-    points = price * atm_iv * math.sqrt(dte / 365)
-    return (points, points / price * 100)
-
-
-def richness_read(atm_iv: Optional[float],
-                  hv: Optional[float]) -> tuple[str, Optional[float]]:
-    """(Rich/Fair/Thin/n-a, iv_hv ratio) - what options PAY (implied volatility)
-    vs how much the underlying actually MOVED (realized volatility).
-
-    Delegates to premium_finder's thresholds so the Market and Premium tabs
-    can never disagree about what "Rich" means.
-    """
-    iv_hv = round(atm_iv / hv, 2) if (atm_iv and hv) else None
-    return premium_finder._richness(iv_hv, atm_iv), iv_hv
+def _takeaway(vix: Optional[float], next_event, cfg: dict[str, float]) -> str:
+    if next_event is not None and getattr(next_event, "in_window", False):
+        return (f"For your premium selling: **{next_event.label}** lands inside your "
+                "trade window, so your plan says be careful opening new trades right "
+                "before it.")
+    if vix is not None and vix >= cfg["vix_stop"]:
+        return ("For your premium selling: fear is high, and your plan leans toward "
+                "waiting for calmer conditions.")
+    if vix is not None and vix >= cfg["vix_caution"]:
+        return ("For your premium selling: premiums are richer than usual, but so are "
+                "the swings - smaller size and lower delta fit here.")
+    if vix is not None and vix < cfg["vix_zone_low"]:
+        return ("For your premium selling: it is calm, but premiums are thin down here - "
+                "worth checking whether a trade pays enough to bother.")
+    return ("For your premium selling: conditions look comfortable for your usual "
+            "21-45 day trades.")
 
 
 # ------------------------------------------------------------------ sector pulse
@@ -167,21 +197,6 @@ def build_pulse_rows(history: dict[str, tuple[list[float], list[float]]],
 
 
 # ------------------------------------------------------------------ demo data
-def demo_vix_frame(today: Optional[dt.date] = None):
-    """A deterministic year of fake VIX closes for demo mode - shaped exactly
-    like yfinance's price frame (datetime index, one Close column). Spans
-    roughly 10.5-25.5 so the comfort-zone band visibly matters, and ends at
-    13.5 to match the demo VIX tile."""
-    import pandas as pd
-
-    end = today or dt.date.today()
-    dates = pd.bdate_range(end=pd.Timestamp(end), periods=252)
-    closes = [18 + 6 * math.sin(i / 23) + 1.5 * math.sin(i / 6)
-              for i in range(len(dates))]
-    closes[-1] = 13.5
-    return pd.DataFrame({"Close": closes}, index=dates)
-
-
 def demo_pulse_history(symbols: list[str]) -> dict[str, tuple[list[float], list[float]]]:
     """Deterministic fake batch_history for demo mode: every symbol gets two
     closes implying a small move in the -1.5%..+1.5% range."""

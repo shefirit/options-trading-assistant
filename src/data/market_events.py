@@ -28,14 +28,15 @@ class Event(BaseModel):
     date: dt.date
     days_away: int
     label: str
-    kind: str            # "opex" | "fomc" | "jobs" | "earnings" | "dividend" | "custom"
+    kind: str            # opex | fomc | jobs | cpi | pce | gdp | earnings | dividend | custom
     note: str = ""
     in_window: bool = False   # does it land inside your trade window?
 
     @property
     def icon(self) -> str:
-        return {"opex": "🗓️", "fomc": "🏦", "jobs": "💼",
-                "earnings": "📊", "dividend": "💵", "custom": "📌"}.get(self.kind, "•")
+        return {"opex": "🗓️", "fomc": "🏦", "jobs": "💼", "cpi": "🌡️", "pce": "🌡️",
+                "gdp": "📈", "earnings": "📊", "dividend": "💵",
+                "custom": "📌"}.get(self.kind, "•")
 
 
 # ---------- deterministic dates ----------
@@ -102,6 +103,27 @@ def _custom_events() -> list[tuple[dt.date, str]]:
     return out
 
 
+# Plain-English "why it matters" for each scheduled economic release.
+_RELEASE_NOTES = {
+    "cpi": "Inflation report - a hot or cold number can swing the whole market.",
+    "pce": "The Fed's preferred inflation gauge - it can move rate expectations.",
+    "gdp": "The first read on economic growth - a surprise can move the market.",
+}
+
+
+def _economic_releases() -> list[tuple[dt.date, str, str]]:
+    """(date, kind, label) for scheduled data releases from the calendar file."""
+    out = []
+    for e in _load_calendar().get("economic_releases", []) or []:
+        try:
+            d = e["date"]
+            out.append((d if isinstance(d, dt.date) else dt.date.fromisoformat(str(d)),
+                        str(e.get("kind", "custom")), str(e.get("label", "Economic release"))))
+        except Exception:
+            continue
+    return out
+
+
 # ---------- assemble ----------
 def upcoming_events(
     from_date: Optional[dt.date] = None,
@@ -140,6 +162,8 @@ def upcoming_events(
     for d in _fomc_dates():
         add(d, "Fed interest-rate decision (FOMC)", "fomc",
             "Big volatility event - be cautious selling premium right into it.")
+    for d, kind, label in _economic_releases():
+        add(d, label, kind, _RELEASE_NOTES.get(kind, ""))
     for d, label in _custom_events():
         add(d, label, "custom")
     if earnings_date:

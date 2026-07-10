@@ -281,6 +281,15 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-pulse-sym  {{ font-size: 0.72rem; font-weight: 600; color: #35463D; }}
 .ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK}; }}
 
+/* ---------------- market news (compact headline list) ---------------- */
+.ota-news {{ display: flex; flex-direction: column; gap: 2px; }}
+.ota-news-item {{ padding: 9px 0; border-bottom: 1px solid {BORDER}; }}
+.ota-news-item:last-child {{ border-bottom: none; }}
+.ota-news-title {{ font-size: 1.0rem; font-weight: 600; color: {ACCENT_DARK};
+                   text-decoration: none; line-height: 1.4; }}
+.ota-news-title:hover {{ text-decoration: underline; }}
+.ota-news-meta {{ font-size: 0.8rem; font-weight: 600; color: {SECONDARY}; margin-top: 2px; }}
+
 /* ---------------- phones (Rita uses the app mobile-first) ---------------- */
 @media (max-width: 640px) {{
     .block-container {{ padding-left: 0.9rem; padding-right: 0.9rem; padding-top: 0.5rem; }}

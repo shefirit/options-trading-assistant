@@ -59,57 +59,25 @@ def render_market_tiles(tiles: list[dict], market_open: bool = True) -> None:
     st.markdown(f"<div class='ota-tiles'>{''.join(cells)}</div>", unsafe_allow_html=True)
 
 
-def render_vix_chart(frame, zone_low: float, zone_high: float) -> None:
-    """A year of VIX with Rita's comfort zone shaded, hover tooltip, and the
-    latest value marked - so 'where does today sit?' is answered at a glance.
-    Same visual language as render_price_chart (thin line, zoomed y-axis)."""
-    df = frame.reset_index()
-    df.columns = ["Date", "Close"]
-
-    band = alt.Chart(pd.DataFrame({"lo": [zone_low], "hi": [zone_high]})).mark_rect(
-        color="#0B7A54", opacity=0.10,
-    ).encode(y="lo:Q", y2="hi:Q")   # a rect with only y/y2 spans the full width
-    band_label = alt.Chart(pd.DataFrame({"y": [(zone_low + zone_high) / 2]})).mark_text(
-        text=f"Your comfort zone ({zone_low:g}-{zone_high:g})",
-        align="left", dx=6, fontSize=11, fontWeight="bold", color="#0A5C3F",
-    ).encode(y="y:Q", x=alt.value(6))
-
-    base = alt.Chart(df).encode(
-        x=alt.X("Date:T", axis=alt.Axis(title=None, format="%b '%y", grid=False,
-                                        labelColor="#35463D", domainColor="#DAE7E0")),
-    )
-    line = base.mark_line(color="#0B5566", strokeWidth=2, interpolate="monotone").encode(
-        y=alt.Y("Close:Q",
-                scale=alt.Scale(zero=False, nice=True),
-                axis=alt.Axis(title=None, format=",.0f", labelColor="#35463D",
-                              gridColor="#EEF2F7", domainOpacity=0)),
-    )
-    hover = alt.selection_point(fields=["Date"], nearest=True,
-                                on="pointerover", empty=False)
-    points = base.mark_point(size=75, filled=True, color="#0B5566").encode(
-        y="Close:Q",
-        opacity=alt.condition(hover, alt.value(1), alt.value(0)),
-    )
-    rule = base.mark_rule(color="#94A3B8", strokeDash=[3, 3]).encode(
-        opacity=alt.condition(hover, alt.value(0.7), alt.value(0)),
-        tooltip=[alt.Tooltip("Date:T", format="%b %d, %Y"),
-                 alt.Tooltip("Close:Q", format=".1f", title="VIX")],
-    ).add_params(hover)
-
-    last = df.tail(1)
-    last_pt = alt.Chart(last).mark_point(size=70, filled=True, color="#0B5566").encode(
-        x="Date:T", y="Close:Q")
-    last_txt = alt.Chart(last).mark_text(
-        align="right", dx=-8, fontSize=12, fontWeight="bold", color="#0B1F16",
-    ).encode(x="Date:T", y="Close:Q",
-             text=alt.Text("Close:Q", format=".1f"))
-
-    chart = alt.layer(band, band_label, line, points, rule, last_pt, last_txt
-                      ).properties(height=240).configure_view(strokeOpacity=0)
-    try:
-        st.altair_chart(chart, width="stretch")
-    except TypeError:  # older Streamlit
-        st.altair_chart(chart, use_container_width=True)
+def render_news(items: list) -> None:
+    """Recent market headlines as a compact list: linked title + source + how
+    long ago. Headlines only (never article text), each opening in a new tab -
+    context to read, not a signal to trade."""
+    rows = []
+    for n in items:
+        # Escape HTML, then '$' as an entity so a headline like "$10K" never
+        # trips Streamlit's '$...$' LaTeX rendering.
+        title = _htmllib.escape(n.title).replace("$", "&#36;")
+        url = _htmllib.escape(n.url, quote=True)
+        source = _htmllib.escape(n.source)
+        age = _htmllib.escape(n.age())
+        meta = f"{source} · {age}" if age else source
+        rows.append(
+            f"<div class='ota-news-item'>"
+            f"<a class='ota-news-title' href='{url}' target='_blank' "
+            f"rel='noopener noreferrer'>{title}</a>"
+            f"<div class='ota-news-meta'>{meta}</div></div>")
+    st.markdown(f"<div class='ota-news'>{''.join(rows)}</div>", unsafe_allow_html=True)
 
 
 def render_strategy_fit(suggestions: list) -> None:

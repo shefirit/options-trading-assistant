@@ -21,6 +21,32 @@ fomc_decisions:
   - 2026-10-28
   - 2026-12-09
 
-# Optional: add other dates you care about (CPI, big conferences, etc.)
-# Format:  - { date: 2026-07-15, label: "CPI inflation report" }
+# Scheduled economic data releases that move the whole market. The app shows
+# these in the Market tab's "What's coming" radar and flags any that land inside
+# your trade window. 2026 dates below - VERIFY at the official sources and edit
+# as needed:
+#   CPI (inflation)  -> bls.gov/schedule/news_release/cpi.htm
+#   PCE + GDP        -> bea.gov/news/schedule
+# kind: cpi | pce | gdp  (drives the icon and the plain-English "why it matters")
+economic_releases:
+  # CPI - Consumer Price Index (the big inflation number), from the BLS.
+  - { date: 2026-07-14, kind: cpi, label: "CPI inflation report" }
+  - { date: 2026-08-12, kind: cpi, label: "CPI inflation report" }
+  - { date: 2026-09-11, kind: cpi, label: "CPI inflation report" }
+  - { date: 2026-10-14, kind: cpi, label: "CPI inflation report" }
+  - { date: 2026-11-10, kind: cpi, label: "CPI inflation report" }
+  - { date: 2026-12-10, kind: cpi, label: "CPI inflation report" }
+  # PCE - the Fed's preferred inflation gauge (Personal Income & Outlays), BEA.
+  - { date: 2026-07-30, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  - { date: 2026-08-26, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  - { date: 2026-09-30, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  - { date: 2026-10-29, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  - { date: 2026-11-25, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  - { date: 2026-12-23, kind: pce, label: "PCE inflation (the Fed's favorite gauge)" }
+  # GDP - first (advance) read on economic growth, BEA. The advance is the mover.
+  - { date: 2026-07-30, kind: gdp, label: "GDP growth, first estimate" }
+  - { date: 2026-10-29, kind: gdp, label: "GDP growth, first estimate" }
+
+# Optional: add any other dates you care about (a big conference, a speech...).
+# Format:  - { date: 2026-07-15, label: "Something you're watching" }
 custom_events: []

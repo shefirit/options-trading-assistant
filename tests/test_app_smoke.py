@@ -32,15 +32,18 @@ def test_all_seven_tabs_render_without_a_snag(demo_app):
 
 
 def test_market_tab_new_sections_render_in_demo(demo_app):
-    """The strategy fit board, fear-gauge panel, and sector pulse must all
-    render real demo content - not their soft-fail notes - with no network."""
+    """The brief, strategy fit board, economic radar, sector pulse, and news must
+    all render real demo content - not their soft-fail notes - with no network."""
     at = demo_app.run()
     assert not at.exception
     all_md = " ".join(str(m.value) for m in at.markdown)
+    assert "Today's brief" in all_md
     assert "Strategy fit today" in all_md
-    assert "fear gauge" in all_md
-    assert "comfort zone" in all_md
+    assert "What's coming" in all_md
     assert "Sector pulse" in all_md
+    assert "Market news" in all_md
+    # The retired fear gauge must be gone.
+    assert "fear gauge" not in all_md
     # The _soft wrapper prints this only when a section crashed.
     assert "could not load right now" not in all_md
     snags = [e for e in at.error if "unexpected snag" in str(e.value)]

@@ -57,3 +57,15 @@ def test_fomc_dates_loaded_from_config():
     # The seeded 2026 calendar should surface a Fed decision within a wide horizon.
     events = me.upcoming_events(from_date=dt.date(2026, 7, 1), horizon_days=120)
     assert any(e.kind == "fomc" for e in events)
+
+
+def test_economic_releases_loaded_and_flagged():
+    # The seeded 2026 CPI/PCE/GDP releases should surface with why-it-matters notes.
+    events = me.upcoming_events(from_date=dt.date(2026, 7, 10), horizon_days=60, trade_dte=35)
+    kinds = {e.kind for e in events}
+    assert {"cpi", "pce", "gdp"} <= kinds
+    # July 14 CPI is 4 days out - inside a 35-day window.
+    cpi = [e for e in events if e.kind == "cpi"]
+    assert cpi and cpi[0].in_window is True
+    # Every release carries a plain-English note.
+    assert all(e.note for e in events if e.kind in ("cpi", "pce", "gdp"))

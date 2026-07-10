@@ -190,41 +190,6 @@ class DataProvider:
         return cache.get_or_fetch(f"hist:{symbol}",
                                   lambda: yfinance_client.get_history_closes(symbol), 300)
 
-    def get_vix_frame(self):
-        """A year of daily VIX closes for the fear-gauge chart (None if unavailable).
-        Demo mode gets a deterministic synthetic year so the chart still renders."""
-        if self.mode == "demo":
-            from src.data import market_read
-            return market_read.demo_vix_frame()
-        return self.get_price_frame("VIX", "1y")
-
-    def get_atm_iv(self, symbol: str, target_dte: int = 45) -> Optional[float]:
-        """At-the-money implied volatility from one expiration near target_dte.
-
-        Fetched separately from get_market_context so the fast top-of-tab read
-        stays light. CBOE first on the hosted app, Yahoo fallback; a failed
-        fetch is not cached, so the next rerun retries."""
-        from src.data.market_context import _atm_iv
-        symbol = symbol.upper()
-        if self.mode == "demo":
-            return _atm_iv(self._demo_chain(symbol))
-        key = f"atmiv:{symbol}:{target_dte}"
-
-        def _fetch():
-            try:
-                chain = (self.get_chain(symbol) if self.mode == "schwab"
-                         else self._expiration_chain(symbol, target_dte))
-                if chain is None or not chain.contracts:
-                    return None
-                return _atm_iv(chain)
-            except Exception:
-                return None
-
-        out = cache.get_or_fetch(key, _fetch, 300)
-        if out is None:
-            cache.clear(key)
-        return out
-
     def get_market_pulse(self, symbols: list[str]) -> dict[str, tuple[list[float], list[float]]]:
         """Recent closes for many ETFs in ONE batched request (the chart endpoint
         that stays reliable from cloud hosts) - feeds the sector-pulse grid.
@@ -240,6 +205,19 @@ class DataProvider:
         if not out:
             cache.clear(key)
         return out or {}
+
+    def get_news(self, limit: int = 6) -> list:
+        """Recent market-news headlines for the Market tab (a list of NewsItem).
+        Free public RSS feeds (no key) - reliable from cloud hosts, unlike the
+        quote APIs. Demo mode returns a canned list; an empty live result is not
+        cached, so the next rerun retries."""
+        from src.data import news_client
+        if self.mode == "demo":
+            return news_client.demo_headlines(limit)
+        out = cache.get_or_fetch("news", lambda: news_client.fetch_headlines(limit), 900)
+        if not out:
+            cache.clear("news")
+        return out or []
 
     # ---------- stage-1 market screen (the Picks tab's funnel) ----------
     def get_screen(self, cache_key: str, stocks: list[str], etfs: list[str],
