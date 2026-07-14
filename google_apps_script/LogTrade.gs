@@ -13,6 +13,12 @@
  * If you had an older version, paste this whole file over it, then: Deploy ->
  * Manage deployments -> (pencil) Edit -> Version: New version -> Deploy. The web
  * app URL stays the same.
+ *
+ * NOTE (2026-07-14): the App Trades mirror (way 2) is RETIRED - Rita moved to
+ * the app's English month-by-month tracking, so the app no longer sends the
+ * "mirror" field and doPost's mirror branch simply never runs. The code stays
+ * for compatibility; no redeploy was needed. The App Trades tab is a frozen
+ * archive.
  */
 
 // ---- the two tabs ----

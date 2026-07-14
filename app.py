@@ -1881,10 +1881,13 @@ def _connect_sheet_ui(key_prefix: str = "main") -> None:
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         if connected:
-            theme.note("**Keep the script updated (v7).** The newest script logs to a hidden "
-                       "tracking tab, mirrors each trade into your **App Trades** tab, and "
-                       "enables tracking + deleting. Paste the updated `LogTrade.gs` over the "
-                       "old one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
+            theme.note("**Keep the script updated (v7).** The script keeps your full trade "
+                       "log in the **Options Assistant Log** tab - the app's month view and "
+                       "tracking read from there, and delete works from the app too. The old "
+                       "Hebrew-format **App Trades** tab is retired: the app no longer writes "
+                       "to it, so it stays frozen as an archive (you can hide it). If you ever "
+                       "need to update the script: paste the new `LogTrade.gs` over the old "
+                       "one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
                        "version → Deploy**. Your link stays the same.")
         current = webhook_logger.get_url() or ""
         url = st.text_input("Web app link", value=current, key=f"{key_prefix}_webhook_url",
