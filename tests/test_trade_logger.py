@@ -78,6 +78,43 @@ def test_close_trade_writes_a_close_event(tmp_path, monkeypatch):
     assert 150.0 in row
 
 
+def test_log_trade_backdates_and_sends_no_mirror(monkeypatch):
+    """History import / Quick Log backdating: the given dates land in the row,
+    and the retired teacher-format mirror is never sent."""
+    from datetime import date
+    captured = {}
+
+    def fake_append(row, header, mirror="NOT_SET"):
+        captured["row"], captured["mirror"] = row, mirror
+        return "https://docs.google.com/spreadsheets/d/XYZ"
+
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
+    monkeypatch.setattr(webhook_logger, "append", fake_append)
+    trade_logger.log_trade(_trade(), "Put Credit Spread", SIZE, True, "n",
+                           opened_on=date(2026, 6, 5),
+                           expiration_on=date(2026, 7, 20))
+    assert captured["row"][0] == "2026-06-05"
+    assert captured["row"][14] == "2026-07-20"
+    assert captured["mirror"] is None
+
+
+def test_close_trade_backdates_and_sends_no_mirror(monkeypatch):
+    from datetime import date
+    captured = {}
+
+    def fake_append(row, header, mirror="NOT_SET"):
+        captured["row"], captured["mirror"] = row, mirror
+        return "https://docs.google.com/spreadsheets/d/XYZ"
+
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
+    monkeypatch.setattr(webhook_logger, "append", fake_append)
+    trade_logger.close_trade("T1", "SPX", "Put Credit Spread", 150.0, 150.0,
+                             "Profit target (50%) hit",
+                             closed_on=date(2026, 6, 25))
+    assert captured["row"][0] == "2026-06-25"
+    assert captured["mirror"] is None
+
+
 def test_delete_trade_uses_sheet_when_connected(monkeypatch):
     monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
     monkeypatch.setattr(webhook_logger, "delete_trade", lambda tid: 2)

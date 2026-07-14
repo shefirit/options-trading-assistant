@@ -58,8 +58,9 @@ def append(row: list[Any], header: list[str],
            mirror: Optional[dict] = None) -> str:
     """Send one row to the Apps Script web app. Returns the sheet's URL.
 
-    mirror, if given, is the field dict the script also writes into the human
-    "App Trades" tab in Rita's format (see app_trades.mirror_fields).
+    mirror, if given, is extra data the script writes into the human "App
+    Trades" tab (teacher format). The app stopped sending it in 2026-07 when
+    that tab was retired; the parameter stays so the script API is documented.
 
     Raises on any network / permission problem, so the caller can fall back to
     the local Excel backup.

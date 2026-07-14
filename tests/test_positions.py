@@ -8,9 +8,11 @@ from src.data.chain import OptionChain, OptionContract
 from src.engine.models import Action, Leg, OptionType, Trade
 from src.engine.positions import (
     Position,
+    _to_date,
     bp_in_use,
     closed_positions,
     cost_to_close_from_chain,
+    monthly_summary,
     open_positions,
     parse_rows,
     performance,
@@ -134,6 +136,42 @@ def test_cost_to_close_skips_far_dated_legs():
     assert out["cost_to_close"] == 150.0    # only the short call, at 1.5 mid
 
 
+def test_to_date_handles_sheet_utc_instants():
+    """The sheet hands ISO dates back as UTC instants; we want the LOCAL
+    calendar day of that instant, not a truncation (which shifts a day for
+    anyone east of Greenwich, like Rita in Israel)."""
+    from datetime import datetime, timezone
+    instant = datetime(2026, 7, 4, 21, 0, 0, tzinfo=timezone.utc)
+    assert _to_date("2026-07-04T21:00:00.000Z") == instant.astimezone().date()
+    assert _to_date("2026-07-05") == date(2026, 7, 5)
+    assert _to_date(date(2026, 7, 5)) == date(2026, 7, 5)
+    assert _to_date("not a date") is None
+    assert _to_date("") is None
+
+
+def test_backdated_rows_round_trip():
+    """Quick Log backdating / history import: the dates given are the dates
+    that come back out of the log."""
+    row = build_row(_trade(), "Put Credit Spread", SIZE, True, "old trade",
+                    trade_id="T1", opened_on=date(2026, 6, 5),
+                    expiration_on=date(2026, 7, 20))
+    close = build_close_row("T1", "SPX", "Put Credit Spread", 150.0, 150.0,
+                            "Profit target (50%) hit", "stayed patient",
+                            closed_on=date(2026, 6, 25))
+    p = parse_rows(COLUMNS, [row, close])[0]
+    assert p.opened == date(2026, 6, 5)
+    assert p.expiration == date(2026, 7, 20)
+    assert p.closed_on == date(2026, 6, 25)
+    assert p.realized_pl == 150.0
+
+
+def test_build_row_defaults_unchanged():
+    """Without the new params, rows behave exactly as before (today)."""
+    row = build_row(_trade(), "Put Credit Spread", SIZE, True, "", trade_id="T1")
+    assert row[0] == date.today().isoformat()
+    assert row[14] == (date.today() + timedelta(days=30)).isoformat()
+
+
 def test_performance_summary():
     today = date(2026, 7, 8)   # a Wednesday; the week started Monday July 6
     def closed(pl, closed_on, name="Put Credit Spread"):
@@ -155,3 +193,78 @@ def test_performance_summary():
     assert perf["avg_loss"] == -90.0
     assert perf["by_strategy"]["Iron Condor"]["trades"] == 1
     assert [c["total"] for c in perf["cumulative"]] == [200.0, 110.0, 260.0]
+
+
+# ------------------------------------------------------------------ month view
+def _pos(opened=None, closed_on=None, pl=None, status=None, bp=0.0,
+         reason="", name="Put Credit Spread") -> Position:
+    if status is None:
+        status = "closed" if closed_on else "open"
+    return Position(
+        trade_id=f"t-{opened}-{closed_on}-{pl}", underlying="SPX",
+        strategy_name=name, status=status, opened=opened, closed_on=closed_on,
+        realized_pl=pl, buying_power=bp, credit=300, exit_reason=reason)
+
+
+def test_monthly_summary_profit_lands_in_the_close_month():
+    today = date(2026, 7, 8)
+    positions = [
+        # opened June, closed July: listed in both months, profit only in July
+        _pos(opened=date(2026, 6, 20), closed_on=date(2026, 7, 7), pl=150.0,
+             bp=2200.0, reason="Profit target (50%) hit"),
+        # opened and closed inside June
+        _pos(opened=date(2026, 6, 2), closed_on=date(2026, 6, 25), pl=-90.0,
+             bp=1800.0, reason="Stop loss hit"),
+        # still open, opened July
+        _pos(opened=date(2026, 7, 3), bp=2500.0),
+    ]
+    months = monthly_summary(positions, today=today)
+    assert [m["month"] for m in months] == ["2026-07", "2026-06"]
+
+    july = months[0]
+    assert july["label"] == "July 2026"
+    assert july["realized_pl"] == 150.0
+    assert july["closed_count"] == 1 and july["wins"] == 1
+    assert july["win_rate"] == 1.0
+    assert july["opened_count"] == 1 and july["still_open"] == 1
+    assert july["bp_opened"] == 2500.0
+    tags = {r["tag"] for r in july["rows"]}
+    assert tags == {"closed", "opened"}
+
+    june = months[1]
+    assert june["realized_pl"] == -90.0          # July's win is NOT June money
+    assert june["closed_count"] == 1 and june["wins"] == 0
+    assert june["opened_count"] == 2
+    assert june["bp_opened"] == 4000.0
+    june_tags = sorted(r["tag"] for r in june["rows"])
+    assert june_tags == ["both", "opened"]       # same-month close + carried one
+
+    # the month view and the results dashboard must never disagree
+    perf = performance(positions, today=today)
+    assert july["realized_pl"] == perf["month_pl"]
+
+
+def test_monthly_summary_current_month_present_when_empty():
+    months = monthly_summary([], today=date(2026, 7, 8))
+    assert len(months) == 1
+    m = months[0]
+    assert m["month"] == "2026-07"
+    assert m["realized_pl"] == 0.0
+    assert m["win_rate"] is None
+    assert m["rows"] == [] and m["lessons"] == []
+
+
+def test_monthly_summary_rules_and_lessons():
+    today = date(2026, 7, 8)
+    positions = [
+        _pos(opened=date(2026, 7, 1), closed_on=date(2026, 7, 3), pl=100.0,
+             reason="Profit target (50%) hit - patience pays"),
+        _pos(opened=date(2026, 7, 1), closed_on=date(2026, 7, 6), pl=-50.0,
+             reason="Other - panicked and closed early"),
+        _pos(opened=date(2026, 7, 1), closed_on=date(2026, 7, 7), pl=80.0,
+             reason="21 DTE time exit"),
+    ]
+    july = monthly_summary(positions, today=today)[0]
+    assert july["closed_count"] == 3
+    assert july["rules_followed"] == 2           # "Other" does not count
+    assert july["lessons"] == ["panicked and closed early", "patience pays"]

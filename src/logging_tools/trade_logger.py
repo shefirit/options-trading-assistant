@@ -5,11 +5,11 @@ local Excel backup so you never lose a record.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Optional
 
 from src.engine.models import Trade
-from src.logging_tools import app_trades, excel_logger, sheets_logger, webhook_logger
+from src.logging_tools import excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import COLUMNS, build_close_row, build_row, new_trade_id
 
 
@@ -17,8 +17,9 @@ def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
     """Send one event row wherever it can land: sheet webhook, then service
     account, then the local Excel backup. Returns (destination, went_to_sheet).
 
-    mirror (webhook only) is the extra data the Apps Script writes into the
-    human "App Trades" tab in Rita's format."""
+    mirror stays None since the teacher-format "App Trades" tab was retired
+    (2026-07): the deployed Apps Script only writes that tab when the payload
+    carries a mirror field, so omitting it freezes the tab with no redeploy."""
     # 1. Apps Script web app (Rita's chosen method).
     if webhook_logger.is_configured():
         try:
@@ -41,16 +42,19 @@ def log_trade(
     sizing: dict[str, float],
     passed_sop: bool,
     note: str = "",
+    opened_on: Optional[date] = None,
+    expiration_on: Optional[date] = None,
 ) -> tuple[str, bool, str]:
     """Log a new trade (an "open" event). Returns (destination, went_to_sheet,
-    trade_id). The trade_id is what the My trades tab tracks the position by."""
+    trade_id). The trade_id is what the My trades tab tracks the position by.
+
+    opened_on / expiration_on default to today's behavior; pass them when the
+    trade was placed on an earlier date (Quick Log backdating, history import)."""
     trade_id = new_trade_id(trade.underlying)
-    row = build_row(trade, strategy_name, sizing, passed_sop, note, trade_id=trade_id)
-    expiration_iso = ""
-    if trade.dte is not None:
-        expiration_iso = (date.today() + timedelta(days=int(trade.dte))).isoformat()
-    mirror = app_trades.mirror_fields(trade, sizing, trade_id, expiration_iso)
-    dest, live = _append(row, mirror=mirror)
+    row = build_row(trade, strategy_name, sizing, passed_sop, note,
+                    trade_id=trade_id, opened_on=opened_on,
+                    expiration_on=expiration_on)
+    dest, live = _append(row)
     return dest, live, trade_id
 
 
@@ -62,15 +66,14 @@ def close_trade(
     realized_pl: float,
     reason: str,
     note: str = "",
+    closed_on: Optional[date] = None,
 ) -> tuple[str, bool]:
     """Record that a trade was closed (a "close" event). Returns (destination,
-    went_to_sheet)."""
+    went_to_sheet). closed_on defaults to today; pass it for imported history."""
     row = build_close_row(trade_id, underlying, strategy_name,
-                          exit_cost, realized_pl, reason, note)
-    # Tell the script to also update the App Trades mirror row (set its Profit%
-    # so her Profit$ formula shows the realized result, and mark CLOSE).
-    mirror = {"close": True, "trade_id": trade_id, "realized_pl": realized_pl}
-    return _append(row, mirror=mirror)
+                          exit_cost, realized_pl, reason, note,
+                          closed_on=closed_on)
+    return _append(row)
 
 
 def delete_trade(trade_id: str) -> tuple[int, str]:

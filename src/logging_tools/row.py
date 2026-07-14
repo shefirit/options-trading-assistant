@@ -63,15 +63,24 @@ def build_row(
     passed_sop: bool,
     note: str,
     trade_id: str = "",
+    opened_on: Optional[date] = None,
+    expiration_on: Optional[date] = None,
 ) -> list[Any]:
-    """The "open" event row - written when you press Log this trade."""
+    """The "open" event row - written when you press Log this trade.
+
+    opened_on / expiration_on default to today's behavior; pass them to record
+    a trade placed on an earlier date (Quick Log backdating, history import).
+    """
+    opened_on = opened_on or date.today()
     strikes = " / ".join(f"{leg.strike:g}" for leg in trade.legs)
     short_delta = max((leg.abs_delta for leg in trade.short_legs), default=0.0)
     expiration = ""
-    if trade.dte is not None:
-        expiration = (date.today() + timedelta(days=int(trade.dte))).isoformat()
+    if expiration_on is not None:
+        expiration = expiration_on.isoformat()
+    elif trade.dte is not None:
+        expiration = (opened_on + timedelta(days=int(trade.dte))).isoformat()
     return [
-        date.today().isoformat(),
+        opened_on.isoformat(),
         trade.underlying,
         strategy_name,
         strikes,
@@ -100,11 +109,16 @@ def build_close_row(
     realized_pl: float,
     reason: str,
     note: str = "",
+    closed_on: Optional[date] = None,
 ) -> list[Any]:
-    """The "close" event row - written when you close the trade in My trades."""
+    """The "close" event row - written when you close the trade in My trades.
+
+    closed_on defaults to today; pass it when importing an old trade so the
+    profit lands in the month it was actually banked.
+    """
     text = reason if not note else f"{reason} - {note}"
     return [
-        date.today().isoformat(),
+        (closed_on or date.today()).isoformat(),
         underlying,
         strategy_name,
         "", "", "", "", "", "", "",   # strikes/delta/dte/contracts/money - on the open row

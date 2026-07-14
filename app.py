@@ -1267,6 +1267,243 @@ def _delete_control(trade_id, what: str, key: str) -> None:
             st.warning("Nothing was deleted - it may already be gone. Press ↻ Refresh.")
 
 
+def _quick_log_form(settings, strategies, provider) -> None:
+    """Record a trade she ALREADY placed in thinkorswim, in under a minute:
+    strategy, strikes, expiration, contracts, and the credit on her fill.
+    The chain fills in deltas when it can; the SOP check informs, never blocks."""
+    import datetime as dt
+
+    from src.engine import quick_log
+
+    # Stay open while a checked draft is waiting, otherwise the rerun after
+    # "Check it" would collapse the expander and hide the preview.
+    with st.expander("➕ Quick Log - a trade you already placed in thinkorswim",
+                     expanded=bool(st.session_state.get("ql_draft"))):
+        theme.note("Place the trade in TOS first, then write it down here. Type only "
+                   "what is on your fill - the app fills in the market details and "
+                   "starts watching your exit rules for it.")
+
+        keys = list(strategies.keys())
+        top = st.columns([3, 2])
+        strategy_key = top[0].selectbox(
+            "Strategy", keys, key="ql_strategy",
+            format_func=lambda k: strategies[k]["name"])
+        strat = strategies[strategy_key]
+        if st.session_state.get("_prev_ql_strategy") != strategy_key:
+            st.session_state["_prev_ql_strategy"] = strategy_key
+            st.session_state.pop("ql_draft", None)   # a draft for another strategy
+
+        allowed = allowed_underlyings_for(strategy_key)
+        default_i = allowed.index("SPX") if "SPX" in allowed else 0
+        underlying = top[1].selectbox("Underlying", allowed, index=default_i,
+                                      key=f"ql_u_{strategy_key}",
+                                      help="Type to search.")
+
+        basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
+        has_far_leg = basis in ("debit", "shares_plus_protection", "ratio_risk")
+        today = dt.date.today()
+
+        with st.form("ql_form"):
+            d1, d2 = st.columns(2)
+            expiration = d1.date_input(
+                "Expiration date (from your TOS fill)"
+                if not has_far_leg else "Short call expiration (the near one)",
+                value=today + dt.timedelta(days=45), min_value=today,
+                key=f"ql_exp_{strategy_key}")
+            opened_on = d2.date_input(
+                "Opened on", value=today, max_value=today,
+                help="Change this only if you placed the trade on an earlier day.",
+                key=f"ql_opened_{strategy_key}")
+
+            far_exp = None
+            leaps_cost = None
+            share_price = None
+            if basis == "debit":
+                f1, f2 = st.columns(2)
+                far_exp = f1.date_input(
+                    "LEAPS expiration (the far-dated call you BOUGHT)",
+                    value=today + dt.timedelta(days=365), min_value=today,
+                    key=f"ql_farexp_{strategy_key}")
+                leaps_cost = f2.number_input(
+                    "What you paid for the LEAPS ($ total)", min_value=0.0,
+                    step=50.0, key=f"ql_leaps_{strategy_key}")
+            elif has_far_leg:
+                f1, f2 = st.columns(2)
+                far_exp = f1.date_input(
+                    "Protective put expiration (the far-dated one)",
+                    value=today + dt.timedelta(days=365), min_value=today,
+                    key=f"ql_farexp_{strategy_key}")
+                share_price = f2.number_input(
+                    "Share price when you bought the 100 shares ($)",
+                    min_value=0.0, step=1.0, key=f"ql_shares_{strategy_key}")
+
+            leg_defs = strat.get("legs", [])
+            cols = st.columns(min(len(leg_defs), 4) or 1)
+            strikes: dict[str, float] = {}
+            for i, leg_def in enumerate(leg_defs):
+                role = str(leg_def["role"])
+                verb = "SOLD" if leg_def["action"] == "sell" else "BOUGHT"
+                label = (f"{role.replace('_', ' ').capitalize()} strike "
+                         f"(you {verb} this {leg_def['option_type']})")
+                strikes[role] = cols[i % len(cols)].number_input(
+                    label, min_value=0.0, step=1.0,
+                    key=f"ql_strike_{strategy_key}_{role}")
+
+            b1, b2 = st.columns(2)
+            contracts = b1.number_input("Contracts", min_value=1, max_value=50,
+                                        value=1, step=1,
+                                        key=f"ql_contracts_{strategy_key}")
+            credit_label = ("Total credit received ($, from your TOS fill)"
+                            if basis not in ("debit", "shares_plus_protection",
+                                             "ratio_risk")
+                            else "Credit collected for the call you SOLD ($ total)")
+            credit_total = b2.number_input(credit_label, min_value=0.0, step=5.0,
+                                           key=f"ql_credit_{strategy_key}")
+            note = st.text_input("Note (optional)", key=f"ql_note_{strategy_key}")
+
+            submitted = st.form_submit_button("Check it", type="primary")
+
+    # Everything below renders OUTSIDE the expander, so the result of
+    # "Check it" (a warning or the preview card) is visible even after
+    # Streamlit collapses the expander on the rerun.
+    if submitted:
+        if any(v <= 0 for v in strikes.values()):
+            st.warning("Almost - type every strike first, one of them is still 0. "
+                       "Open ➕ Quick Log above to fill it in.")
+            st.session_state.pop("ql_draft", None)
+        elif credit_total <= 0:
+            st.warning("Almost - type the credit you collected (it is on your TOS "
+                       "fill). Open ➕ Quick Log above to fill it in.")
+            st.session_state.pop("ql_draft", None)
+        else:
+            dte = max((expiration - opened_on).days, 0)
+            leaps_dte = (max((far_exp - opened_on).days, 0)
+                         if far_exp is not None else None)
+            legs = quick_log.legs_from_strategy(strat, strikes, dte,
+                                                leaps_dte=leaps_dte)
+            notes: list[str] = []
+            underlying_price = None
+            try:
+                chain = provider.get_chain(underlying,
+                                           dte_min=max(dte - 4, 0),
+                                           dte_max=dte + 4)
+                underlying_price = chain.underlying_price
+                legs, fill_notes = quick_log.fill_from_chain(
+                    legs, chain, expiration.isoformat(),
+                    leaps_expiration_iso=(far_exp.isoformat()
+                                          if far_exp else None))
+                notes.extend(fill_notes)
+            except Exception:
+                notes.append("Live option prices were not available just now - "
+                             "saved without deltas. Tracking still works from "
+                             "your credit and strikes.")
+            trade = Trade(strategy_key=strategy_key, underlying=underlying,
+                          contracts=int(contracts), legs=legs,
+                          underlying_price=underlying_price or share_price)
+            sizing = quick_log.sizing_from_fill(
+                trade, strat, float(credit_total),
+                leaps_cost_total=leaps_cost, share_price=share_price)
+            passed = True
+            try:
+                report = validate_trade(
+                    trade,
+                    existing_month_bp=st.session_state.get("open_bp_in_use", 0.0))
+                passed = report.passed
+            except Exception:
+                notes.append("The SOP check could not run just now - the trade "
+                             "still gets logged and tracked.")
+            st.session_state["ql_draft"] = {
+                "trade": trade, "strat_name": strat["name"], "sizing": sizing,
+                "passed": passed, "notes": notes, "note": note,
+                "opened_on": opened_on, "expiration": expiration, "dte": dte,
+            }
+
+    draft = st.session_state.get("ql_draft")
+    if draft:
+        with st.container(border=True):
+            p_trade, p_size = draft["trade"], draft["sizing"]
+            theme.note(f"**Ready to save: {p_trade.underlying} · "
+                       f"{draft['strat_name']}** · {p_trade.contracts} "
+                       f"contract(s) · opened {draft['opened_on'].isoformat()} · "
+                       f"expires {draft['expiration'].isoformat()} "
+                       f"({draft['dte']} days)")
+            m = st.columns(3)
+            m[0].metric("Credit", money(p_size["credit"]))
+            m[1].metric("Max loss", money(p_size["max_loss"]))
+            m[2].metric("Buying power", money(p_size["buying_power"]))
+            if draft["passed"]:
+                st.markdown(theme.chip("SOP check: passed", "green"),
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(theme.chip(
+                    "Heads up: outside your SOP rules - logged anyway, since "
+                    "it is already placed", "amber"), unsafe_allow_html=True)
+            for n in draft["notes"]:
+                theme.note(n)
+            c1, c2 = st.columns([1, 1])
+            if c1.button("✅ Save to my log", type="primary", key="ql_save"):
+                from src.logging_tools.trade_logger import log_trade
+                dest, live, trade_id = log_trade(
+                    draft["trade"], draft["strat_name"], draft["sizing"],
+                    draft["passed"], draft["note"],
+                    opened_on=draft["opened_on"],
+                    expiration_on=draft["expiration"])
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state.pop("ql_draft", None)
+                st.session_state["ql_flash"] = (
+                    "Saved. It now shows in your open trades below"
+                    + (" and in your Google Sheet." if live
+                       else " (saved on this device - connect your Google "
+                            "Sheet in ⚙️ Settings to sync it everywhere)."))
+                st.rerun()
+            if c2.button("Never mind - discard this draft", key="ql_discard"):
+                st.session_state.pop("ql_draft", None)
+                st.rerun()
+
+
+def _today_card(items: list[dict]) -> None:
+    """One line that answers the beginner's first question: anything to DO today?"""
+    needs = [it for it in items if it["signal"].action in ("stop", "time", "profit")]
+    if needs:
+        word = "trade needs" if len(needs) == 1 else "trades need"
+        st.error(f"🔔 {len(needs)} of {len(items)} open {word} action today - "
+                 "see the What to do column, then close in thinkorswim.")
+    else:
+        st.markdown(theme.chip(
+            f"✅ {len(items)} open · nothing to do today", "green"),
+            unsafe_allow_html=True)
+
+
+def _month_section(all_pos, settings) -> None:
+    """Her requirement, verbatim: tracking separated by months, each month its
+    own trades, monthly profit easy to see."""
+    from src.engine import positions as pos_mod
+
+    theme.section("One month at a time", "Monthly tracking")
+    summaries = pos_mod.monthly_summary(all_pos)
+    names = [m["label"] for m in summaries]
+    by_label = {m["label"]: m for m in summaries}
+    if st.session_state.get("trades_month_pick") not in names:
+        st.session_state.pop("trades_month_pick", None)
+    pick = st.selectbox("Month", names, key="trades_month_pick")
+    entry = by_label[pick]
+
+    monthly_goal = float(settings["targets"]["monthly"])
+    bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
+    components.render_month_summary(entry, monthly_goal, bp_limit)
+
+    if entry["rows"]:
+        st.dataframe(components.month_trades_dataframe(entry["rows"]),
+                     width="stretch", hide_index=True,
+                     column_config=components.month_trades_column_config())
+    else:
+        theme.note("No trades touched this month yet. Log one with ➕ Quick Log "
+                   "above, or build one in 🎯 Build.")
+
+    components.render_month_bars(summaries, monthly_goal)
+
+
 def _tab_trades(settings, strategies, provider) -> None:
     from src.engine import positions as pos_mod
 
@@ -1276,6 +1513,13 @@ def _tab_trades(settings, strategies, provider) -> None:
     if top[0].button("↻ Refresh", key="trades_refresh"):
         st.session_state.pop("trades_rows", None)
         st.session_state.pop("_priced_positions", None)
+
+    flash = st.session_state.pop("ql_flash", None)
+    if flash:
+        st.success(flash)
+
+    _quick_log_form(settings, strategies, provider)
+
     header, rows, source = _load_trade_log()
 
     all_pos = pos_mod.parse_rows(header, rows)
@@ -1286,10 +1530,13 @@ def _tab_trades(settings, strategies, provider) -> None:
     st.session_state["open_bp_in_use"] = bp_used
 
     if not all_pos:
-        theme.note("Nothing here yet. When you press **Log this trade** in 🎯 Build, "
-                   "the trade lands here and the app starts watching your exit rules for "
-                   "it: take the win at 50% of the credit, close at 21 days to expiration, "
-                   "stop the loss at 2x the credit.")
+        theme.note("Nothing here yet. Two ways to log your first trade: use "
+                   "**➕ Quick Log** above for a trade you already placed in "
+                   "thinkorswim, or press **Log this trade** in 🎯 Build when the "
+                   "app finds the setup for you. Either way it lands here and the "
+                   "app starts watching your exit rules: take the win at 50% of "
+                   "the credit, close at 21 days to expiration, stop the loss at "
+                   "2x the credit.")
         if source == "local" and not rows:
             from src.logging_tools import webhook_logger
             if webhook_logger.is_configured():
@@ -1298,6 +1545,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                         "paste the updated **LogTrade.gs** (in the google_apps_script "
                         "folder) into Apps Script, then Deploy → Manage deployments → "
                         "Edit → New version → Deploy.")
+        st.divider()
+        _month_section(all_pos, settings)   # current month, zeros - shows the shape
         return
 
     if source == "local":
@@ -1312,12 +1561,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     if open_pos:
         items, priced_at = _price_positions(open_pos, provider, strategies)
 
-        needs_action = [it for it in items if it["signal"].action in ("stop", "time", "profit")]
-        if needs_action:
-            st.error(f"🔔 {len(needs_action)} trade(s) hit an exit rule today - see the "
-                     "What to do column, then close them in thinkorswim.")
-        else:
-            st.success("No exit rule has triggered today.")
+        _today_card(items)
         theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
                    "few minutes, or press ↻ Refresh.")
 
@@ -1392,8 +1636,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                                 f"{p.underlying} {p.strategy_name} opened {p.opened}",
                                 key=f"open_{p.trade_id}")
     else:
-        st.success("No open trades right now. When you log one in **Build & check** it "
-                   "shows up here.")
+        st.success("No open trades right now. Record one with ➕ Quick Log above, "
+                   "or build one in 🎯 Build - it shows up here either way.")
 
     if legacy:
         with st.expander(f"Trades logged before tracking existed ({len(legacy)})"):
@@ -1404,6 +1648,10 @@ def _tab_trades(settings, strategies, provider) -> None:
                 "Date": p.opened, "Symbol": p.underlying, "Strategy": p.strategy_name,
                 "Credit $": p.credit, "Notes": p.note} for p in legacy]),
                 width="stretch", hide_index=True)
+
+    # ---------------- month by month (her ask: monthly trades, monthly profit)
+    st.divider()
+    _month_section(all_pos, settings)
 
     # ---------------- results vs her goals
     st.divider()

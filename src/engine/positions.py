@@ -77,9 +77,18 @@ def _to_date(v: Any) -> Optional[date]:
         return v.date()
     if isinstance(v, date):
         return v
-    s = str(v)[:10]  # tolerate "2026-07-05T21:00:00.000Z" from the sheet
+    s = str(v)
+    if "T" in s:
+        # The sheet stores our plain ISO dates in Date cells and hands them
+        # back as UTC instants: a July 5 trade logged in Israel (UTC+3) comes
+        # back as "2026-07-04T21:00:00.000Z". Convert to the local calendar
+        # day instead of truncating, or month math shifts at the boundary.
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone().date()
+        except ValueError:
+            pass
     try:
-        return date.fromisoformat(s)
+        return date.fromisoformat(s[:10])
     except ValueError:
         return None
 
@@ -284,3 +293,92 @@ def performance(positions: list[Position], today: Optional[date] = None) -> dict
         "by_strategy": by_strategy,
         "cumulative": cumulative,
     }
+
+
+# ------------------------------------------------------------------ month view
+# Close reasons that count as "followed your exit rules". "Rolled" and "Other"
+# deliberately do not - the score tracks the three SOP exits plus expiration.
+_SOP_EXIT_PREFIXES = ("profit target", "21 dte", "stop loss", "expired")
+
+
+def _split_exit_reason(exit_reason: str) -> tuple[str, str]:
+    """The close flow stores "reason - lesson text" in one cell; split it back."""
+    parts = exit_reason.split(" - ", 1)
+    reason = parts[0].strip()
+    lesson = parts[1].strip() if len(parts) > 1 else ""
+    return reason, lesson
+
+
+def monthly_summary(positions: list[Position],
+                    today: Optional[date] = None) -> list[dict[str, Any]]:
+    """One entry per calendar month with activity, newest first - the data
+    behind the month-by-month view. The current month is always present.
+
+    Profit lands in the month a trade was CLOSED (the month the money was
+    banked), so the current month's number always equals
+    performance()["month_pl"]. A trade opened in June and closed in July
+    appears in both months' lists, tagged so the table can say which.
+    """
+    today = today or date.today()
+    months: dict[str, dict[str, Any]] = {}
+
+    def entry(d: date) -> dict[str, Any]:
+        key = f"{d.year:04d}-{d.month:02d}"
+        if key not in months:
+            months[key] = {
+                "month": key,
+                "label": d.strftime("%B %Y"),
+                "realized_pl": 0.0,
+                "closed_count": 0,
+                "wins": 0,
+                "win_rate": None,
+                "opened_count": 0,
+                "bp_opened": 0.0,
+                "still_open": 0,
+                "rules_followed": 0,
+                "lessons": [],
+                "rows": [],
+            }
+        return months[key]
+
+    entry(today)   # the current month exists even before any trade
+
+    for p in positions:
+        opened_key = f"{p.opened.year:04d}-{p.opened.month:02d}" if p.opened else None
+        closed_on = p.closed_on if p.status == "closed" else None
+        closed_key = (f"{closed_on.year:04d}-{closed_on.month:02d}"
+                      if closed_on else None)
+
+        if p.opened is not None:
+            e = entry(p.opened)
+            e["opened_count"] += 1
+            e["bp_opened"] += p.buying_power
+            if p.status == "open":
+                e["still_open"] += 1
+            tag = "both" if (closed_key is not None and closed_key == opened_key) \
+                else "opened"
+            e["rows"].append({"position": p, "tag": tag})
+
+        if closed_on is not None:
+            e = entry(closed_on)
+            if closed_key != opened_key:
+                e["rows"].append({"position": p, "tag": "closed"})
+            e["closed_count"] += 1
+            if p.realized_pl is not None:
+                e["realized_pl"] += p.realized_pl
+                if p.realized_pl > 0:
+                    e["wins"] += 1
+            reason, lesson = _split_exit_reason(p.exit_reason or "")
+            if reason.lower().startswith(_SOP_EXIT_PREFIXES):
+                e["rules_followed"] += 1
+            if lesson:
+                e["lessons"].append(lesson)
+
+    for e in months.values():
+        e["realized_pl"] = round(e["realized_pl"], 2)
+        e["bp_opened"] = round(e["bp_opened"], 2)
+        if e["closed_count"]:
+            e["win_rate"] = e["wins"] / e["closed_count"]
+        e["lessons"].reverse()   # newest lesson first
+
+    return sorted(months.values(), key=lambda e: e["month"], reverse=True)

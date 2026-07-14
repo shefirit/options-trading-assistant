@@ -1008,6 +1008,129 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
         st.altair_chart(chart.properties(height=220), use_container_width=True)
 
 
+# ================================================================== month view
+def _month_result_word(position, tag: str) -> str:
+    """One plain-English word for how this trade sits in THIS month's list."""
+    if tag in ("closed", "both") and position.status == "closed":
+        pl = position.realized_pl
+        if pl is None:
+            return "✔️ Closed"
+        if pl > 0:
+            return "✅ Won"
+        if pl < 0:
+            return "❌ Lost"
+        return "➖ Broke even"
+    if position.status == "open":
+        return "⏳ Still open"
+    if position.status == "closed" and position.closed_on is not None:
+        return f"→ Closed in {position.closed_on.strftime('%B')}"
+    return "📜 History"
+
+
+def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
+    """One month's trades, friendliest facts first.
+
+    rows: [{"position": Position, "tag": "closed"|"opened"|"both"}] from
+    positions.monthly_summary. Money banked this month sorts to the top."""
+    def sort_key(r):
+        closed_here = r["tag"] in ("closed", "both") and r["position"].status == "closed"
+        return 0 if closed_here else 1
+
+    out = []
+    for r in sorted(rows, key=sort_key):
+        p = r["position"]
+        reason = (p.exit_reason or "").split(" - ", 1)[0]
+        out.append({
+            "Result": _month_result_word(p, r["tag"]),
+            "Symbol": p.underlying,
+            "Strategy": p.strategy_name,
+            "Opened": p.opened.isoformat() if p.opened else "-",
+            "Closed": p.closed_on.isoformat() if p.closed_on else "-",
+            "Credit $": p.credit,
+            "Result $": p.realized_pl,
+            "Why closed": reason or "-",
+        })
+    return pd.DataFrame(out)
+
+
+def month_trades_column_config():
+    return {
+        "Result": st.column_config.TextColumn(
+            help="How this trade ended up. 'Still open' trades are being "
+                 "watched in the open-trades list above."),
+        "Credit $": st.column_config.NumberColumn(format="$%.0f",
+            help="Cash collected when the trade was opened."),
+        "Result $": st.column_config.NumberColumn(format="$%.0f",
+            help="What the trade actually made or lost when it was closed."),
+        "Why closed": st.column_config.TextColumn(
+            help="The exit rule (or reason) recorded at close."),
+    }
+
+
+def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float) -> None:
+    """One month's report card: the profit number vs her goal, the counts,
+    the discipline score, and what she wrote down as lessons."""
+    realized = float(entry["realized_pl"])
+    goal = float(monthly_goal or 0)
+    st.markdown(_esc(f"**{entry['label']}: ${realized:,.0f}** of your "
+                     f"${goal:,.0f} goal"))
+    st.progress(min(max(realized / goal, 0.0), 1.0) if goal else 0.0)
+
+    m = st.columns(4)
+    m[0].metric("Closed trades", entry["closed_count"])
+    m[1].metric("Win rate",
+                f"{entry['win_rate'] * 100:.0f}%" if entry["win_rate"] is not None
+                else "-")
+    m[2].metric("Opened", entry["opened_count"],
+                help="Trades opened during this month, whatever happened later.")
+    m[3].metric("BP used", _dollars(entry["bp_opened"]),
+                help=f"Buying power committed by trades opened this month. "
+                     f"Your SOP allows {_dollars(bp_limit)} per month.")
+
+    if entry["closed_count"]:
+        n, total = entry["rules_followed"], entry["closed_count"]
+        tone = "green" if n == total else "amber"
+        st.markdown(theme.chip(
+            f"Rules followed: {n} of {total} closes", tone),
+            unsafe_allow_html=True)
+        if n < total:
+            theme.note("A close counts as 'by the rules' when the reason was "
+                       "the 50% profit target, the 21-day time exit, the stop "
+                       "loss, or expiring worthless. Following the rules "
+                       "matters more than the P&L while you learn.")
+
+    if entry["lessons"]:
+        st.markdown("**What you learned this month:**")
+        for lesson in entry["lessons"]:
+            theme.note(f"• {lesson}")
+
+
+def render_month_bars(summaries: list[dict], monthly_goal: float) -> None:
+    """Profit per month as bars (green up, red down) with the goal as a
+    dashed line - the 'is this working?' picture at a glance."""
+    if not any(m["closed_count"] for m in summaries):
+        return
+    df = pd.DataFrame([{"label": m["label"], "month": m["month"],
+                        "profit": m["realized_pl"]} for m in summaries])
+    df = df.sort_values("month")   # oldest on the left
+    bars = alt.Chart(df).mark_bar(size=42).encode(
+        x=alt.X("label:N", sort=list(df["label"]), title=None),
+        y=alt.Y("profit:Q", title="Profit ($)"),
+        color=alt.condition("datum.profit >= 0",
+                            alt.value(theme.GREEN), alt.value(theme.RED)),
+        tooltip=[alt.Tooltip("label:N", title="Month"),
+                 alt.Tooltip("profit:Q", title="Profit $", format=",.0f")])
+    chart = bars
+    if monthly_goal:
+        rule = alt.Chart(pd.DataFrame({"goal": [monthly_goal]})).mark_rule(
+            color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(y="goal:Q")
+        chart = bars + rule
+    st.altair_chart(chart.properties(height=240), use_container_width=True)
+    if monthly_goal:
+        theme.note(f"The dashed line is your **\\${monthly_goal:,.0f}** "
+                   "monthly goal.")
+
+
 # ================================================================== Today's picks
 def picks_index_dataframe(picks: list) -> pd.DataFrame:
     """The index-plays table: one row per cash-settled index with its
