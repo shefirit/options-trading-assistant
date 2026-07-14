@@ -81,7 +81,16 @@ input::placeholder, textarea::placeholder {{ color: {PLACEHOLDER} !important; op
 #MainMenu, footer {{ visibility: hidden; }}
 [data-testid="stToolbar"] {{ display: none; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
-.block-container {{ padding-top: 1.2rem; max-width: 1180px; }}
+/* Wide enough that the open-positions table (11 columns) fits without a
+   horizontal scrollbar on a laptop screen, but still capped so prose lines
+   never run edge-to-edge. Streamlit's default side padding is 5rem each way,
+   which is width the table needs more than the margins do. */
+.block-container {{
+    padding-top: 1.2rem;
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+    max-width: 1400px;
+}}
 
 /* ---------------- sidebar ---------------- */
 section[data-testid="stSidebar"] {{

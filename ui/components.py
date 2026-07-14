@@ -879,12 +879,30 @@ def render_payoff_chart(payoff_profile, current_price=None) -> None:
 # ================================================================== My trades
 _SIGNAL_WORD = {
     "stop": "🛑 Close - stop loss",
-    "time": "⏰ Close - time exit",
+    "time": "⏰ Decide today",
     "profit": "✅ Take the win",
     "watch": "⚠️ Watch closely",
     "hold": "✋ Hold",
     "unpriced": "❓ Could not price",
 }
+
+
+def short_strategy(name: str) -> str:
+    """A table-width version of a strategy name. The full name still shows in the
+    trade's detail card below the table, so nothing is lost.
+
+    "Poor Man's Covered Call (PMCC)"              -> "PMCC"
+    "Covered Call - Model 3: Zero Cost Ratio"     -> "Covered Call M3"
+    "Call Credit Spread (Bear Call Spread)"       -> "Call Credit Spread"
+    """
+    if not name:
+        return ""
+    head, _, rest = name.partition(" (")
+    acronym = rest.rstrip(")").strip()
+    # A short all-caps parenthetical IS the common name (PMCC, CSP) - prefer it.
+    if acronym and len(acronym) <= 6 and acronym.isupper():
+        return acronym
+    return head.split(":")[0].replace(" - Model ", " M").strip()
 
 
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
@@ -906,7 +924,7 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Price now": px,
             "You sold": strike_label,
             "Room to it": (cushion["room_pct"] * 100) if cushion else None,
-            "Strategy": pos.strategy_name,
+            "Strategy": short_strategy(pos.strategy_name),
             "Days left": pos.dte_left(),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
@@ -917,30 +935,38 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
 
 
 def positions_column_config():
+    # Widths are pixels on purpose: 11 columns of auto-sized text overflowed the
+    # page and forced a horizontal scrollbar. This budget totals ~1010px, which
+    # fits the content area on a laptop screen with the sidebar collapsed.
     return {
-        "What to do": st.column_config.TextColumn(
+        "What to do": st.column_config.TextColumn(width=125,
             help="Your own exit rules applied to live prices. Red = close, green = take "
                  "the win, amber = needs eyes on it."),
-        "Price now": st.column_config.NumberColumn(format="%.2f",
+        "Symbol": st.column_config.TextColumn(width=70,
+            help="The underlying you traded."),
+        "Price now": st.column_config.NumberColumn(format="%.2f", width=88,
             help="What the underlying is trading at right now (about 15 minutes delayed)."),
-        "You sold": st.column_config.TextColumn(
+        "You sold": st.column_config.TextColumn(width=78,
             help="The strike you SOLD that price is closest to - the one that matters. "
                  "C = a call you sold (trouble if price rises to it), P = a put you sold "
                  "(trouble if price falls to it)."),
-        "Room to it": st.column_config.NumberColumn(format="%.1f%%",
+        "Room to it": st.column_config.NumberColumn(format="%.1f%%", width=85,
             help="How far price still has to move to reach that strike. Bigger is safer. "
                  "Under 1.5% your SOP says consider rolling; below zero the strike is "
                  "already breached."),
-        "Days left": st.column_config.NumberColumn(format="%d",
+        "Strategy": st.column_config.TextColumn(width=160,
+            help="The strategy you opened, shortened to fit. The full name is in the "
+                 "trade's detail card below the table."),
+        "Days left": st.column_config.NumberColumn(format="%d", width=75,
             help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
                  "for a net credit. Never hold past it without deciding."),
-        "Credit $": st.column_config.NumberColumn(format="$%.0f",
+        "Credit $": st.column_config.NumberColumn(format="$%.0f", width=80,
             help="Cash you collected when you opened it."),
-        "Close now $": st.column_config.NumberColumn(format="$%.0f",
+        "Close now $": st.column_config.NumberColumn(format="$%.0f", width=95,
             help="What it costs to buy the position back right now (mid prices)."),
-        "P&L $": st.column_config.NumberColumn(format="$%.0f",
+        "P&L $": st.column_config.NumberColumn(format="$%.0f", width=78,
             help="Credit received minus today's cost to close."),
-        "% kept": st.column_config.NumberColumn(format="%.0f%%",
+        "% kept": st.column_config.NumberColumn(format="%.0f%%", width=76,
             help="How much of the credit is yours so far. Your SOP takes the win at 50%."),
     }
 
