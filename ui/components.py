@@ -889,14 +889,24 @@ _SIGNAL_WORD = {
 
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
     """items: [{"position": Position, "live": dict, "signal": ExitSignal}]"""
+    from src.engine.positions import strike_cushion
+
     rows = []
     for it in items:
         pos, live, sig = it["position"], it["live"], it["signal"]
+        px = live.get("underlying_price")
+        cushion = strike_cushion(pos, px)
+        strike_label = None
+        if cushion:
+            side = "C" if cushion["option_type"] == "call" else "P"
+            strike_label = f"{cushion['strike']:g} {side}"
         rows.append({
             "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
             "Symbol": pos.underlying,
+            "Price now": px,
+            "You sold": strike_label,
+            "Room to it": (cushion["room_pct"] * 100) if cushion else None,
             "Strategy": pos.strategy_name,
-            "Opened": pos.opened.isoformat() if pos.opened else "-",
             "Days left": pos.dte_left(),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
@@ -911,6 +921,16 @@ def positions_column_config():
         "What to do": st.column_config.TextColumn(
             help="Your own exit rules applied to live prices. Red = close, green = take "
                  "the win, amber = needs eyes on it."),
+        "Price now": st.column_config.NumberColumn(format="%.2f",
+            help="What the underlying is trading at right now (about 15 minutes delayed)."),
+        "You sold": st.column_config.TextColumn(
+            help="The strike you SOLD that price is closest to - the one that matters. "
+                 "C = a call you sold (trouble if price rises to it), P = a put you sold "
+                 "(trouble if price falls to it)."),
+        "Room to it": st.column_config.NumberColumn(format="%.1f%%",
+            help="How far price still has to move to reach that strike. Bigger is safer. "
+                 "Under 1.5% your SOP says consider rolling; below zero the strike is "
+                 "already breached."),
         "Days left": st.column_config.NumberColumn(format="%d",
             help="Days to expiration. Your SOP closes everything at 21."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f",

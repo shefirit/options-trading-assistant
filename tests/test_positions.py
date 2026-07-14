@@ -16,6 +16,7 @@ from src.engine.positions import (
     open_positions,
     parse_rows,
     performance,
+    strike_cushion,
 )
 from src.logging_tools.row import COLUMNS, build_close_row, build_row
 
@@ -170,6 +171,65 @@ def test_build_row_defaults_unchanged():
     row = build_row(_trade(), "Put Credit Spread", SIZE, True, "", trade_id="T1")
     assert row[0] == date.today().isoformat()
     assert row[14] == (date.today() + timedelta(days=30)).isoformat()
+
+
+# ------------------------------------------------- price vs the strike she sold
+def _leg(action, opt_type, strike, qty=1):
+    return Leg(role="x", action=action, option_type=opt_type, strike=strike,
+               quantity=qty, dte=30)
+
+
+def test_strike_cushion_on_a_put_credit_spread():
+    """Her SPX put spread: price above the short put = room to fall."""
+    p = Position(trade_id="T1", underlying="SPX", legs=[
+        _leg(Action.SELL, OptionType.PUT, 5000),
+        _leg(Action.BUY, OptionType.PUT, 4975)])
+    c = strike_cushion(p, 5100.0)
+    assert c["strike"] == 5000 and c["option_type"] == "put"
+    assert abs(c["room_pct"] - (100 / 5100)) < 1e-9   # ~2.0% of room
+    assert c["breached"] is False
+
+
+def test_strike_cushion_picks_the_side_price_is_nearest():
+    """An iron condor has two short strikes - report whichever one price is
+    closer to. Here 5100 sits nearer the 4950 put than the 5300 call."""
+    p = Position(trade_id="T1", underlying="SPX", legs=[
+        _leg(Action.BUY, OptionType.PUT, 4900),
+        _leg(Action.SELL, OptionType.PUT, 4950),
+        _leg(Action.SELL, OptionType.CALL, 5300),
+        _leg(Action.BUY, OptionType.CALL, 5350)])
+    c = strike_cushion(p, 5100.0)
+    assert c["strike"] == 4950 and c["option_type"] == "put"
+    assert abs(c["room_pct"] - (150 / 5100)) < 1e-9   # ~2.9%, vs 3.9% call side
+    assert c["breached"] is False
+
+
+def test_strike_cushion_ignores_the_long_leaps_in_a_pmcc():
+    """Only the call you SOLD counts - never the LEAPS you bought."""
+    p = Position(trade_id="T1", underlying="AAPL", legs=[
+        _leg(Action.BUY, OptionType.CALL, 150),
+        _leg(Action.SELL, OptionType.CALL, 220)])
+    c = strike_cushion(p, 210.0)
+    assert c["strike"] == 220 and c["option_type"] == "call"
+    assert abs(c["room_pct"] - (10 / 210)) < 1e-9     # ~4.8% of room to rise
+
+
+def test_strike_cushion_flags_a_breached_strike():
+    p = Position(trade_id="T1", underlying="AAPL", legs=[
+        _leg(Action.SELL, OptionType.CALL, 200)])
+    c = strike_cushion(p, 210.0)
+    assert c["breached"] is True
+    assert c["room_pct"] < 0
+
+
+def test_strike_cushion_none_without_a_price_or_short_leg():
+    p = Position(trade_id="T1", underlying="SPX", legs=[
+        _leg(Action.SELL, OptionType.PUT, 5000)])
+    assert strike_cushion(p, None) is None
+    assert strike_cushion(p, 0.0) is None
+    long_only = Position(trade_id="T2", underlying="SPX", legs=[
+        _leg(Action.BUY, OptionType.PUT, 5000)])
+    assert strike_cushion(long_only, 5100.0) is None
 
 
 def test_performance_summary():

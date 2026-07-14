@@ -251,6 +251,36 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     }
 
 
+def strike_cushion(position: Position,
+                   underlying_price: Optional[float]) -> Optional[dict[str, Any]]:
+    """How much room is left before price reaches an option you SOLD.
+
+    Looks at every short leg and reports the one closest to trouble (for an
+    iron condor that is whichever side price is nearer; for a covered call or
+    PMCC it is the short call). room_pct is how far price still has to move
+    to reach that strike, as a fraction of today's price - negative once the
+    strike is breached. None when there is no short leg or no live price.
+    """
+    if underlying_price is None or underlying_price <= 0:
+        return None
+    nearest: Optional[dict[str, Any]] = None
+    for leg in position.legs:
+        if leg.action != Action.SELL or leg.strike <= 0:
+            continue
+        if leg.option_type == OptionType.PUT:
+            room = (underlying_price - leg.strike) / underlying_price
+        else:
+            room = (leg.strike - underlying_price) / underlying_price
+        if nearest is None or room < nearest["room_pct"]:
+            nearest = {
+                "strike": leg.strike,
+                "option_type": leg.option_type.value,
+                "room_pct": room,
+                "breached": room < 0,
+            }
+    return nearest
+
+
 # ------------------------------------------------------------------ results
 def performance(positions: list[Position], today: Optional[date] = None) -> dict[str, Any]:
     """Realized results from closed trades - what the dashboard shows."""

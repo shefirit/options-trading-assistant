@@ -1,10 +1,15 @@
-"""One-time import of Rita's hand-tracked trade history into the trade log.
+"""One-time importer for trades that were tracked by hand before the app.
+
+  !!  THIS REPO IS PUBLIC. Never commit real trades in TRADES below.  !!
+  Fill it in, run it once, then empty it back out to the example. Your
+  trades belong in your Google Sheet log, not in source control.
 
 How to use:
   1. Fill TRADES below - one dict per historical trade (see the example).
   2. Run:  .venv\\Scripts\\python.exe tools\\import_history.py
   3. Press "↻ Refresh" in the app's 📒 Trades tab and walk the month picker
-     to confirm each month's total matches her old sheet.
+     to confirm each month's total matches your old sheet.
+  4. Empty TRADES back out before committing.
 
 Every entry writes a normal "open" event row (backdated), and - when the
 trade is already closed - a matching "close" event row, through the same
@@ -14,6 +19,9 @@ teacher-format mirror tab is never touched.
 
 Safe to re-run ONLY after deleting previously imported rows (each run mints
 new trade ids), so fill the list once and run it once.
+
+History already imported with this tool: the 13 trades from June-July 2026
+(4 PMCC + 9 from the M(1) sheet). They live in the Google Sheet log now.
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ from src.logging_tools.trade_logger import close_trade, log_trade
 # reason:       "Profit target (50%) hit" / "21 DTE time exit" / "Stop loss hit"
 #               / "Expired worthless" / "Rolled to a new position" / "Other"
 TRADES: list[dict] = [
+    # Example only - replace with real trades, run once, then empty it again.
     # {
     #     "strategy_key": "put_credit_spread",
     #     "underlying": "SPX",
@@ -54,6 +63,7 @@ TRADES: list[dict] = [
     #     "exit_cost": 150.0,
     #     "realized_pl": 150.0,
     #     "reason": "Profit target (50%) hit",
+    #     "lesson": "",
     #     "note": "",
     #     "followed_sop": True,
     #     # PMCC / covered-call extras (omit for spreads and CSPs):

@@ -1578,14 +1578,39 @@ def _tab_trades(settings, strategies, provider) -> None:
         p, live, sig = it["position"], it["live"], it["signal"]
         with st.container(border=True):
             components.render_exit_signal(sig)
-            cols = st.columns(4)
-            cols[0].metric("Credit received", money(p.credit))
-            cols[1].metric("Costs to close now",
+            cols = st.columns(5)
+            px = live.get("underlying_price")
+            cols[0].metric(f"{p.underlying} now",
+                           f"${px:,.2f}" if px else "n/a",
+                           help="The underlying's price right now, about 15 minutes "
+                                "delayed. This is what decides whether your strikes "
+                                "are safe.")
+            cols[1].metric("Credit received", money(p.credit))
+            cols[2].metric("Costs to close now",
                            money(live["cost_to_close"]) if live.get("cost_to_close")
                            is not None else "n/a")
             dte_now = p.dte_left()
-            cols[2].metric("Days left", dte_now if dte_now is not None else "n/a")
-            cols[3].metric("Max loss", money(p.max_loss))
+            cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
+            cols[4].metric("Max loss", money(p.max_loss))
+
+            # The single most useful read for a beginner: where is price, versus
+            # the option she SOLD, and how much room is between them.
+            cushion = pos_mod.strike_cushion(p, px)
+            if cushion:
+                side = "call" if cushion["option_type"] == "call" else "put"
+                direction = "rise" if side == "call" else "fall"
+                if cushion["breached"]:
+                    theme.note(
+                        f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
+                        f"{side} you sold.** That strike is breached - your SOP says roll "
+                        f"{'up' if side == 'call' else 'down'} and out for a credit, or close.")
+                else:
+                    theme.note(
+                        f"**{p.underlying} is at \\${px:,.2f}.** The closest option you sold "
+                        f"is the **{cushion['strike']:g} {side}** - price would have to "
+                        f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
+                        f"Your SOP says think about rolling once that room drops under 1.5%.")
+
             target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
             if sig.profit_pct is not None and p.credit > 0:
                 if sig.profit_pct >= 0:
