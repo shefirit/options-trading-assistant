@@ -1535,8 +1535,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                    "thinkorswim, or press **Log this trade** in 🎯 Build when the "
                    "app finds the setup for you. Either way it lands here and the "
                    "app starts watching your exit rules: take the win at 50% of "
-                   "the credit, close at 21 days to expiration, stop the loss at "
-                   "2x the credit.")
+                   "the credit, at 21 days to expiration close or roll for a credit, "
+                   "stop the loss at 2x the credit.")
         if source == "local" and not rows:
             from src.logging_tools import webhook_logger
             if webhook_logger.is_configured():
@@ -1639,7 +1639,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                     key=f"exit_cost_{p.trade_id}")
                 reason = st.selectbox(
                     "Why you closed it",
-                    ["Profit target (50%) hit", "21 DTE time exit", "Stop loss hit",
+                    ["Profit target (50%) hit", "21 DTE time exit",
+                     "21 DTE credit roll (opened a new spread)", "Stop loss hit",
                      "Rolled to a new position", "Expired worthless", "Other"],
                     key=f"exit_reason_{p.trade_id}")
                 note = st.text_input("Lesson learned (optional - future you says thanks)",

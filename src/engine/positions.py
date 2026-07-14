@@ -326,8 +326,12 @@ def performance(positions: list[Position], today: Optional[date] = None) -> dict
 
 
 # ------------------------------------------------------------------ month view
-# Close reasons that count as "followed your exit rules". "Rolled" and "Other"
-# deliberately do not - the score tracks the three SOP exits plus expiration.
+# Close reasons that count as "followed your exit rules". The "21 dte" prefix
+# covers both SOP outcomes at that point - "21 DTE time exit" (closed) and
+# "21 DTE credit roll" (rolled for a net credit) - because since the 2026-07-14
+# rule change either one is compliant; what breaks the rule is drifting past 21
+# DTE with no decision. A bare "Rolled" (a roll at any other moment) and "Other"
+# deliberately do not count.
 _SOP_EXIT_PREFIXES = ("profit target", "21 dte", "stop loss", "expired")
 
 

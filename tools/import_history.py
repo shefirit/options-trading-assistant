@@ -47,7 +47,8 @@ from src.logging_tools.trade_logger import close_trade, log_trade
 # credit_total: dollars collected for the WHOLE position (all contracts)
 # closed:       None if the trade is still open
 # exit_cost:    dollars paid to close (0.0 if it expired worthless)
-# reason:       "Profit target (50%) hit" / "21 DTE time exit" / "Stop loss hit"
+# reason:       "Profit target (50%) hit" / "21 DTE time exit"
+#               / "21 DTE credit roll (opened a new spread)" / "Stop loss hit"
 #               / "Expired worthless" / "Rolled to a new position" / "Other"
 TRADES: list[dict] = [
     # Example only - replace with real trades, run once, then empty it again.

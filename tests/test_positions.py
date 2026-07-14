@@ -328,3 +328,21 @@ def test_monthly_summary_rules_and_lessons():
     assert july["closed_count"] == 3
     assert july["rules_followed"] == 2           # "Other" does not count
     assert july["lessons"] == ["panicked and closed early", "patience pays"]
+
+
+def test_credit_roll_at_21_dte_counts_as_rules_followed():
+    """Since the 2026-07-14 SOP change, rolling for a net credit at 21 DTE is a
+    compliant exit - only drifting past 21 DTE with no decision breaks the rule.
+    A roll at any other moment ("Rolled to a new position") still does not count.
+    """
+    today = date(2026, 7, 8)
+    positions = [
+        _pos(opened=date(2026, 7, 1), closed_on=date(2026, 7, 5), pl=40.0,
+             reason="21 DTE credit roll (opened a new spread) - took the credit"),
+        _pos(opened=date(2026, 7, 1), closed_on=date(2026, 7, 6), pl=-20.0,
+             reason="Rolled to a new position"),
+    ]
+    july = monthly_summary(positions, today=today)[0]
+    assert july["closed_count"] == 2
+    assert july["rules_followed"] == 1
+    assert july["lessons"] == ["took the credit"]

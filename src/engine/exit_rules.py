@@ -2,7 +2,7 @@
 the exit rules from your own SOP (config/strategies.yaml):
 
   🛑 stop    - loss reached your stop (2x the credit): close immediately
-  ⏰ time    - 21 days to expiration: close no matter what
+  ⏰ time    - 21 days to expiration: decide today - close, or roll for a credit
   ✅ profit  - you kept your profit target (50% of the credit): take the win
   ⚠️ watch   - price is near/past a short strike, or delta crossed the red flag
   ✋ hold    - nothing triggered: let time decay keep working
@@ -111,7 +111,7 @@ def evaluate(
                     "close immediately, no rolling at this point."),
             pl_dollars=pl, profit_pct=profit_pct, notes=notes)
 
-    # ---- 2. Time exit - never hold into the fast-risk zone.
+    # ---- 2. Time exit - never drift into the fast-risk zone without deciding.
     te = exit_cfg.get("time_exit_dte")
     if te is not None and dte_left is not None and dte_left <= int(te):
         entered_inside = (position.dte_at_entry is not None
@@ -119,10 +119,13 @@ def evaluate(
         if not entered_inside:
             return ExitSignal(
                 action="time", tone="red",
-                headline=f"Close today - {dte_left} days to expiration",
-                reason=(f"Your SOP says close at {int(te)} days to expiration no matter "
-                        "what: from here, price swings hit the position much harder "
-                        "(gamma risk) and things go wrong fast."),
+                headline=f"Decide today - {dte_left} days to expiration",
+                reason=(f"Your SOP says never hold past {int(te)} days to expiration "
+                        "without a decision: from here, price swings hit the position "
+                        "much harder (gamma risk) and things go wrong fast. Close it - "
+                        "or roll to a fresh ~45-day spread back at your delta target, "
+                        "but ONLY if the roll fills for a net credit. If you cannot get "
+                        "a credit, close instead of forcing it."),
                 pl_dollars=pl, profit_pct=profit_pct, notes=notes)
         notes.insert(0, (
             f"Only {dte_left} days to expiration, and you entered inside the "

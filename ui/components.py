@@ -932,7 +932,8 @@ def positions_column_config():
                  "Under 1.5% your SOP says consider rolling; below zero the strike is "
                  "already breached."),
         "Days left": st.column_config.NumberColumn(format="%d",
-            help="Days to expiration. Your SOP closes everything at 21."),
+            help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
+                 "for a net credit. Never hold past it without deciding."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f",
             help="Cash you collected when you opened it."),
         "Close now $": st.column_config.NumberColumn(format="$%.0f",
