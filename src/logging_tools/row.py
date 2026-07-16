@@ -122,38 +122,46 @@ def build_roll_row(
     underlying: str,
     strategy_name: str,
     cash: float,
-    new_strike: float,
-    new_expiration: date,
-    new_credit: float,
+    new_strike: Optional[float] = None,
+    new_expiration: Optional[date] = None,
+    new_credit: float = 0.0,
     note: str = "",
     rolled_on: Optional[date] = None,
 ) -> list[Any]:
-    """The "roll" event row - written when the short call is rolled out (and
-    usually up) to a later expiration, on the SAME Trade ID.
+    """The "roll" event row - the short call changed and cash moved, on the
+    SAME Trade ID.
 
     This is what keeps one PMCC one position from LEAPS purchase to LEAPS sale
     instead of a chain of unrelated rows with the cost basis re-entered each
     time. Every field lands in a column she can read in the sheet:
 
-      cash        the net credit on the TOS fill, banked on this date
+      cash        the net on the TOS fill, banked on this date. Negative when
+                  she only bought the call back and wrote nothing in its place.
       new_credit  what the NEW short call sold for on its own - the basis the
                   50% profit target measures against from here
+
+    new_strike / new_expiration are left empty when she bought the call back
+    and has not written the next one yet: the position is then uncovered until
+    a later row gives it a new call.
     """
-    text = note or f"Rolled the short call to {new_strike:g}"
+    if new_strike is None:
+        text = note or "Bought the short call back - none written yet"
+    else:
+        text = note or f"Rolled the short call to {new_strike:g}"
     return [
         (rolled_on or date.today()).isoformat(),
         underlying,
         strategy_name,
-        f"{new_strike:g}",
+        f"{new_strike:g}" if new_strike is not None else "",
         "", "", "",                   # delta/dte/contracts - on the open row
-        round(new_credit, 2),         # Credit $
+        round(new_credit, 2) if new_credit else "",   # Credit $
         "", "", "",                   # max loss/BP/passed SOP - on the open row
         text,
         trade_id,
         "roll",
-        new_expiration.isoformat(),
+        new_expiration.isoformat() if new_expiration is not None else "",
         "",                           # Exit Cost $ - not a close
-        round(cash, 2),               # Realized P&L $: the credit banked today
+        round(cash, 2),               # Realized P&L $: the cash banked today
         "",
     ]
 

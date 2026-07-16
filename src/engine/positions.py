@@ -136,6 +136,20 @@ class Position(BaseModel):
         return round(self.realized_pl + self.roll_income, 2)
 
     @property
+    def is_uncovered(self) -> bool:
+        """A PMCC or covered call with no short call written against it today.
+
+        A normal part of the rhythm, not a mistake: her SOP takes the win at
+        50% of the credit, and she may sit on the long side for a while before
+        writing the next call. Nothing is earning while that is true, and the
+        long side is exposed both ways, so the card says so instead of running
+        exit rules against a call that isn't there.
+        """
+        return self.is_debit and not any(
+            leg.action == Action.SELL and leg.option_type == OptionType.CALL
+            for leg in self.legs)
+
+    @property
     def far_legs(self) -> list[Leg]:
         """The long-dated legs: the LEAPS on a PMCC, the protective put on a
         covered call. Empty on single-expiration positions."""
@@ -232,35 +246,70 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
 
 
 def _apply_roll(pos: Position, roll: RollEvent) -> None:
-    """Move the position's short call to the strike and date it was rolled to.
+    """Move the position's short call to wherever this event put it.
 
-    After this the tracker prices the contract she actually holds now, counts
-    down to the new expiration, and measures the 50% profit target against the
-    new call's own credit rather than the one that was bought back.
+    Three shapes, all one event because all three are just "cash moved and the
+    short call changed":
+      rolled      bought one back and sold a later one - the usual case
+      bought back new_strike is None: she is now uncovered, holding the long
+                  side while she waits for a level to write the next call
+      written     she was uncovered and has now sold one, so the leg comes back
+
+    After this the tracker prices the contract she actually holds, counts down
+    to its expiration, and measures the 50% target against its own credit.
     """
     pos.rolls.append(roll)
+
+    # The income leg is the nearest-dated short CALL. Model 2 and 3 also carry
+    # short PUTs, which a call roll must never touch.
+    short_calls = [leg for leg in pos.legs
+                   if leg.action == Action.SELL and leg.option_type == OptionType.CALL]
+    leg = (min(short_calls, key=lambda l: (l.dte if l.dte is not None else 10**6))
+           if short_calls else None)
+
+    if roll.new_strike is None:
+        # Bought back with nothing written in its place. Drop the leg: she does
+        # not hold that contract any more, and leaving it would keep counting
+        # down to an expiration that no longer applies to her.
+        if leg is not None:
+            pos.legs.remove(leg)
+        pos.credit = 0.0
+        pos.expiration = _long_side_expiration(pos) or pos.expiration
+        return
+
     if roll.new_expiration is not None:
         pos.expiration = roll.new_expiration
     if roll.new_credit > 0:
         pos.credit = roll.new_credit
 
-    short_calls = [leg for leg in pos.legs
-                   if leg.action == Action.SELL and leg.option_type == OptionType.CALL]
-    if not short_calls:
+    new_dte = (max((roll.new_expiration - pos.opened).days, 0)
+               if roll.new_expiration is not None and pos.opened is not None
+               else None)
+    if leg is None:
+        # She was uncovered and has written a fresh call against the long side.
+        pos.legs.append(Leg(
+            role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+            strike=roll.new_strike, quantity=1, dte=new_dte))
         return
-    # The income leg is the nearest-dated short call (Model 2 and 3 also carry
-    # short PUTs, which a call roll must never touch).
-    leg = min(short_calls, key=lambda l: (l.dte if l.dte is not None else 10**6))
-    if roll.new_strike:
-        leg.strike = roll.new_strike
-    if roll.new_expiration is not None and pos.opened is not None:
+
+    leg.strike = roll.new_strike
+    if new_dte is not None:
         # Keep dte measured from `opened`, the invariant leg_expiration() and
         # the near/far split both rely on.
-        leg.dte = max((roll.new_expiration - pos.opened).days, 0)
+        leg.dte = new_dte
     # The old contract's delta and premium describe an option she no longer
     # holds; leaving them would quietly feed a stale delta to the red-flag check.
     leg.delta = 0.0
     leg.premium = 0.0
+
+
+def _long_side_expiration(pos: Position) -> Optional[date]:
+    """The last date anything she still holds expires - the LEAPS on a PMCC,
+    the protective put on a covered call. What the countdown means once there
+    is no short call left to count down to."""
+    dates = [d for d in (pos.leg_expiration(leg) for leg in pos.legs)
+             if d is not None]
+    return max(dates) if dates else None
 
 
 def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
@@ -388,6 +437,11 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     chain doesn't carry the needed contracts.
     """
     if not position.can_track or position.expiration is None:
+        return None
+    if position.is_uncovered:
+        # Nothing has been sold, so there is nothing to buy back. Without this
+        # the near leg would be the LEAPS itself and "costs to close" would
+        # come back negative - the chain quoting what selling it would PAY her.
         return None
     exp = position.expiration.isoformat()
     entry_dtes = [leg.dte for leg in position.legs if leg.dte is not None]

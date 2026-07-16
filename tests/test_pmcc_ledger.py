@@ -517,3 +517,155 @@ def test_every_priced_field_reaches_the_card():
     assert "out.update(" in src, (
         "price_position must forward the whole priced dict, not cherry-pick "
         "keys - that is how the options/shares split went missing")
+
+
+# ------------------------------------------------- closing the call, not rolling
+#
+# Her rule, verbatim: "if there is credit - i will roll it. but sometimes there
+# is debit. so need to close the position and sell new call." A roll that would
+# cost a debit gets split into two events instead: buy the call back, then sell
+# the next one when the level suits. Between them she is UNCOVERED - holding the
+# long side with nothing written against it, which is a normal part of the
+# rhythm and not an error state.
+
+def _bought_back_row(paid: float, on: date) -> list:
+    """A roll row with no new call: she closed it and wrote nothing yet."""
+    return build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
+                          cash=-paid, rolled_on=on,
+                          note="Closed the call - roll was a debit")
+
+
+def _wrote_call_row(credit: float, strike: float, exp: date, on: date) -> list:
+    return build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
+                          cash=credit, new_strike=strike, new_expiration=exp,
+                          new_credit=credit, rolled_on=on,
+                          note=f"Sold the {strike:g} against the LEAPS")
+
+
+def test_closing_the_call_leaves_the_position_uncovered():
+    p = parse_rows(COLUMNS, [_open_row(),
+                             _bought_back_row(90.0, date(2026, 3, 20))])[0]
+    assert p.is_uncovered
+    assert p.credit == 0.0                      # nothing sold to measure 50% on
+    assert [l.role for l in p.legs] == ["long_call_leaps"]
+    # The countdown now belongs to the LEAPS, not to a call she no longer holds.
+    assert p.expiration == LEAPS_EXP
+    assert p.roll_income == -90.0               # the debit is banked that day
+
+
+def test_uncovered_short_circuits_the_exit_rules():
+    """No call sold means the 50% target and the 21-day clock have nothing to
+    measure. Before this the signal came back "could not price this"."""
+    from src.engine.exit_rules import evaluate
+
+    p = parse_rows(COLUMNS, [_open_row(),
+                             _bought_back_row(90.0, date(2026, 3, 20))])[0]
+    sig = evaluate(p, {"profit_target_pct": 50, "time_exit_dte": 21},
+                   current_cost=None, underlying_price=140.0,
+                   today=date(2026, 3, 21))
+    assert sig.action == "uncovered"
+    assert "not collecting premium" in sig.reason
+
+
+def test_selling_a_new_call_covers_it_again():
+    p = parse_rows(COLUMNS, [
+        _open_row(),
+        _bought_back_row(90.0, date(2026, 3, 20)),
+        _wrote_call_row(200.0, 140.0, date(2026, 5, 15), date(2026, 3, 25)),
+    ])[0]
+    assert not p.is_uncovered
+    short = next(l for l in p.legs if l.action == Action.SELL)
+    assert short.strike == 140.0
+    assert p.leg_expiration(short) == date(2026, 5, 15)
+    assert p.expiration == date(2026, 5, 15)
+    assert p.credit == 200.0                    # the 50% target follows it
+    assert p.roll_income == 110.0               # -90 paid + 200 collected
+
+
+def test_two_steps_and_one_roll_bank_exactly_the_same():
+    """Close then re-sell minutes later must land where a single roll lands -
+    the ledger only ever adds up cash."""
+    same_day = date(2026, 3, 20)
+    two_steps = parse_rows(COLUMNS, [
+        _open_row(),
+        _bought_back_row(90.0, same_day),
+        _wrote_call_row(200.0, 140.0, date(2026, 5, 15), same_day),
+    ])[0]
+    one_roll = parse_rows(COLUMNS, [
+        _open_row(),
+        build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
+                       cash=110.0, new_strike=140.0,
+                       new_expiration=date(2026, 5, 15), new_credit=200.0,
+                       rolled_on=same_day),
+    ])[0]
+    assert two_steps.roll_income == one_roll.roll_income == 110.0
+    assert two_steps.credit == one_roll.credit == 200.0
+    assert two_steps.expiration == one_roll.expiration
+    assert (next(l.strike for l in two_steps.legs if l.action == Action.SELL)
+            == next(l.strike for l in one_roll.legs if l.action == Action.SELL))
+    # And the month sees one number either way.
+    a = monthly_summary([two_steps], today=date(2026, 3, 31))[0]
+    b = monthly_summary([one_roll], today=date(2026, 3, 31))[0]
+    assert a["realized_pl"] == b["realized_pl"] == 110.0
+
+
+def test_same_day_events_replay_in_the_order_they_were_written():
+    """Both land on one date, so the sort must not reorder them: applying the
+    sell before the buy-back would leave her looking uncovered."""
+    same_day = date(2026, 3, 20)
+    p = parse_rows(COLUMNS, [
+        _open_row(),
+        _bought_back_row(90.0, same_day),
+        _wrote_call_row(200.0, 140.0, date(2026, 5, 15), same_day),
+    ])[0]
+    assert not p.is_uncovered          # the sell was applied last, as written
+    assert p.credit == 200.0
+
+
+def test_uncovered_position_is_still_priced_whole():
+    """The LEAPS is now the only leg, so far_legs is empty. The card used to
+    bail out on that and show nothing."""
+    p = parse_rows(COLUMNS, [_open_row(),
+                             _bought_back_row(90.0, date(2026, 3, 20))])[0]
+    assert p.far_legs == []
+    chain = OptionChain(underlying="MSFT", underlying_price=140.0, contracts=[
+        OptionContract(option_type=OptionType.CALL, strike=100,
+                       expiration=LEAPS_EXP.isoformat(), dte=449,
+                       delta=0.90, bid=44.90, ask=45.10),
+    ])
+    v = position_value_from_chain(p, chain)
+    assert v["value"] == 4500.0                       # just the LEAPS now
+    assert v["open_pl"] == OPEN_CASH - 90.0 + 4500.0  # 560
+    # Nothing is sold, so there is nothing to buy back.
+    assert cost_to_close_from_chain(p, chain) is None
+
+
+def test_a_covered_call_can_go_uncovered_without_losing_its_puts():
+    """Closing the CALL on Model 3 must leave the shares and the ratio puts."""
+    trade = Trade(
+        strategy_key="covered_call_model_3", underlying="MSFT", contracts=1,
+        legs=[
+            Leg(role="long_put_protection", action=Action.BUY,
+                option_type=OptionType.PUT, strike=300, premium=27.0, dte=690),
+            Leg(role="short_put_ratio", action=Action.SELL,
+                option_type=OptionType.PUT, strike=240, premium=10.0,
+                quantity=2, dte=690),
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=311, premium=1.6, dte=30),
+        ])
+    size = {"credit": 160.0, "max_loss": 48540.0, "buying_power": 30540.0,
+            "open_cash": -30540.0, "shares_cost": 30000.0}
+    row = build_row(trade, "Covered Call - Model 3: Zero Cost Ratio", size,
+                    True, "", trade_id="R2", opened_on=RATIO_OPEN,
+                    expiration_on=RATIO_CALL_EXP)
+    back = build_roll_row("R2", "MSFT", "Covered Call - Model 3: Zero Cost Ratio",
+                          cash=-120.0, rolled_on=date(2026, 3, 20))
+    p = parse_rows(COLUMNS, [row, back])[0]
+    assert p.is_uncovered
+    assert [l.role for l in p.legs] == ["long_put_protection", "short_put_ratio"]
+    assert p.shares_cost == 30000.0
+    # The put side still protects exactly as before - the call was never part
+    # of the downside story.
+    r = protection_read(p, underlying_price=295.0)
+    assert r["flat_to"] == 240.0
+    assert r["slope_below"] == 200.0

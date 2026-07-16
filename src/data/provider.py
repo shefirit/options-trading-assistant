@@ -430,11 +430,13 @@ class DataProvider:
 
         from src.engine.positions import (cost_to_close_from_chain,
                                           position_value_from_chain)
+        # None here is not a failure: an uncovered PMCC has nothing sold to buy
+        # back. The whole-position pricing below still has to run, so this must
+        # never return early.
         priced = cost_to_close_from_chain(position, chain)
-        if priced is None:
-            return out
-        out.update(priced)
-        out["priced"] = True
+        if priced is not None:
+            out.update(priced)
+            out["priced"] = True
         if out["underlying_price"] is None:
             out["underlying_price"] = chain.underlying_price or None
 
@@ -459,14 +461,16 @@ class DataProvider:
         """
         from src.engine.positions import position_value_from_chain
 
-        far_legs = position.far_legs
-        if not far_legs:
-            return None
+        if not position.is_debit:
+            return None      # a credit spread has no long side worth a card
 
+        # Usually the LEAPS sits in a different expiration and needs its own
+        # fetch. Once she is uncovered it IS the near expiration, so the chain
+        # already in hand covers everything and far_legs is legitimately empty.
         contracts = list(near_chain.contracts)
         today = date.today()
         seen: set[str] = set()
-        for leg in far_legs:
+        for leg in position.far_legs:
             exp = position.leg_expiration(leg)
             if exp is None:
                 return None

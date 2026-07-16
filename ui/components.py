@@ -882,6 +882,7 @@ _SIGNAL_WORD = {
     "time": "⏰ Decide today",
     "profit": "✅ Take the win",
     "watch": "⚠️ Watch closely",
+    "uncovered": "➕ No call sold",
     "hold": "✋ Hold",
     "unpriced": "❓ Could not price",
 }
@@ -1019,8 +1020,14 @@ def render_debit_position_card(position, live: dict) -> None:
                          if owns_shares else
                          "What left your account to open this: the long side "
                          "you bought, minus the call credit you collected."))
-    cols[1].metric("Premium banked since", _dollars(position.roll_income),
-                   help="Net credit from every roll of the short call so far. "
+    banked = position.roll_income
+    cols[1].metric("Premium banked since", _dollars(banked),
+                   help="Every call you have sold or bought back since opening,"
+                        " netted. Counted in the month each one happened. It "
+                        "goes negative when you have just paid to close a call "
+                        "and not yet sold the next one."
+                        if banked < 0 else
+                        "Net credit from every roll of the short call so far. "
                         "This money is already yours - it is counted in the "
                         "month each roll happened.")
     cols[2].metric("Worth now",
@@ -1067,12 +1074,18 @@ def render_debit_position_card(position, live: dict) -> None:
         return
 
     word = "up" if open_pl >= 0 else "down"
+    tail = ("Your 50% profit target applies to the short call on its own, not "
+            "to this number - the long leg is a stock substitute you hold on to "
+            "while the short calls earn.")
+    if position.is_uncovered:
+        # There is no short call to talk about, so the 50% line would be noise.
+        tail = ("Nothing is sold against it at the moment, so this is just the "
+                "long leg riding the stock. Selling the next call starts the "
+                "income again and gives your 50% target something to measure.")
     theme.note(
         f"Closing everything today would leave you **{word} "
         f"\\${abs(open_pl):,.0f}** on the \\${out:,.0f} you put in "
-        f"(**{pct:+.1f}%**). Your 50% profit target applies to the short call "
-        "on its own, not to this number - the long leg is a stock substitute "
-        "you hold on to while the short calls earn.")
+        f"(**{pct:+.1f}%**). " + tail)
 
 
 def render_protection_read(position, read: dict) -> None:

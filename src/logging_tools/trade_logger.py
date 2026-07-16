@@ -64,16 +64,19 @@ def roll_trade(
     underlying: str,
     strategy_name: str,
     cash: float,
-    new_strike: float,
-    new_expiration: date,
-    new_credit: float,
+    new_strike: Optional[float] = None,
+    new_expiration: Optional[date] = None,
+    new_credit: float = 0.0,
     note: str = "",
     rolled_on: Optional[date] = None,
 ) -> tuple[str, bool]:
-    """Record that the short call was rolled (a "roll" event on the same trade).
+    """Record that the short call changed (a "roll" event on the same trade).
 
-    Returns (destination, went_to_sheet). cash is the net credit from the TOS
-    fill and is banked on rolled_on, which defaults to today.
+    Returns (destination, went_to_sheet). cash is the net from the TOS fill and
+    is banked on rolled_on, which defaults to today.
+
+    Omit new_strike/new_expiration to record a buy-back with nothing written in
+    its place - the position is uncovered until a later call gives it one.
     """
     row = build_roll_row(trade_id, underlying, strategy_name, cash,
                          new_strike, new_expiration, new_credit, note,

@@ -1,14 +1,17 @@
 """Turns an open position + today's prices into ONE clear instruction, using
 the exit rules from your own SOP (config/strategies.yaml):
 
-  🛑 stop    - loss reached your stop (2x the credit): close immediately
-  ⏰ time    - 21 days to expiration: decide today - close, or roll for a credit
-  ✅ profit  - you kept your profit target (50% of the credit): take the win
-  ⚠️ watch   - price is near/past a short strike, or delta crossed the red flag
-  ✋ hold    - nothing triggered: let time decay keep working
+  🛑 stop      - loss reached your stop (2x the credit): close immediately
+  ⏰ time      - 21 days to expiration: decide today - close, or roll for a credit
+  ✅ profit    - you kept your profit target (50% of the credit): take the win
+  ⚠️ watch     - price is near/past a short strike, or delta crossed the red flag
+  ➕ uncovered - a PMCC / covered call with no call written against it
+  ✋ hold      - nothing triggered: let time decay keep working
 
 Pure math, no network, fully unit-tested. Priority when several trigger:
-stop > time > profit > watch > hold (safety first).
+stop > time > profit > watch > hold (safety first). "uncovered" short-circuits
+the lot: with no short call sold there is simply nothing for the rules to
+measure.
 """
 
 from __future__ import annotations
@@ -84,6 +87,20 @@ def evaluate(
     """
     credit = position.credit
     dte_left = position.dte_left(today)
+
+    # ---- 0. Nothing sold: none of the exit rules have anything to measure.
+    if position.is_uncovered:
+        return ExitSignal(
+            action="uncovered", tone="amber",
+            headline="No call sold - nothing is earning",
+            reason=("You bought the short call back and have not written a new "
+                    "one, so this position is not collecting premium right now "
+                    "and the long leg is riding the stock in both directions. "
+                    "Your 50% target and the 21-day clock only apply to a call "
+                    "you have actually sold. Write the next one when you like "
+                    "the level - your SOP's PMCC sells about 30 days out at "
+                    "delta 0.30 - then record it here."),
+            notes=[])
 
     pl = profit_pct = None
     if current_cost is not None and credit > 0:

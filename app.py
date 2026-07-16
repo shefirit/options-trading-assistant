@@ -1184,7 +1184,8 @@ def _build_manual(key, strat, underlyings, settings) -> None:
 
 
 # ------------------------------------------------------------------ My trades tab
-_SIGNAL_ORDER = {"stop": 0, "time": 1, "profit": 2, "watch": 3, "unpriced": 4, "hold": 5}
+_SIGNAL_ORDER = {"stop": 0, "time": 1, "profit": 2, "watch": 3, "uncovered": 4,
+                 "unpriced": 5, "hold": 6}
 _DEFAULT_EXIT = {"profit_target_pct": 50, "stop_loss_multiple": 2.0, "time_exit_dte": 21}
 
 
@@ -1532,17 +1533,121 @@ def _live_call_mid(provider, underlying: str, strike: float,
     return round(contract.mid * 100, 2)
 
 
-def _roll_form(p, live: dict, provider) -> None:
-    """Record a roll of the short call: buy back the near one, sell a further-out
-    one, usually for a net credit.
+def _write_call_form(p, provider) -> None:
+    """She is uncovered: record the new call she has just written."""
+    import datetime as dt
 
-    This keeps ONE position from the LEAPS purchase to the LEAPS sale. Closing
-    and re-logging instead would re-enter the LEAPS as a fresh several-thousand
-    dollar purchase every month and make the results meaningless.
+    with st.expander("➕ Sell a call against it (records the credit)",
+                     expanded=True):
+        theme.note("Sell it in thinkorswim first, then write the fill down "
+                   "here. Your SOP's PMCC sells about 30 days out at delta "
+                   "0.30. The credit is banked in this month's profit and the "
+                   "app starts watching the new call.")
+        w1, w2, w3 = st.columns(3)
+        sold_on = w1.date_input("Sold on", value=dt.date.today(),
+                                max_value=dt.date.today(),
+                                key=f"write_when_{p.trade_id}")
+        strike = w2.number_input("Strike you SOLD", min_value=0.0, step=1.0,
+                                 key=f"write_strike_{p.trade_id}")
+        exp = w3.date_input("Expiration",
+                            value=dt.date.today() + dt.timedelta(days=30),
+                            min_value=dt.date.today(),
+                            key=f"write_exp_{p.trade_id}")
+        suggested = _live_call_mid(provider, p.underlying, strike, exp)
+        credit = st.number_input(
+            "Credit you collected ($ total, from your TOS fill)",
+            min_value=0.0, step=5.0, value=float(suggested or 0.0),
+            key=f"write_credit_{p.trade_id}_{strike:g}_{exp}",
+            help="The fill price x100 x contracts. This is what your 50% "
+                 "profit target measures against from now on.")
+        if suggested:
+            theme.note(f"Suggested from today's chain: **\\${suggested:,.0f}** "
+                       f"for the {strike:g} call expiring {exp}. Change it if "
+                       "your fill said otherwise.")
+        note = st.text_input("Note (optional)", key=f"write_note_{p.trade_id}")
+
+        if st.button("Record the call I sold", type="primary",
+                     key=f"writebtn_{p.trade_id}"):
+            if not strike:
+                st.warning("Type the strike you sold first.")
+            elif not credit:
+                st.warning("Type the credit you collected - it is on your TOS "
+                           "fill.")
+            else:
+                from src.logging_tools.trade_logger import roll_trade
+                roll_trade(p.trade_id, p.underlying, p.strategy_name,
+                           cash=float(credit), new_strike=float(strike),
+                           new_expiration=exp, new_credit=float(credit),
+                           note=note or f"Sold the {strike:g} call against it",
+                           rolled_on=sold_on)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Recorded: ${credit:,.0f} collected, now tracking the "
+                    f"{strike:g} call expiring {exp}.")
+                st.rerun()
+
+
+def _roll_form(p, live: dict, provider) -> None:
+    """Record what happened to the short call: rolled in one order, or just
+    bought back with the next one still to come.
+
+    Either way this keeps ONE position from the LEAPS purchase to the LEAPS
+    sale. Closing and re-logging instead would re-enter the LEAPS as a fresh
+    several-thousand dollar purchase every month and make the results
+    meaningless.
     """
     import datetime as dt
 
-    with st.expander("🔄 Roll the short call (records the credit you collected)"):
+    with st.expander("🔄 Roll or close the short call"):
+        # Her rule, in her words: roll it when the roll pays her a credit; when
+        # it would cost a debit, close the call instead and sell the next one
+        # separately. The two paths are named for that decision, not for the
+        # mechanics.
+        mode = st.radio(
+            "What did you do?",
+            ["Rolled it for a credit (one order)",
+             "Closed the call (I'll sell a new one)"],
+            key=f"roll_mode_{p.trade_id}")
+        rolling = mode.startswith("Rolled")
+
+        if not rolling:
+            theme.note("This records only the call you bought back. Nothing is "
+                       "earning until you sell the next one, and the long leg "
+                       "rides the stock both ways meanwhile - the card will say "
+                       "so. Selling a new one straight away is fine: the form "
+                       "for it opens right after this, and both land in the "
+                       "same day's profit either way.")
+            b1, b2 = st.columns(2)
+            back_on = b1.date_input("Closed it on", value=dt.date.today(),
+                                    max_value=dt.date.today(),
+                                    key=f"back_when_{p.trade_id}")
+            paid = b2.number_input(
+                "What you PAID to close it ($ total)",
+                min_value=0.0, step=5.0,
+                value=round(float(live.get("cost_to_close") or 0.0), 2),
+                key=f"back_paid_{p.trade_id}",
+                help="The fill price x100 x contracts. Buying back a short call "
+                     "always costs money - that is the debit you were avoiding "
+                     "by not rolling.")
+            note = st.text_input("Note (optional)", key=f"back_note_{p.trade_id}")
+            if st.button("Record it", type="primary",
+                         key=f"backbtn_{p.trade_id}"):
+                if not paid:
+                    st.warning("Type what you paid to close the call.")
+                else:
+                    from src.logging_tools.trade_logger import roll_trade
+                    roll_trade(p.trade_id, p.underlying, p.strategy_name,
+                               cash=-float(paid), note=note, rolled_on=back_on)
+                    st.session_state.pop("trades_rows", None)
+                    st.session_state.pop("_priced_positions", None)
+                    st.session_state["ql_flash"] = (
+                        f"Recorded: ${paid:,.0f} paid to close the call. This "
+                        "trade has no call sold against it now - use ➕ Sell a "
+                        "call against it when you write the next one.")
+                    st.rerun()
+            return
+
         theme.note("Roll it in thinkorswim first, then write the fill down here. "
                    "The credit is banked in this month's profit, and the app "
                    "starts watching the new call - same trade, no re-typing the "
@@ -1565,6 +1670,15 @@ def _roll_form(p, live: dict, provider) -> None:
             help="The net price on the fill, x100 x contracts. A diagonal "
                  "filled at 0.80 credit on 1 contract = $80. If the roll cost "
                  "you money instead, type a negative number.")
+        if cash < 0:
+            # Her own rule: roll when it pays a credit, close when it would be
+            # a debit. Recorded either way - it is her call, not the app's.
+            theme.note(f"That is a **debit roll** - it cost you "
+                       f"\\${abs(cash):,.0f} rather than paying you. You said "
+                       "you would rather close the call and sell a new one when "
+                       "the roll will not pay. **Closed the call** above does "
+                       "that. Recording it as a roll is fine too if that is "
+                       "really what you did.")
 
         suggested = _live_call_mid(provider, p.underlying, new_strike, new_exp)
         # Keying on the strike and date re-seeds the default whenever she
@@ -1806,7 +1920,9 @@ def _tab_trades(settings, strategies, provider) -> None:
                 theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
                            + (f" · expires {p.expiration}" if p.expiration else ""))
 
-            if p.is_debit:
+            if p.is_uncovered:
+                _write_call_form(p, provider)
+            elif p.is_debit:
                 _roll_form(p, live, provider)
 
             with st.expander("✔️ Close this trade (records the result)"):
