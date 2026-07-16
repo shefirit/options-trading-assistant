@@ -10,8 +10,8 @@ Seven tabs, all open at once - use them in any order, nothing is locked:
                 with dividends and a risk picture
   🔎 Premium  - screen names for the richest, safest option premium
   🔬 Analyze  - any stock/ETF/index: full picture + the strategy that fits it
-  🎯 Build    - pick a strategy, scan real setups, check your SOP rules, log it
-  📒 Trades   - every logged trade tracked live against your own exit rules,
+  🎯 Find a trade    - pick a strategy, scan real setups, check your SOP rules, log it
+  📒 My trades- every logged trade tracked live against your own exit rules,
                 plus your results vs your weekly/monthly goals
   ⚙️ Settings - connections (Google Sheet, earnings data, Schwab) and your plan
                 numbers, in the main screen where they work on a phone too
@@ -34,7 +34,7 @@ import streamlit as st
 from src.data.provider import DataProvider
 from src.engine import scanner
 from src.engine.config_loader import allowed_underlyings_for, load_settings, load_strategies
-from src.engine.models import Action, Leg, OptionType, Trade
+from src.engine.models import Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
 from ui import components, theme
@@ -130,7 +130,7 @@ def main() -> None:
         [_mode_badge(provider), _log_badge()])
 
     t_market, t_picks, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
-        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Build", "📒 Trades",
+        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Find a trade", "📒 My trades",
          "⚙️ Settings"])
     with t_market:
         _guard(_tab_market, settings, provider, strategies)
@@ -251,16 +251,16 @@ def _market_fit_section(ctx, strategies) -> None:
     st.markdown("### 🧭 Strategy fit today")
     theme.note("The app ranks your three index strategies against today's trend and "
                "volatility. These are reasons, not instructions - you check the winner "
-               "in 🎯 Build and you decide.")
+               "in 🎯 Find a trade and you decide.")
     if ctx.suggestions:
         components.render_strategy_fit(ctx.suggestions)
     best_key = ctx.best_strategy_key or list(strategies.keys())[0]
     best_name = ctx.best_strategy_name or strategies[best_key]["name"]
-    if st.button(f"Set up {best_name} in Build ▸", type="primary", key="mkt_to_build"):
+    if st.button(f"Set up {best_name} in Find a trade ▸", type="primary", key="mkt_to_build"):
         st.session_state["build_strategy"] = best_key
         st.session_state["build_underlyings"] = ["SPX"]
         st.session_state["_prev_build_strategy"] = best_key
-        st.success("Loaded into **🎯 Build** - open that tab to scan it.")
+        st.success("Loaded into **🎯 Find a trade** - open that tab to scan it.")
 
 
 def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:
@@ -325,7 +325,7 @@ def _tab_picks(settings, strategies, provider) -> None:
                "liquid ETFs, and the whole S&P 500 - and ranks who fits your SOP for a "
                "monthly premium trade today: generous premium, sane risk, and a dividend "
                "when there is one. These are **candidates with reasons, not instructions** - "
-               "you check the winner in 🎯 Build and you decide.")
+               "you check the winner in 🎯 Find a trade and you decide.")
 
     if not provider.is_real:
         st.info("Today's picks need real market data - connect to the internet first. "
@@ -440,7 +440,7 @@ def _tab_picks(settings, strategies, provider) -> None:
     if report.left_out:
         with st.expander(f"Left out - not among the best right now ({len(report.left_out)})"):
             theme.note("These were scanned but didn't make the cut - shown here so nothing is "
-                       "hidden. If you disagree with one, you can still build it in 🎯 Build.")
+                       "hidden. If you disagree with one, you can still build it in 🎯 Find a trade.")
             for line in report.left_out:
                 theme.note("• " + line)
 
@@ -629,10 +629,10 @@ def _picks_risk_block(max_loss, bp, settings, liquidity_line, settlement, events
     """One candidate's risk picture: worst case, buying power vs the monthly
     limit, liquidity, settlement style, and the events inside the window."""
     bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
-    loss_txt = f"&#36;{max_loss:,.0f}" if max_loss is not None else "see Build"
+    loss_txt = f"&#36;{max_loss:,.0f}" if max_loss is not None else "see Find a trade"
     bp_txt = (f"&#36;{bp:,.0f} <span style='font-size:.9rem;font-weight:600;'>"
               f"({bp / bp_limit * 100:.0f}% of your &#36;{bp_limit:,.0f} monthly limit)"
-              "</span>" if bp is not None else "see Build")
+              "</span>" if bp is not None else "see Find a trade")
     st.markdown(
         f"""
         <div style="border:2px solid {theme.RED};border-radius:14px;padding:12px 16px;
@@ -664,7 +664,7 @@ def _index_pick_detail(pick, strategies, settings) -> None:
         theme.note("• " + w)
     theme.note("🗓️ " + pick.expiry_note)
     if pick.error and pick.candidate is None:
-        st.warning(components._esc(pick.error + " Use 🎯 Build to scan other expirations."))
+        st.warning(components._esc(pick.error + " Use 🎯 Find a trade to scan other expirations."))
     c = pick.candidate
     if c is not None:
         m = st.columns(4)
@@ -693,12 +693,12 @@ def _index_pick_detail(pick, strategies, settings) -> None:
         liquidity_line=_liquidity_line(pick.liquidity, pick.spread_pct, pick.open_interest),
         settlement=settlement, events=pick.events)
     _strategy_about(strategies[pick.strategy_key])
-    if st.button(f"Set up {pick.strategy_name} on {pick.symbol} in 🎯 Build ▸",
+    if st.button(f"Set up {pick.strategy_name} on {pick.symbol} in 🎯 Find a trade ▸",
                  type="primary", key=f"picks_spread_build_{pick.symbol}"):
         st.session_state["build_strategy"] = pick.strategy_key
         st.session_state["build_underlyings"] = [pick.symbol]
         st.session_state["_prev_build_strategy"] = pick.strategy_key
-        st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
+        st.success("Loaded into **🎯 Find a trade** - open that tab to scan and check it.")
 
 
 def _income_pick_detail(pick, strategies, settings, provider) -> None:
@@ -724,7 +724,7 @@ def _income_pick_detail(pick, strategies, settings, provider) -> None:
 
     extra = []
     if pick.strategy_key == "poor_mans_covered_call":
-        extra.append("A PMCC's real risk is the long-dated call you buy - scan it in Build "
+        extra.append("A PMCC's real risk is the long-dated call you buy - scan it in Find a trade "
                      "to see the actual dollars.")
     if pick.strategy_key.startswith("covered_call"):
         extra.append("Covered calls need 100 real shares per contract - the worst case is "
@@ -744,12 +744,12 @@ def _income_pick_detail(pick, strategies, settings, provider) -> None:
 
     _strategy_about(strategies[pick.strategy_key])
     label = components._STRATEGY_SHORT.get(pick.strategy_key, pick.strategy_key)
-    if st.button(f"Set up {label} on {s.symbol} in 🎯 Build ▸",
+    if st.button(f"Set up {label} on {s.symbol} in 🎯 Find a trade ▸",
                  type="primary", key="picks_inc_to_build"):
         st.session_state["build_strategy"] = pick.strategy_key
         st.session_state["build_underlyings"] = [s.symbol]
         st.session_state["_prev_build_strategy"] = pick.strategy_key
-        st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
+        st.success("Loaded into **🎯 Find a trade** - open that tab to scan and check it.")
 
 
 # ------------------------------------------------------------------ Find premium tab
@@ -848,12 +848,12 @@ def _tab_analyze(settings, provider, strategies) -> None:
         st.divider()
         components.render_advice(advice)
         if advice.primary:
-            if st.button(f"Build this: {advice.primary.name} on {sym} ▸", type="primary",
+            if st.button(f"Find this: {advice.primary.name} on {sym} ▸", type="primary",
                          key="analyze_to_build"):
                 st.session_state["build_strategy"] = advice.primary.key
                 st.session_state["build_underlyings"] = [sym]
                 st.session_state["_prev_build_strategy"] = advice.primary.key
-                st.success("Loaded into **🎯 Build** - open that tab to scan and check it.")
+                st.success("Loaded into **🎯 Find a trade** - open that tab to scan and check it.")
 
 
 def _symbol_research(sym, provider, settings, key_prefix) -> None:
@@ -876,7 +876,7 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
         _stock_overview_block(sym, provider, key_prefix=key_prefix)
 
 
-# ------------------------------------------------------------------ Build & check tab
+# ------------------------------------------------------------------ Find a trade tab
 def _strategy_about(strat) -> None:
     with st.expander(f"ℹ️ About {strat['name']}", expanded=False):
         st.markdown(f"**What it is:** {strat['plain_english']}")
@@ -970,12 +970,12 @@ def _tab_build(settings, strategies, provider) -> None:
 
     _strategy_about(strat)
     st.divider()
-    mode = st.radio("How", ["🔎 Find setups for me", "✅ Check a trade I built myself"],
-                    horizontal=True, label_visibility="collapsed", key="build_mode")
-    if mode.startswith("🔎"):
-        _build_scan(strategy_key, strat, underlyings, provider, contracts, width, settings)
-    else:
-        _build_manual(strategy_key, strat, underlyings, settings)
+    # Scan only. The old "check a trade I built myself" mode asked her to hand-type
+    # a delta, a mid price and a DTE for every leg of a trade she had usually
+    # already placed - which is what Quick Log in 📒 My trades does from her real
+    # fill, in a fraction of the typing. Two forms for one job; this is the one
+    # that could not know the price she actually got.
+    _build_scan(strategy_key, strat, underlyings, provider, contracts, width, settings)
 
 
 def _spread_event_warnings(underlyings, provider, dte_window=45) -> list:
@@ -1135,52 +1135,6 @@ def _tos_ticket_block(trade, strat) -> None:
                "The **date is estimated** from days-to-expiration - confirm it matches "
                "the expiration you picked, and expect to adjust the @ price a few cents "
                "to get filled." + extra)
-
-
-def _build_manual(key, strat, underlyings, settings) -> None:
-    theme.note("Type in the trade exactly as you set it up in thinkorswim. "
-               "Long = you bought it (+), short = you sold it (-).")
-    underlying = st.selectbox("Underlying", underlyings or allowed_underlyings_for(key),
-                              key="val_underlying")
-    existing_bp = st.number_input(
-        "Buying power already used this month ($)", min_value=0.0,
-        value=float(st.session_state.get("open_bp_in_use", 0.0)), step=1000.0, key="val_bp",
-        help="Auto-filled from your open trades in My trades - adjust if you also have "
-             "positions the app doesn't know about.")
-
-    legs: list[Leg] = []
-    for i, leg_def in enumerate(strat["legs"]):
-        role = leg_def["role"]
-        action = Action(leg_def["action"])
-        opt_type = OptionType(leg_def["option_type"])
-        qty = int(leg_def.get("quantity", 1))
-        sign = "+" if action == Action.BUY else "-"
-        st.markdown(f"**{role.replace('_', ' ').title()}** "
-                    f"({sign}{qty} {opt_type.value} - you {action.value.upper()} it)")
-        cols = st.columns(4)
-        strike = cols[0].number_input("Strike", min_value=0.0, value=0.0, step=1.0, key=f"strike_{i}")
-        delta = cols[1].number_input("Delta", min_value=-1.0, max_value=1.0, value=0.0, step=0.01,
-                                     key=f"delta_{i}", help="Puts negative, calls positive.")
-        premium = cols[2].number_input("Mid price", min_value=0.0, value=0.0, step=0.05, key=f"prem_{i}")
-        dte = cols[3].number_input("DTE", min_value=0, max_value=1000, value=30, step=1, key=f"dte_{i}")
-        legs.append(Leg(role=role, action=action, option_type=opt_type, strike=strike,
-                        delta=delta, premium=premium, quantity=qty, dte=int(dte)))
-
-    contracts = st.number_input("Contracts", min_value=1, max_value=50, value=1, step=1,
-                                key="val_contracts")
-    if st.button("Check this trade", type="primary"):
-        trade = Trade(strategy_key=key, underlying=underlying, contracts=int(contracts), legs=legs)
-        st.session_state["checked_trade"] = trade
-
-    checked = st.session_state.get("checked_trade")
-    if checked is not None:
-        report = validate_trade(checked, existing_month_bp=existing_bp)
-        with st.container(border=True):
-            components.render_checklist(report)
-            from src.engine import sizing
-            size = sizing.estimate(checked, strat)
-            _risk_and_payoff(checked, strat, size, settings)
-            _log_button(checked, strat["name"], size, report.passed, key="manual")
 
 
 # ------------------------------------------------------------------ My trades tab
@@ -1763,7 +1717,7 @@ def _month_section(all_pos, settings) -> None:
                      column_config=components.month_trades_column_config())
     else:
         theme.note("No trades touched this month yet. Log one with ➕ Quick Log "
-                   "above, or build one in 🎯 Build.")
+                   "above, or build one in 🎯 Find a trade.")
 
     components.render_month_bars(summaries, monthly_goal)
 
@@ -1796,7 +1750,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     if not all_pos:
         theme.note("Nothing here yet. Two ways to log your first trade: use "
                    "**➕ Quick Log** above for a trade you already placed in "
-                   "thinkorswim, or press **Log this trade** in 🎯 Build when the "
+                   "thinkorswim, or press **Log this trade** in 🎯 Find a trade when the "
                    "app finds the setup for you. Either way it lands here and the "
                    "app starts watching your exit rules: take the win at 50% of "
                    "the credit, at 21 days to expiration close or roll for a credit, "
@@ -1991,7 +1945,7 @@ def _tab_trades(settings, strategies, provider) -> None:
                                 key=f"open_{p.trade_id}")
     else:
         st.success("No open trades right now. Record one with ➕ Quick Log above, "
-                   "or build one in 🎯 Build - it shows up here either way.")
+                   "or build one in 🎯 Find a trade - it shows up here either way.")
 
     if legacy:
         with st.expander(f"Trades logged before tracking existed ({len(legacy)})"):
@@ -2111,9 +2065,9 @@ def _log_button(trade, strategy_name, size, passed, key: str) -> None:
         dest, live, trade_id = log_trade(trade, strategy_name, size, passed, note)
         st.session_state.pop("trades_rows", None)   # My trades reloads fresh
         if live:
-            st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 Trades**.  \n{dest}")
+            st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 My trades**.  \n{dest}")
         else:
-            st.success(f"Saved to the local log and tracked in **📒 Trades**.  \n{dest}")
+            st.success(f"Saved to the local log and tracked in **📒 My trades**.  \n{dest}")
 
 
 # ------------------------------------------ settings (main tab + desktop sidebar)
