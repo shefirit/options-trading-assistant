@@ -10,7 +10,8 @@ from typing import Any, Optional
 
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
-from src.logging_tools.row import COLUMNS, build_close_row, build_row, new_trade_id
+from src.logging_tools.row import (COLUMNS, build_close_row, build_roll_row,
+                                   build_row, new_trade_id)
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -58,6 +59,28 @@ def log_trade(
     return dest, live, trade_id
 
 
+def roll_trade(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    cash: float,
+    new_strike: float,
+    new_expiration: date,
+    new_credit: float,
+    note: str = "",
+    rolled_on: Optional[date] = None,
+) -> tuple[str, bool]:
+    """Record that the short call was rolled (a "roll" event on the same trade).
+
+    Returns (destination, went_to_sheet). cash is the net credit from the TOS
+    fill and is banked on rolled_on, which defaults to today.
+    """
+    row = build_roll_row(trade_id, underlying, strategy_name, cash,
+                         new_strike, new_expiration, new_credit, note,
+                         rolled_on=rolled_on)
+    return _append(row)
+
+
 def close_trade(
     trade_id: str,
     underlying: str,
@@ -67,12 +90,17 @@ def close_trade(
     reason: str,
     note: str = "",
     closed_on: Optional[date] = None,
+    close_cash: Optional[float] = None,
 ) -> tuple[str, bool]:
     """Record that a trade was closed (a "close" event). Returns (destination,
-    went_to_sheet). closed_on defaults to today; pass it for imported history."""
+    went_to_sheet). closed_on defaults to today; pass it for imported history.
+
+    close_cash is the close as signed cash (positive when closing PAID her, as
+    it does on a PMCC); it defaults to -exit_cost, the old credit-shape meaning.
+    """
     row = build_close_row(trade_id, underlying, strategy_name,
                           exit_cost, realized_pl, reason, note,
-                          closed_on=closed_on)
+                          closed_on=closed_on, close_cash=close_cash)
     return _append(row)
 
 

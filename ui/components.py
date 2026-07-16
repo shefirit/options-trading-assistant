@@ -918,6 +918,14 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
         if cushion:
             side = "C" if cushion["option_type"] == "call" else "P"
             strike_label = f"{cushion['strike']:g} {side}"
+        # P&L means the same thing in every row: what the whole trade is worth
+        # if closed right now. On a credit spread that is credit minus cost to
+        # close, which is what the exit signal already computed. On a PMCC it
+        # has to include the LEAPS, or the column reports the small short-call
+        # number on a trade whose real result is ten times that.
+        pl = sig.pl_dollars
+        if pos.is_debit and live.get("open_pl") is not None:
+            pl = live["open_pl"]
         rows.append({
             "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
             "Symbol": pos.underlying,
@@ -928,7 +936,7 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Days left": pos.dte_left(),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
-            "P&L $": sig.pl_dollars,
+            "P&L $": pl,
             "% kept": sig.profit_pct,
         })
     return pd.DataFrame(rows)
@@ -961,13 +969,19 @@ def positions_column_config():
             help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
                  "for a net credit. Never hold past it without deciding."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f", width=80,
-            help="Cash you collected when you opened it."),
+            help="Cash you collected for the short leg when you opened it. On a "
+                 "PMCC or covered call that is the short call only - the LEAPS "
+                 "or the shares are not in this number."),
         "Close now $": st.column_config.NumberColumn(format="$%.0f", width=95,
-            help="What it costs to buy the position back right now (mid prices)."),
+            help="What it costs to buy the short side back right now (mid prices)."),
         "P&L $": st.column_config.NumberColumn(format="$%.0f", width=78,
-            help="Credit received minus today's cost to close."),
+            help="What the whole trade is worth if you closed it today - on a "
+                 "PMCC or covered call the long leg and your banked roll credits "
+                 "are counted in."),
         "% kept": st.column_config.NumberColumn(format="%.0f%%", width=76,
-            help="How much of the credit is yours so far. Your SOP takes the win at 50%."),
+            help="How much of the SHORT CALL's credit is yours so far. Your SOP "
+                 "takes the win at 50%. On a PMCC this is about the call only - "
+                 "the P&L column is the whole trade."),
     }
 
 
@@ -984,6 +998,54 @@ def render_exit_signal(sig) -> None:
         st.warning(_esc(n))
 
 
+def render_debit_position_card(position, live: dict) -> None:
+    """The whole-position picture for a PMCC or covered call.
+
+    The metrics above this answer "how is the short call doing", which is what
+    the 50% rule needs but is a small slice of the money. This answers "how is
+    the TRADE doing" - the long-dated leg included, where most of the profit or
+    loss actually lives.
+    """
+    st.markdown("**The whole position**")
+    out = abs(position.open_cash)
+    value = live.get("position_value")
+    open_pl = live.get("open_pl")
+
+    cols = st.columns(4)
+    cols[0].metric("Cash you put in", _dollars(out),
+                   help="What left your account to open this: the long side you "
+                        "bought, minus the call credit you collected.")
+    cols[1].metric("Premium banked since", _dollars(position.roll_income),
+                   help="Net credit from every roll of the short call so far. "
+                        "This money is already yours - it is counted in the "
+                        "month each roll happened.")
+    cols[2].metric("Worth now",
+                   _dollars(value) if value is not None else "n/a",
+                   help="What unwinding every leg would pay you at today's "
+                        "prices. 'n/a' means the chain is missing a contract - "
+                        "usually the long-dated one.")
+    if open_pl is None:
+        cols[3].metric("Profit if closed now", "n/a")
+        theme.note("The long-dated leg could not be priced just now, so the "
+                   "whole-trade number is unavailable. The short call's numbers "
+                   "above, and every day-count and strike check, still work.")
+        return
+
+    pct = (open_pl / out * 100) if out > 0 else 0.0
+    cols[3].metric("Profit if closed now", _dollars(open_pl),
+                   delta=f"{pct:+.1f}%",
+                   help="Everything unwound at today's prices, plus the premium "
+                        "you already banked, minus what you put in. This is the "
+                        "number the trade is actually worth to you.")
+    word = "up" if open_pl >= 0 else "down"
+    theme.note(
+        f"Closing everything today would leave you **{word} "
+        f"\\${abs(open_pl):,.0f}** on the \\${out:,.0f} you put in "
+        f"(**{pct:+.1f}%**). Your 50% profit target applies to the short call "
+        "on its own, not to this number - the long leg is a stock substitute "
+        "you hold on to while the short calls earn.")
+
+
 def closed_dataframe(closed: list) -> pd.DataFrame:
     rows = []
     for p in sorted(closed, key=lambda p: (p.closed_on or p.opened or pd.Timestamp.min.date()),
@@ -994,8 +1056,10 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
             "Strategy": p.strategy_name,
             "Opened": p.opened.isoformat() if p.opened else "-",
             "Credit $": p.credit,
-            "Exit cost $": p.exit_cost,
-            "Result $": p.realized_pl,
+            "Rolls $": p.roll_income or None,
+            "Cash back $": p.close_cash if p.is_debit else None,
+            "Exit cost $": None if p.is_debit else p.exit_cost,
+            "Result $": p.realized_total,
             "Why closed": p.exit_reason,
         })
     return pd.DataFrame(rows)
@@ -1058,8 +1122,10 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
 # ================================================================== month view
 def _month_result_word(position, tag: str) -> str:
     """One plain-English word for how this trade sits in THIS month's list."""
+    if tag == "rolled":
+        return "🔄 Rolled"
     if tag in ("closed", "both") and position.status == "closed":
-        pl = position.realized_pl
+        pl = position.realized_total
         if pl is None:
             return "✔️ Closed"
         if pl > 0:
@@ -1077,24 +1143,49 @@ def _month_result_word(position, tag: str) -> str:
 def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
     """One month's trades, friendliest facts first.
 
-    rows: [{"position": Position, "tag": "closed"|"opened"|"both"}] from
-    positions.monthly_summary. Money banked this month sorts to the top."""
+    rows: [{"position": Position, "tag": "closed"|"opened"|"both"|"rolled"}]
+    from positions.monthly_summary. Money banked this month sorts to the top.
+    A "rolled" row is its own line: the credit landed in THIS month even when
+    the position was opened earlier and is still open."""
     def sort_key(r):
-        closed_here = r["tag"] in ("closed", "both") and r["position"].status == "closed"
-        return 0 if closed_here else 1
+        banked_here = (r["tag"] == "rolled"
+                       or (r["tag"] in ("closed", "both")
+                           and r["position"].status == "closed"))
+        return 0 if banked_here else 1
 
     out = []
     for r in sorted(rows, key=sort_key):
-        p = r["position"]
+        p, tag = r["position"], r["tag"]
+        roll = r.get("roll")
+        if tag == "rolled" and roll is not None:
+            out.append({
+                "Result": _month_result_word(p, tag),
+                "Symbol": p.underlying,
+                "Strategy": p.strategy_name,
+                "Opened": p.opened.isoformat() if p.opened else "-",
+                "Closed": roll.rolled_on.isoformat() if roll.rolled_on else "-",
+                "Credit $": roll.new_credit or None,
+                "Result $": roll.cash,
+                "Why closed": (f"Rolled the short call to {roll.new_strike:g}"
+                               if roll.new_strike else "Rolled the short call"),
+            })
+            continue
         reason = (p.exit_reason or "").split(" - ", 1)[0]
+        # Every row in a MONTH view reports what was banked in THAT month, so
+        # the column adds up to the month's headline total. For a rolled trade
+        # that splits across months: the roll lines carry their credits, and
+        # this line carries the closing result only. The trade's whole-life
+        # number lives in the Closed trades table, where nothing is summed.
+        # Without rolls (almost every trade) the two are identical anyway.
+        result = p.realized_pl if tag in ("closed", "both") else None
         out.append({
-            "Result": _month_result_word(p, r["tag"]),
+            "Result": _month_result_word(p, tag),
             "Symbol": p.underlying,
             "Strategy": p.strategy_name,
             "Opened": p.opened.isoformat() if p.opened else "-",
             "Closed": p.closed_on.isoformat() if p.closed_on else "-",
             "Credit $": p.credit,
-            "Result $": p.realized_pl,
+            "Result $": result,
             "Why closed": reason or "-",
         })
     return pd.DataFrame(out)
@@ -1104,11 +1195,18 @@ def month_trades_column_config():
     return {
         "Result": st.column_config.TextColumn(
             help="How this trade ended up. 'Still open' trades are being "
-                 "watched in the open-trades list above."),
+                 "watched in the open-trades list above. 'Rolled' is a short "
+                 "call rolled out - the credit was banked that day."),
+        "Closed": st.column_config.TextColumn(
+            help="When the trade closed, or when the roll happened."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f",
-            help="Cash collected when the trade was opened."),
+            help="Premium collected for the short leg. On a PMCC or covered "
+                 "call that is the call only, not the size of the position."),
         "Result $": st.column_config.NumberColumn(format="$%.0f",
-            help="What the trade actually made or lost when it was closed."),
+            help="Money banked THIS month, so the column adds up to the month's "
+                 "total above. A rolled trade banks each roll's credit on the "
+                 "day it rolled and the rest when it closes - its whole-life "
+                 "result is in 'All closed trades' at the bottom of the page."),
         "Why closed": st.column_config.TextColumn(
             help="The exit rule (or reason) recorded at close."),
     }
@@ -1133,6 +1231,15 @@ def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float) -> N
     m[3].metric("BP used", _dollars(entry["bp_opened"]),
                 help=f"Buying power committed by trades opened this month. "
                      f"Your SOP allows {_dollars(bp_limit)} per month.")
+
+    if entry.get("roll_income"):
+        # theme.note() HTML-escapes its input, so the &#36; entity _dollars()
+        # produces would show up literally here. Inside a note, \$ is the way.
+        theme.note(
+            f"**\\${entry['roll_income']:,.0f}** of this month's total came "
+            "from rolling short calls. That credit counts in the month you "
+            "rolled, even on a trade that is still open - it is money you have "
+            "already collected.")
 
     if entry["closed_count"]:
         n, total = entry["rules_followed"], entry["closed_count"]

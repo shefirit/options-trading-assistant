@@ -3,8 +3,15 @@ so your record looks the same wherever it lands.
 
 Since the "My trades" tracker was added, the log is an EVENT log:
   - an "open" row when you log a trade
-  - a "close" row (same Trade ID) when you close it in the app
+  - a "roll" row (same Trade ID) each time the short call is rolled
+  - a "close" row (same Trade ID) when it is closed in the app
 Open positions = open rows that have no matching close row yet.
+
+Every event carries SIGNED cash (+ collected, - paid) so the debit strategies
+add up: a PMCC pays money out at open and takes it back in at close, which the
+old credit-only fields could not express. The signed numbers live in the Details
+JSON cell rather than in new columns, so an existing Google Sheet keeps working
+with no Apps Script redeploy and rows written by older versions still parse.
 """
 
 from __future__ import annotations
@@ -35,9 +42,10 @@ def new_trade_id(underlying: str, when: Optional[datetime] = None) -> str:
     return f"{when:%Y%m%d-%H%M%S}-{underlying.upper()}"
 
 
-def _details_json(trade: Trade) -> str:
+def _details_json(trade: Trade, sizing: Optional[dict[str, float]] = None) -> str:
     """Everything needed to re-price the position later, in one compact cell."""
-    return json.dumps({
+    sizing = sizing or {}
+    data: dict[str, Any] = {
         "key": trade.strategy_key,
         "underlying_price": trade.underlying_price,
         "legs": [
@@ -53,7 +61,15 @@ def _details_json(trade: Trade) -> str:
             }
             for leg in trade.legs
         ],
-    }, separators=(",", ":"))
+    }
+    # Signed net cash at open. Written only when the caller computed it, because
+    # positions.parse_rows tells "no ledger, fall back to the Credit $ column"
+    # from the key being ABSENT - a stored 0.0 would be a real, wrong answer.
+    if "open_cash" in sizing:
+        data["open_cash"] = round(float(sizing["open_cash"]), 2)
+    if sizing.get("shares_cost"):
+        data["shares_cost"] = round(float(sizing["shares_cost"]), 2)
+    return json.dumps(data, separators=(",", ":"))
 
 
 def build_row(
@@ -97,7 +113,48 @@ def build_row(
         expiration,
         "",   # Exit Cost $ - filled on the close row
         "",   # Realized P&L $ - filled on the close row
-        _details_json(trade),
+        _details_json(trade, sizing),
+    ]
+
+
+def build_roll_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    cash: float,
+    new_strike: float,
+    new_expiration: date,
+    new_credit: float,
+    note: str = "",
+    rolled_on: Optional[date] = None,
+) -> list[Any]:
+    """The "roll" event row - written when the short call is rolled out (and
+    usually up) to a later expiration, on the SAME Trade ID.
+
+    This is what keeps one PMCC one position from LEAPS purchase to LEAPS sale
+    instead of a chain of unrelated rows with the cost basis re-entered each
+    time. Every field lands in a column she can read in the sheet:
+
+      cash        the net credit on the TOS fill, banked on this date
+      new_credit  what the NEW short call sold for on its own - the basis the
+                  50% profit target measures against from here
+    """
+    text = note or f"Rolled the short call to {new_strike:g}"
+    return [
+        (rolled_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        f"{new_strike:g}",
+        "", "", "",                   # delta/dte/contracts - on the open row
+        round(new_credit, 2),         # Credit $
+        "", "", "",                   # max loss/BP/passed SOP - on the open row
+        text,
+        trade_id,
+        "roll",
+        new_expiration.isoformat(),
+        "",                           # Exit Cost $ - not a close
+        round(cash, 2),               # Realized P&L $: the credit banked today
+        "",
     ]
 
 
@@ -110,12 +167,20 @@ def build_close_row(
     reason: str,
     note: str = "",
     closed_on: Optional[date] = None,
+    close_cash: Optional[float] = None,
 ) -> list[Any]:
     """The "close" event row - written when you close the trade in My trades.
+
+    exit_cost is what buying the position back COST (the credit shapes, where it
+    is always money out). close_cash is the same event as signed cash and is the
+    one that generalises: closing a PMCC PAYS her, because she sells the LEAPS
+    back. Defaults to -exit_cost, which is exactly what a close used to mean.
 
     closed_on defaults to today; pass it when importing an old trade so the
     profit lands in the month it was actually banked.
     """
+    if close_cash is None:
+        close_cash = -float(exit_cost)
     text = reason if not note else f"{reason} - {note}"
     return [
         (closed_on or date.today()).isoformat(),
@@ -129,5 +194,6 @@ def build_close_row(
         "",
         round(exit_cost, 2),
         round(realized_pl, 2),
-        "",
+        json.dumps({"close_cash": round(float(close_cash), 2)},
+                   separators=(",", ":")),
     ]

@@ -78,31 +78,56 @@ def fill_from_chain(legs: list[Leg], chain, expiration_iso: str,
 
 def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
                      leaps_cost_total: Optional[float] = None,
-                     share_price: Optional[float] = None) -> dict[str, float]:
+                     share_price: Optional[float] = None,
+                     protection_cost_total: Optional[float] = None,
+                     ) -> dict[str, float]:
     """Money math from the numbers on her TOS fill, not from chain mids.
 
     Same shape as sizing.estimate (credit / max_loss / buying_power /
     return_on_risk), but the credit is exactly what she collected, so the
     tracker's 50% target and 2x stop measure against reality.
+
+    Also returns the two ledger fields the tracker needs:
+
+      open_cash    signed net cash the day she opened it. Positive on the credit
+                   shapes (they pay her). NEGATIVE on the debit shapes, where the
+                   LEAPS / shares / protective put cost more than the call
+                   collected - the money the old model dropped on the floor.
+      shares_cost  what the 100 real shares per contract cost, if any, so the
+                   position can be valued later at today's share price.
+
+    credit_total stays the SHORT CALL's premium on the debit shapes: it is the
+    basis for the 50% profit target, not the size of the position.
     """
     basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
     contracts = max(int(trade.contracts), 1)
     credit = float(credit_total)
+    shares_cost = 0.0
 
     if basis == "cash_secured":
         shorts = [l for l in trade.legs if l.action == Action.SELL]
         strike = shorts[0].strike if shorts else 0.0
         max_loss = max(strike * 100 * contracts - credit, 0.0)
         buying_power = max_loss
+        open_cash = credit
     elif basis == "debit":
-        # PMCC: the capital is what she paid for the LEAPS.
+        # PMCC: she paid for the LEAPS and collected the short call against it.
+        # Net cash out is the real capital and the real worst case: if the stock
+        # went to zero the LEAPS expires worthless and she still keeps the call
+        # credit, so she can never lose more than she laid out.
         cost = float(leaps_cost_total or 0.0)
-        buying_power = cost
-        max_loss = max(cost - credit, 0.0)
+        open_cash = credit - cost
+        buying_power = max(cost - credit, 0.0)
+        max_loss = buying_power
     elif basis in ("shares_plus_protection", "ratio_risk"):
-        # Covered calls: the capital is the 100 shares per contract.
+        # Covered calls: 100 real shares per contract, plus whatever the put
+        # side cost (Model 1's long put, Model 2's put spread; Model 3's ratio
+        # is built to cost ~nothing and can even come in at a credit).
         px = float(share_price or trade.underlying_price or 0.0)
-        buying_power = px * 100 * contracts
+        shares_cost = px * 100 * contracts
+        protection = float(protection_cost_total or 0.0)
+        open_cash = credit - shares_cost - protection
+        buying_power = max(shares_cost + protection - credit, 0.0)
         max_loss = buying_power
     else:
         # vertical_width (spreads, iron condor): risk = the wider single side.
@@ -111,6 +136,7 @@ def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
         width = max(put_w, call_w)
         max_loss = max(width * 100 * contracts - credit, 0.0)
         buying_power = max_loss
+        open_cash = credit
 
     return_on_risk = (credit / buying_power) if buying_power > 0 else 0.0
     return {
@@ -118,4 +144,6 @@ def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
         "max_loss": round(max_loss, 2),
         "buying_power": round(buying_power, 2),
         "return_on_risk": round(return_on_risk, 4),
+        "open_cash": round(open_cash, 2),
+        "shares_cost": round(shares_cost, 2),
     }

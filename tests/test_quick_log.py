@@ -118,21 +118,52 @@ def test_sizing_cash_secured_put():
     assert s["buying_power"] == 180 * 100 - 300.0
 
 
-def test_sizing_pmcc_capital_is_the_leaps_cost():
+def test_sizing_pmcc_capital_is_the_net_debit():
     legs = legs_from_strategy(
         STRATS["poor_mans_covered_call"],
         {"long_call_leaps": 150, "short_call": 220}, dte=30, leaps_dte=400)
     s = sizing_from_fill(_trade(legs), STRATS["poor_mans_covered_call"],
                          credit_total=250.0, leaps_cost_total=6000.0)
-    assert s["buying_power"] == 6000.0
+    # The LEAPS cost 6000 but the short call handed 250 back the same day, so
+    # 5750 is what actually left the account - and the worst case too, since a
+    # collapse to zero costs her the LEAPS but never the credit she keeps.
+    # Same netting the cash-secured put above already does.
+    assert s["buying_power"] == 5750.0
     assert s["max_loss"] == 5750.0
 
 
-def test_sizing_covered_call_capital_is_the_shares():
+def test_sizing_pmcc_open_cash_is_negative_and_carries_the_leaps():
+    """The bug this whole ledger exists for: a PMCC pays money OUT to open."""
+    legs = legs_from_strategy(
+        STRATS["poor_mans_covered_call"],
+        {"long_call_leaps": 100, "short_call": 130}, dte=30, leaps_dte=449)
+    s = sizing_from_fill(_trade(legs), STRATS["poor_mans_covered_call"],
+                         credit_total=150.0, leaps_cost_total=4000.0)
+    assert s["open_cash"] == -3850.0     # 150 collected - 4,000 paid
+    assert s["credit"] == 150.0          # the 50% target still measures on this
+    assert s["shares_cost"] == 0.0
+
+
+def test_sizing_covered_call_counts_shares_and_protection():
     legs = legs_from_strategy(
         STRATS["covered_call_model_1"],
         {"long_put_protection": 95, "short_call": 110}, dte=21, leaps_dte=700)
     s = sizing_from_fill(_trade(legs), STRATS["covered_call_model_1"],
-                         credit_total=120.0, share_price=100.0)
-    assert s["buying_power"] == 10000.0
-    assert s["max_loss"] == 10000.0
+                         credit_total=120.0, share_price=100.0,
+                         protection_cost_total=300.0)
+    # 10,000 of shares + 300 for the protective put - 120 collected. The put's
+    # cost used to be dropped entirely: the form never even asked for it.
+    assert s["buying_power"] == 10180.0
+    assert s["max_loss"] == 10180.0
+    assert s["open_cash"] == -10180.0
+    assert s["shares_cost"] == 10000.0
+
+
+def test_sizing_credit_shapes_open_cash_is_just_the_credit():
+    """The ledger must not disturb the strategies that already worked."""
+    legs = legs_from_strategy(STRATS["put_credit_spread"],
+                              {"short_put": 5000, "long_put": 4950}, dte=45)
+    s = sizing_from_fill(_trade(legs), STRATS["put_credit_spread"],
+                         credit_total=500.0)
+    assert s["open_cash"] == 500.0
+    assert s["buying_power"] == 50 * 100 - 500.0

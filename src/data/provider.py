@@ -10,6 +10,7 @@ market read (trend + VIX) and the per-stock fundamental/technical analysis.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -395,7 +396,8 @@ class DataProvider:
         works - the time and strike checks then still run.
         """
         out = {"priced": False, "cost_to_close": None,
-               "underlying_price": None, "short_delta": None}
+               "underlying_price": None, "short_delta": None,
+               "position_value": None, "open_pl": None}
 
         sym = position.underlying.upper()
         if self.is_real:
@@ -425,7 +427,8 @@ class DataProvider:
         if chain is None:
             return out
 
-        from src.engine.positions import cost_to_close_from_chain
+        from src.engine.positions import (cost_to_close_from_chain,
+                                          position_value_from_chain)
         priced = cost_to_close_from_chain(position, chain)
         if priced is None:
             return out
@@ -433,7 +436,55 @@ class DataProvider:
         out["priced"] = True
         if out["underlying_price"] is None:
             out["underlying_price"] = chain.underlying_price or None
+
+        whole = self._price_whole_position(position, chain, out["underlying_price"])
+        if whole is not None:
+            out["position_value"] = whole["value"]
+            out["open_pl"] = whole["open_pl"]
         return out
+
+    def _price_whole_position(self, position, near_chain,
+                              underlying_price) -> Optional[dict]:
+        """The PMCC / covered call total, which needs the far-dated leg priced.
+
+        The chain above only covers the near expiration - all a credit spread
+        ever needs. A PMCC's LEAPS sits a year out, in a different expiration
+        entirely, so it takes a second fetch that gets merged in. Returns None
+        (and the card simply shows no total) whenever any contract is missing,
+        which is the honest answer rather than a total with a leg left out.
+        """
+        from src.engine.positions import position_value_from_chain
+
+        far_legs = position.far_legs
+        if not far_legs:
+            return None
+
+        contracts = list(near_chain.contracts)
+        today = date.today()
+        seen: set[str] = set()
+        for leg in far_legs:
+            exp = position.leg_expiration(leg)
+            if exp is None:
+                return None
+            if exp.isoformat() in seen:
+                continue
+            seen.add(exp.isoformat())
+            try:
+                far_chain = cache.get_or_fetch(
+                    f"farchain:{position.underlying.upper()}:{exp.isoformat()}",
+                    lambda e=exp: self._expiration_chain(
+                        position.underlying.upper(), max((e - today).days, 0)),
+                    900)   # LEAPS barely move minute to minute; cache them longer
+            except Exception:
+                return None
+            if far_chain is None:
+                return None
+            contracts.extend(far_chain.contracts)
+
+        merged = OptionChain(underlying=near_chain.underlying,
+                             underlying_price=near_chain.underlying_price,
+                             contracts=contracts)
+        return position_value_from_chain(position, merged, underlying_price)
 
     def get_buying_power_used(self) -> Optional[float]:
         if self.mode == "schwab":

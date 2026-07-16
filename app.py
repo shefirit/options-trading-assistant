@@ -1318,6 +1318,7 @@ def _quick_log_form(settings, strategies, provider) -> None:
             far_exp = None
             leaps_cost = None
             share_price = None
+            protection_cost = None
             if basis == "debit":
                 f1, f2 = st.columns(2)
                 far_exp = f1.date_input(
@@ -1326,7 +1327,11 @@ def _quick_log_form(settings, strategies, provider) -> None:
                     key=f"ql_farexp_{strategy_key}")
                 leaps_cost = f2.number_input(
                     "What you paid for the LEAPS ($ total)", min_value=0.0,
-                    step=50.0, key=f"ql_leaps_{strategy_key}")
+                    step=50.0, key=f"ql_leaps_{strategy_key}",
+                    help="From your TOS fill: the price you paid x 100 x "
+                         "contracts. A 40.00 fill on 1 contract = $4,000. This "
+                         "is your real money at risk, so the app needs it to "
+                         "tell you what the trade actually made.")
             elif has_far_leg:
                 f1, f2 = st.columns(2)
                 far_exp = f1.date_input(
@@ -1336,6 +1341,13 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 share_price = f2.number_input(
                     "Share price when you bought the 100 shares ($)",
                     min_value=0.0, step=1.0, key=f"ql_shares_{strategy_key}")
+                protection_cost = st.number_input(
+                    "What the put side cost you ($ total, net)",
+                    step=25.0, key=f"ql_prot_{strategy_key}",
+                    help="Model 1: what the long put cost. Model 2: the net "
+                         "debit of the put spread. Model 3: often near zero - "
+                         "and if the ratio paid you a credit, type a negative "
+                         "number. Leave at 0 only if it really was free.")
 
             leg_defs = strat.get("legs", [])
             cols = st.columns(min(len(leg_defs), 4) or 1)
@@ -1375,6 +1387,20 @@ def _quick_log_form(settings, strategies, provider) -> None:
             st.warning("Almost - type the credit you collected (it is on your TOS "
                        "fill). Open ➕ Quick Log above to fill it in.")
             st.session_state.pop("ql_draft", None)
+        elif basis == "debit" and not leaps_cost:
+            # Without it the position looks like a tiny credit trade and every
+            # number downstream - result, return, buying power - comes out wrong.
+            st.warning("Almost - type what you paid for the LEAPS. That is the "
+                       "money actually at risk in a PMCC, and without it the app "
+                       "cannot tell you what the trade made. Open ➕ Quick Log "
+                       "above to fill it in.")
+            st.session_state.pop("ql_draft", None)
+        elif has_far_leg and basis != "debit" and not share_price:
+            st.warning("Almost - type the share price you paid. That is most of "
+                       "the money in a covered call, and the app needs it to "
+                       "track the trade's result. Open ➕ Quick Log above to "
+                       "fill it in.")
+            st.session_state.pop("ql_draft", None)
         else:
             dte = max((expiration - opened_on).days, 0)
             leaps_dte = (max((far_exp - opened_on).days, 0)
@@ -1402,7 +1428,8 @@ def _quick_log_form(settings, strategies, provider) -> None:
                           underlying_price=underlying_price or share_price)
             sizing = quick_log.sizing_from_fill(
                 trade, strat, float(credit_total),
-                leaps_cost_total=leaps_cost, share_price=share_price)
+                leaps_cost_total=leaps_cost, share_price=share_price,
+                protection_cost_total=protection_cost)
             passed = True
             try:
                 report = validate_trade(
@@ -1427,10 +1454,27 @@ def _quick_log_form(settings, strategies, provider) -> None:
                        f"contract(s) · opened {draft['opened_on'].isoformat()} · "
                        f"expires {draft['expiration'].isoformat()} "
                        f"({draft['dte']} days)")
-            m = st.columns(3)
-            m[0].metric("Credit", money(p_size["credit"]))
-            m[1].metric("Max loss", money(p_size["max_loss"]))
-            m[2].metric("Buying power", money(p_size["buying_power"]))
+            open_cash = float(p_size.get("open_cash", p_size["credit"]))
+            if open_cash < 0:
+                # A PMCC or covered call takes money OUT to open. Showing only
+                # the call credit here is what made a multi-thousand-dollar
+                # position look like a trade worth a couple hundred.
+                m = st.columns(4)
+                m[0].metric("Call credit", money(p_size["credit"]),
+                            help="What the short call paid you. Your 50% profit "
+                                 "target measures against this - not against the "
+                                 "whole position.")
+                m[1].metric("Cash out today", money(-open_cash),
+                            help="What actually left your account: the long side "
+                                 "you bought, minus the call credit. Closing the "
+                                 "trade pays this back, plus or minus your result.")
+                m[2].metric("Max loss", money(p_size["max_loss"]))
+                m[3].metric("Buying power", money(p_size["buying_power"]))
+            else:
+                m = st.columns(3)
+                m[0].metric("Credit", money(p_size["credit"]))
+                m[1].metric("Max loss", money(p_size["max_loss"]))
+                m[2].metric("Buying power", money(p_size["buying_power"]))
             if draft["passed"]:
                 st.markdown(theme.chip("SOP check: passed", "green"),
                             unsafe_allow_html=True)
@@ -1459,6 +1503,112 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 st.rerun()
             if c2.button("Never mind - discard this draft", key="ql_discard"):
                 st.session_state.pop("ql_draft", None)
+                st.rerun()
+
+
+def _live_call_mid(provider, underlying: str, strike: float,
+                   expiration: dt.date) -> Optional[float]:
+    """Today's mid for one call, or None. Used to suggest what a freshly sold
+    call was worth, so she doesn't have to dig per-leg prices out of TOS."""
+    import datetime as dt
+
+    if not strike or expiration is None:
+        return None
+    try:
+        dte = max((expiration - dt.date.today()).days, 0)
+        chain = provider.get_chain(underlying, dte_min=max(dte - 4, 0),
+                                   dte_max=dte + 4)
+    except Exception:
+        return None
+    if chain is None:
+        return None
+    exp = expiration.isoformat()
+    contract = next(
+        (c for c in chain.contracts
+         if c.option_type == OptionType.CALL and c.expiration == exp
+         and abs(c.strike - strike) < 1e-6), None)
+    if contract is None or contract.mid <= 0:
+        return None
+    return round(contract.mid * 100, 2)
+
+
+def _roll_form(p, live: dict, provider) -> None:
+    """Record a roll of the short call: buy back the near one, sell a further-out
+    one, usually for a net credit.
+
+    This keeps ONE position from the LEAPS purchase to the LEAPS sale. Closing
+    and re-logging instead would re-enter the LEAPS as a fresh several-thousand
+    dollar purchase every month and make the results meaningless.
+    """
+    import datetime as dt
+
+    with st.expander("🔄 Roll the short call (records the credit you collected)"):
+        theme.note("Roll it in thinkorswim first, then write the fill down here. "
+                   "The credit is banked in this month's profit, and the app "
+                   "starts watching the new call - same trade, no re-typing the "
+                   "LEAPS.")
+        r1, r2, r3 = st.columns(3)
+        rolled_on = r1.date_input("Rolled on", value=dt.date.today(),
+                                  max_value=dt.date.today(),
+                                  key=f"roll_when_{p.trade_id}")
+        new_strike = r2.number_input(
+            "New short call strike", min_value=0.0, step=1.0,
+            key=f"roll_strike_{p.trade_id}",
+            help="The call you SOLD in the roll - the further-out one.")
+        new_exp = r3.date_input(
+            "New expiration", value=dt.date.today() + dt.timedelta(days=30),
+            min_value=dt.date.today(), key=f"roll_exp_{p.trade_id}")
+
+        cash = st.number_input(
+            "Net credit from the roll ($ total, from your TOS fill)",
+            step=5.0, key=f"roll_cash_{p.trade_id}",
+            help="The net price on the fill, x100 x contracts. A diagonal "
+                 "filled at 0.80 credit on 1 contract = $80. If the roll cost "
+                 "you money instead, type a negative number.")
+
+        suggested = _live_call_mid(provider, p.underlying, new_strike, new_exp)
+        # Keying on the strike and date re-seeds the default whenever she
+        # changes them - Streamlit ignores value= once a key has been seen.
+        new_credit = st.number_input(
+            "What the NEW call sold for on its own ($ total)",
+            min_value=0.0, step=5.0, value=float(suggested or 0.0),
+            key=f"roll_credit_{p.trade_id}_{new_strike:g}_{new_exp}",
+            help="Not the net - what the call you just sold was worth by "
+                 "itself. Your 50% profit target measures against this from "
+                 "now on.")
+        if suggested:
+            theme.note(f"Suggested from today's chain: **\\${suggested:,.0f}** "
+                       f"for the {new_strike:g} call expiring {new_exp}. Change "
+                       "it if your fill said otherwise.")
+        elif new_strike:
+            theme.note("That contract could not be priced from the chain just "
+                       "now, so type what it sold for. Without it the app "
+                       "cannot tell you when the new call hits your 50% target.")
+        note = st.text_input("Note (optional)", key=f"roll_note_{p.trade_id}")
+
+        if st.button("Record the roll", type="primary", key=f"rollbtn_{p.trade_id}"):
+            if not new_strike:
+                st.warning("Type the new short call's strike first.")
+            elif not cash:
+                st.warning("Type the net credit from the roll - it is the money "
+                           "this roll actually made you.")
+            elif not new_credit:
+                st.warning("Type what the new call sold for on its own, so the "
+                           "app knows when it reaches your 50% target.")
+            elif new_exp <= (p.expiration or dt.date.today()):
+                st.warning(f"A roll moves the call OUT in time, but {new_exp} is "
+                           f"not after this position's current expiration "
+                           f"({p.expiration}). Check the date.")
+            else:
+                from src.logging_tools.trade_logger import roll_trade
+                roll_trade(p.trade_id, p.underlying, p.strategy_name,
+                           float(cash), float(new_strike), new_exp,
+                           float(new_credit), note, rolled_on=rolled_on)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Roll recorded: ${cash:,.0f} banked, now tracking the "
+                    f"{new_strike:g} call expiring {new_exp}.")
                 st.rerun()
 
 
@@ -1585,13 +1735,20 @@ def _tab_trades(settings, strategies, provider) -> None:
                            help="The underlying's price right now, about 15 minutes "
                                 "delayed. This is what decides whether your strikes "
                                 "are safe.")
-            cols[1].metric("Credit received", money(p.credit))
+            cols[1].metric("Credit received", money(p.credit),
+                           help="What the short call paid you - the basis for your "
+                                "50% target." if p.is_debit else None)
             cols[2].metric("Costs to close now",
                            money(live["cost_to_close"]) if live.get("cost_to_close")
-                           is not None else "n/a")
+                           is not None else "n/a",
+                           help="Buying back the short call alone." if p.is_debit
+                                else None)
             dte_now = p.dte_left()
             cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
             cols[4].metric("Max loss", money(p.max_loss))
+
+            if p.is_debit:
+                components.render_debit_position_card(p, live)
 
             # The single most useful read for a beginner: where is price, versus
             # the option she SOLD, and how much room is between them.
@@ -1628,15 +1785,37 @@ def _tab_trades(settings, strategies, provider) -> None:
                 theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
                            + (f" · expires {p.expiration}" if p.expiration else ""))
 
+            if p.is_debit:
+                _roll_form(p, live, provider)
+
             with st.expander("✔️ Close this trade (records the result)"):
                 theme.note("Close it in thinkorswim first, then record the fill here so "
                            "your results stay accurate.")
                 default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
                     is not None else 0.0
-                exit_cost = st.number_input(
-                    "What you paid to close it (total $, from your TOS fill)",
-                    min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
-                    key=f"exit_cost_{p.trade_id}")
+                if p.is_debit:
+                    # Closing a PMCC or covered call PAYS her - she sells the
+                    # long side back. The old "what you paid" box could not go
+                    # below zero, so a close that paid had nowhere to be typed.
+                    default_in = live.get("position_value")
+                    proceeds = st.number_input(
+                        "What you RECEIVED when you closed it (total $, from your "
+                        "TOS fill)",
+                        min_value=0.0, step=25.0,
+                        value=round(max(float(default_in or 0.0), 0.0), 2),
+                        key=f"exit_in_{p.trade_id}",
+                        help="Selling the LEAPS back, minus buying back the short "
+                             "call - the net on your fill, x100 x contracts. A "
+                             "50.00 credit on 1 contract = $5,000. If closing "
+                             "somehow cost you money, type 0 and note it below.")
+                    close_cash = float(proceeds)
+                    exit_cost = 0.0
+                else:
+                    exit_cost = st.number_input(
+                        "What you paid to close it (total $, from your TOS fill)",
+                        min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
+                        key=f"exit_cost_{p.trade_id}")
+                    close_cash = -float(exit_cost)
                 reason = st.selectbox(
                     "Why you closed it",
                     ["Profit target (50%) hit", "21 DTE time exit",
@@ -1645,16 +1824,28 @@ def _tab_trades(settings, strategies, provider) -> None:
                     key=f"exit_reason_{p.trade_id}")
                 note = st.text_input("Lesson learned (optional - future you says thanks)",
                                      key=f"exit_note_{p.trade_id}")
-                realized = p.credit - exit_cost
-                st.markdown(components._esc(
-                    f"Result: **${realized:,.0f}** "
-                    f"({'profit' if realized >= 0 else 'loss'})"))
+                # The close banks the capital result. Roll credits were banked on
+                # the days they landed, so they are not counted again here.
+                realized = p.open_cash + close_cash
+                total = realized + p.roll_income
+                if p.is_debit:
+                    st.markdown(components._esc(
+                        f"Result: **${total:,.0f}** "
+                        f"({'profit' if total >= 0 else 'loss'}) - "
+                        f"${-p.open_cash:,.0f} out, ${p.roll_income:,.0f} banked "
+                        f"from rolls, ${close_cash:,.0f} back today."))
+                else:
+                    st.markdown(components._esc(
+                        f"Result: **${realized:,.0f}** "
+                        f"({'profit' if realized >= 0 else 'loss'})"))
                 if st.button("Record the close", type="primary",
                              key=f"close_{p.trade_id}"):
                     from src.logging_tools.trade_logger import close_trade
                     dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,
-                                                 exit_cost, realized, reason, note)
+                                                 exit_cost, realized, reason, note,
+                                                 close_cash=close_cash)
                     st.session_state.pop("trades_rows", None)
+                    st.session_state.pop("_priced_positions", None)
                     st.rerun()
 
             with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
