@@ -154,9 +154,13 @@ def test_sizing_covered_call_counts_shares_and_protection():
     # 10,000 of shares + 300 for the protective put - 120 collected. The put's
     # cost used to be dropped entirely: the form never even asked for it.
     assert s["buying_power"] == 10180.0
-    assert s["max_loss"] == 10180.0
     assert s["open_cash"] == -10180.0
     assert s["shares_cost"] == 10000.0
+    # But the CAPITAL is not the max loss - that is the whole point of Model 1.
+    # The 95 put means the shares can only fall 5 points before it takes over:
+    # 500 of share fall + 300 for the put - 120 collected = 680. Quoting the
+    # 10,180 she laid out would misprice the safest model she has by 15x.
+    assert s["max_loss"] == 680.0
 
 
 def test_sizing_credit_shapes_open_cash_is_just_the_credit():

@@ -76,6 +76,19 @@ def fill_from_chain(legs: list[Leg], chain, expiration_iso: str,
     return legs, notes
 
 
+def _value_at_zero(trade: Trade) -> float:
+    """What the OPTIONS would be worth if the underlying went to zero: every
+    put finishes worth its strike, every call worthless. The shares go to zero
+    too, but their cost is already inside open_cash."""
+    total = 0.0
+    for leg in trade.legs:
+        if leg.option_type != OptionType.PUT:
+            continue
+        sign = 1.0 if leg.action == Action.BUY else -1.0
+        total += sign * leg.strike * 100 * leg.quantity * trade.contracts
+    return total
+
+
 def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
                      leaps_cost_total: Optional[float] = None,
                      share_price: Optional[float] = None,
@@ -128,7 +141,12 @@ def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
         protection = float(protection_cost_total or 0.0)
         open_cash = credit - shares_cost - protection
         buying_power = max(shares_cost + protection - credit, 0.0)
-        max_loss = buying_power
+        # The worst case is NOT the cash she laid out. The protective put means
+        # a collar can never lose most of it, and Model 3's two short puts mean
+        # the ratio can lose considerably MORE than it. Price the legs at zero
+        # (puts finish worth their strike, calls worthless, shares worthless)
+        # and read the real number off the payoff.
+        max_loss = max(-(open_cash + _value_at_zero(trade)), 0.0)
     else:
         # vertical_width (spreads, iron condor): risk = the wider single side.
         put_w = trade.vertical_width(OptionType.PUT) or 0.0

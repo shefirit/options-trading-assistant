@@ -397,7 +397,8 @@ class DataProvider:
         """
         out = {"priced": False, "cost_to_close": None,
                "underlying_price": None, "short_delta": None,
-               "position_value": None, "open_pl": None}
+               "position_value": None, "open_pl": None,
+               "options_pl": None, "shares_pl": None}
 
         sym = position.underlying.upper()
         if self.is_real:
@@ -439,8 +440,11 @@ class DataProvider:
 
         whole = self._price_whole_position(position, chain, out["underlying_price"])
         if whole is not None:
+            # Forward everything the engine computed rather than naming fields
+            # one by one: the covered calls' options_pl/shares_pl split was
+            # silently dropped that way once already. "value" is the only rename.
             out["position_value"] = whole["value"]
-            out["open_pl"] = whole["open_pl"]
+            out.update({k: v for k, v in whole.items() if k != "value"})
         return out
 
     def _price_whole_position(self, position, near_chain,

@@ -1745,10 +1745,31 @@ def _tab_trades(settings, strategies, provider) -> None:
                                 else None)
             dte_now = p.dte_left()
             cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
-            cols[4].metric("Max loss", money(p.max_loss))
+
+            # On the covered call models "max loss" was never the max loss - it
+            # was the cash she laid out for shares she still owns. What she
+            # actually needs is how far the put side protects her.
+            protection = (pos_mod.protection_read(p, px)
+                          if p.shares_cost > 0 else None)
+            if protection and protection["flat_to"] is not None:
+                cols[4].metric("Flat down to", f"${protection['flat_to']:,.0f}",
+                               help="Your shares are protected this far down - "
+                                    "the P&L barely moves until here. See the "
+                                    "line below for what happens past it.")
+            elif protection:
+                cols[4].metric("Most you can lose",
+                               money(abs(protection["worst_case"])),
+                               help="The real worst case from the payoff, not "
+                                    "what you paid - your protective put caps "
+                                    "it." if protection["capped"] else
+                                    "The worst case if the stock went to zero.")
+            else:
+                cols[4].metric("Max loss", money(p.max_loss))
 
             if p.is_debit:
                 components.render_debit_position_card(p, live)
+            if protection:
+                components.render_protection_read(p, protection)
 
             # The single most useful read for a beginner: where is price, versus
             # the option she SOLD, and how much room is between them.

@@ -1010,11 +1010,15 @@ def render_debit_position_card(position, live: dict) -> None:
     out = abs(position.open_cash)
     value = live.get("position_value")
     open_pl = live.get("open_pl")
+    owns_shares = position.shares_cost > 0
 
     cols = st.columns(4)
     cols[0].metric("Cash you put in", _dollars(out),
-                   help="What left your account to open this: the long side you "
-                        "bought, minus the call credit you collected.")
+                   help=("What left your account to open this: the shares and "
+                         "the put side you bought, minus the call credit."
+                         if owns_shares else
+                         "What left your account to open this: the long side "
+                         "you bought, minus the call credit you collected."))
     cols[1].metric("Premium banked since", _dollars(position.roll_income),
                    help="Net credit from every roll of the short call so far. "
                         "This money is already yours - it is counted in the "
@@ -1037,6 +1041,31 @@ def render_debit_position_card(position, live: dict) -> None:
                    help="Everything unwound at today's prices, plus the premium "
                         "you already banked, minus what you put in. This is the "
                         "number the trade is actually worth to you.")
+
+    options_pl, shares_pl = live.get("options_pl"), live.get("shares_pl")
+    if owns_shares and options_pl is not None and shares_pl is not None:
+        # You own the shares; the options are the trade you run against them.
+        # One blended number hides the case that matters - calls earning well
+        # while the stock drifts down, or the reverse.
+        split = st.columns(2)
+        split[0].metric("Your options", _dollars(options_pl),
+                        help="The put side plus every call you have sold, "
+                             "including the premium you have banked. This is "
+                             "the part your covered call strategy controls.")
+        split[1].metric("Your shares", _dollars(shares_pl),
+                        help="What the 100 shares per contract have done since "
+                             "you bought them. You own these - the options are "
+                             "the trade running against them.")
+        o_word = "made" if options_pl >= 0 else "lost"
+        s_word = "up" if shares_pl >= 0 else "down"
+        theme.note(
+            f"Your **options have {o_word} \\${abs(options_pl):,.0f}** and your "
+            f"**shares are {s_word} \\${abs(shares_pl):,.0f}**, so the two "
+            f"together are **{'up' if open_pl >= 0 else 'down'} "
+            f"\\${abs(open_pl):,.0f}** right now. Your 50% profit target "
+            "applies to the short call on its own, not to any of these.")
+        return
+
     word = "up" if open_pl >= 0 else "down"
     theme.note(
         f"Closing everything today would leave you **{word} "
@@ -1044,6 +1073,45 @@ def render_debit_position_card(position, live: dict) -> None:
         f"(**{pct:+.1f}%**). Your 50% profit target applies to the short call "
         "on its own, not to this number - the long leg is a stock substitute "
         "you hold on to while the short calls earn.")
+
+
+def render_protection_read(position, read: dict) -> None:
+    """Where a covered call's downside protection holds, and what is below it.
+
+    Replaces "Max loss = what you paid", which was never the max loss: it
+    ignored the protective put on a collar and understated the ratio's tail,
+    where the two short puts make losses accelerate past the cash outlay.
+    """
+    zones = read["zones"]
+    flat_to, worst = read["flat_to"], read["worst_case"]
+    below = read["slope_below"]
+    sym = position.underlying
+
+    if flat_to is not None:
+        drop = ((flat_to - zones[0]["from"]) / zones[0]["from"] * 100)
+        line = (f"**You are flat all the way down to \\${flat_to:,.0f}** "
+                f"({drop:.0f}% from here) - the put side is carrying the "
+                f"shares that far. ")
+        if read["capped"]:
+            line += (f"Below that your loss stops at "
+                     f"**\\${abs(worst):,.0f}**, however far {sym} falls.")
+        else:
+            line += (f"Below \\${flat_to:,.0f} you lose about "
+                     f"**\\${abs(below):,.0f} for every \\$1** {sym} falls, "
+                     f"and at zero you would be down "
+                     f"**\\${abs(worst):,.0f}**.")
+    else:
+        first = zones[0]
+        line = (f"You lose about **\\${abs(first['slope']):,.0f} for every "
+                f"\\$1** {sym} falls, down to \\${first['to']:,.0f}. ")
+        if read["capped"]:
+            line += (f"Below \\${first['to']:,.0f} your protective put caps "
+                     f"the loss at **\\${abs(worst):,.0f}**, however far it "
+                     "falls.")
+        else:
+            line += (f"Below \\${first['to']:,.0f} it gets worse - at zero you "
+                     f"would be down **\\${abs(worst):,.0f}**.")
+    theme.note(line)
 
 
 def closed_dataframe(closed: list) -> pd.DataFrame:

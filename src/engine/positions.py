@@ -431,9 +431,16 @@ def position_value_from_chain(position: Position, chain,
     a position can sit at "you've kept 40% of the credit" while the LEAPS alone
     is up ten times that. This prices every leg so the card shows the real one.
 
-    Returns {"value": what unwinding it today would pay her (signed),
-             "open_pl": value + the ledger so far = profit if she closed now}
-    or None when the chain doesn't carry every contract needed.
+    Returns
+      value        what unwinding every leg today would pay her (signed)
+      open_pl      value + the ledger so far = profit if she closed now
+      options_pl   the same for the OPTIONS alone (covered calls only)
+      shares_pl    what the 100 real shares per contract have done (ditto)
+
+    On a covered call the shares are hers and the options are the trade run
+    against them, so those two are worth seeing apart: the calls can be earning
+    nicely while the stock drifts down, and one number hides that. They always
+    add back up to open_pl. None when the chain doesn't carry every contract.
     """
     if not position.legs or position.opened is None:
         return None
@@ -454,7 +461,9 @@ def position_value_from_chain(position: Position, chain,
         sign = 1.0 if leg.action == Action.BUY else -1.0
         value += sign * contract.mid * leg.quantity
 
-    value *= 100 * position.contracts
+    options_value = value * 100 * position.contracts
+    value = options_value
+    shares_pl = None
 
     if position.shares_cost > 0:
         # The covered call models hold 100 real shares per contract. They are
@@ -462,11 +471,119 @@ def position_value_from_chain(position: Position, chain,
         # position is only worth what it is with them counted at today's price.
         if not underlying_price or underlying_price <= 0:
             return None
-        value += underlying_price * 100 * position.contracts
+        shares_value = underlying_price * 100 * position.contracts
+        value += shares_value
+        shares_pl = shares_value - position.shares_cost
 
-    return {
+    out = {
         "value": round(value, 2),
         "open_pl": round(position.open_cash + position.roll_income + value, 2),
+    }
+    if shares_pl is not None:
+        # Taking the shares' cost back out of open_cash leaves what the OPTIONS
+        # alone cost to put on, so options_pl + shares_pl == open_pl.
+        options_cash = position.open_cash + position.shares_cost
+        out["options_pl"] = round(options_cash + position.roll_income
+                                  + options_value, 2)
+        out["shares_pl"] = round(shares_pl, 2)
+    return out
+
+
+# ------------------------------------------------------------------ downside read
+def expiry_value_at(position: Position, price: float) -> float:
+    """What the position would be worth if the underlying finished at `price`.
+
+    Intrinsic value only, plus the 100 real shares per contract on the covered
+    call models. Deliberately built from the LEGS and today's ledger rather than
+    the entry premiums, so it stays right after a roll has replaced the short
+    call.
+    """
+    value = price * 100 * position.contracts if position.shares_cost > 0 else 0.0
+    for leg in position.legs:
+        if leg.option_type == OptionType.PUT:
+            intrinsic = max(leg.strike - price, 0.0)
+        else:
+            intrinsic = max(price - leg.strike, 0.0)
+        sign = 1.0 if leg.action == Action.BUY else -1.0
+        value += sign * intrinsic * 100 * leg.quantity * position.contracts
+    return value
+
+
+def pl_at(position: Position, price: float) -> float:
+    """Her profit or loss if the underlying finished at `price`: every dollar
+    already banked, plus what the position would be worth there."""
+    return round(position.open_cash + position.roll_income
+                 + expiry_value_at(position, price), 2)
+
+
+def downside_zones(position: Position,
+                   underlying_price: Optional[float]) -> list[dict[str, Any]]:
+    """Walking DOWN from today's price, what each stretch of the fall costs.
+
+    The payoff of a protected covered call is a set of straight lines that kink
+    at the put strikes, so the honest answer to "how bad can this get" is not
+    one number - it is where the protection holds and where it stops. Each zone
+    is {from, to, slope, pl_from, pl_to} with slope in dollars lost per $1 the
+    underlying falls: 0 means that stretch is fully protected.
+
+    Model 1's collar goes flat below its long put (the loss is capped). Model
+    3's ratio goes flat down to the SHORT puts and then falls twice as fast
+    below them, which is exactly the SOP's "losses accelerate" warning.
+    """
+    if not underlying_price or underlying_price <= 0 or not position.legs:
+        return []
+    bounds = sorted({leg.strike for leg in position.legs
+                     if leg.option_type == OptionType.PUT
+                     and 0 < leg.strike < underlying_price}, reverse=True)
+    bounds.append(0.0)
+
+    zones: list[dict[str, Any]] = []
+    top = float(underlying_price)
+    for bottom in bounds:
+        drop = top - bottom
+        if drop <= 0:
+            continue
+        pl_top, pl_bottom = pl_at(position, top), pl_at(position, bottom)
+        zones.append({
+            "from": round(top, 2),
+            "to": round(bottom, 2),
+            "slope": round((pl_top - pl_bottom) / drop, 2),
+            "pl_from": pl_top,
+            "pl_to": pl_bottom,
+        })
+        top = bottom
+    return zones
+
+
+# A stretch counts as flat when a $1 fall costs under a dollar - i.e. the
+# protection is carrying it, give or take rounding on the strike grid.
+_FLAT = 1.0
+
+
+def protection_read(position: Position,
+                    underlying_price: Optional[float]) -> Optional[dict[str, Any]]:
+    """Where the downside protection holds and what it costs when it stops.
+
+    Replaces the old "max loss = what you paid" reading on the covered call
+    models, which was wrong in both directions: it ignored the protective put
+    entirely (Model 1's whole point) and understated Model 3's tail, where the
+    short puts make losses accelerate well past the cash she put in.
+    """
+    zones = downside_zones(position, underlying_price)
+    if not zones:
+        return None
+    first = zones[0]
+    return {
+        "zones": zones,
+        "pl_now": first["pl_from"],
+        # The price where the story changes - the first kink below today.
+        "break_price": first["to"],
+        # Set only when she is protected from TODAY down to that price.
+        "flat_to": first["to"] if abs(first["slope"]) < _FLAT else None,
+        "slope_below": zones[1]["slope"] if len(zones) > 1 else 0.0,
+        "worst_case": zones[-1]["pl_to"],
+        # True when the loss stops growing at the bottom (a collar's put cap).
+        "capped": abs(zones[-1]["slope"]) < _FLAT,
     }
 
 

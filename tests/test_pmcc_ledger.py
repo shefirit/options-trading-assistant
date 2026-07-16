@@ -25,16 +25,27 @@ import json
 from datetime import date, timedelta
 
 from src.data.chain import OptionChain, OptionContract
+from src.engine.config_loader import load_strategies
 from src.engine.models import Action, Leg, OptionType, Trade
 from src.engine.positions import (
     cost_to_close_from_chain,
     monthly_summary,
     parse_rows,
     performance,
+    pl_at,
     position_value_from_chain,
+    protection_read,
 )
+from src.engine.quick_log import legs_from_strategy, sizing_from_fill
 from src.logging_tools.row import (COLUMNS, build_close_row, build_roll_row,
                                    build_row)
+
+STRATS = load_strategies()
+
+
+def _qtrade(legs) -> Trade:
+    """A bare Trade for the sizing helpers - they only read legs/contracts."""
+    return Trade(strategy_key="x", underlying="MSFT", contracts=1, legs=legs)
 
 OPENED = date(2026, 3, 2)
 LEAPS_EXP = date(2027, 6, 18)
@@ -349,3 +360,160 @@ def test_close_row_written_before_the_ledger_still_parses():
 def test_a_roll_row_for_an_unknown_trade_is_ignored():
     """A stray roll must never conjure a phantom position into her results."""
     assert parse_rows(COLUMNS, [_roll_row()]) == []
+
+
+# ------------------------------------------------- the covered call downside read
+#
+# "Max loss = the cash you laid out" was never true on the covered call models.
+# It ignored the protective put (a collar's entire purpose) and understated the
+# ratio's tail, where two short puts lose faster than the shares ever could.
+# Invented numbers throughout - the repo is PUBLIC.
+
+RATIO_OPEN = date(2026, 3, 2)
+RATIO_PUT_EXP = date(2028, 1, 21)
+RATIO_CALL_EXP = date(2026, 4, 1)
+
+
+def _ratio_position(roll: bool = False):
+    """Model 3: 100 shares at 300, +1 300 put, -2 240 puts, -1 311 call."""
+    trade = Trade(
+        strategy_key="covered_call_model_3", underlying="MSFT", contracts=1,
+        legs=[
+            Leg(role="long_put_protection", action=Action.BUY,
+                option_type=OptionType.PUT, strike=300, premium=27.0,
+                dte=(RATIO_PUT_EXP - RATIO_OPEN).days),
+            Leg(role="short_put_ratio", action=Action.SELL,
+                option_type=OptionType.PUT, strike=240, premium=10.0,
+                quantity=2, dte=(RATIO_PUT_EXP - RATIO_OPEN).days),
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=311, premium=1.6,
+                dte=(RATIO_CALL_EXP - RATIO_OPEN).days),
+        ])
+    # 160 call + 2,000 short puts - 30,000 shares - 2,700 long put = -30,540
+    size = {"credit": 160.0, "max_loss": 48540.0, "buying_power": 30540.0,
+            "open_cash": -30540.0, "shares_cost": 30000.0}
+    rows = [build_row(trade, "Covered Call - Model 3: Zero Cost Ratio", size,
+                      True, "", trade_id="R1", opened_on=RATIO_OPEN,
+                      expiration_on=RATIO_CALL_EXP)]
+    return parse_rows(COLUMNS, rows)[0]
+
+
+def test_ratio_is_flat_to_the_short_puts_then_falls_twice_as_fast():
+    p = _ratio_position()
+    # Flat between the short puts and the long put: the long put covers the
+    # shares one-for-one and the short puts are not in the money yet.
+    assert pl_at(p, 295.0) == pl_at(p, 260.0) == pl_at(p, 240.0)
+    # Below the short puts: shares -100, long put +100, two short puts -200.
+    assert pl_at(p, 240.0) - pl_at(p, 230.0) == 2000.0        # $200 per $1
+    # The tail is WORSE than the cash she put in - the old "max loss" was
+    # 30,540 and understated the real risk by nearly 18,000.
+    assert pl_at(p, 0.0) == -48540.0
+
+
+def test_ratio_protection_read_names_the_break_and_the_tail():
+    p = _ratio_position()
+    r = protection_read(p, underlying_price=295.0)
+    assert r["flat_to"] == 240.0            # protected all the way down to here
+    assert r["slope_below"] == 200.0        # then $200 per $1
+    assert r["worst_case"] == -48540.0
+    assert r["capped"] is False             # the loss keeps growing
+    assert [z["slope"] for z in r["zones"]] == [0.0, 200.0]
+
+
+def test_collar_loses_to_the_put_then_the_loss_is_capped():
+    """Model 1 fails the OTHER way: its real max loss is small, but the old
+    reading quoted nearly the whole share cost."""
+    opened = date(2026, 3, 2)
+    trade = Trade(
+        strategy_key="covered_call_model_1", underlying="MSFT", contracts=1,
+        legs=[
+            Leg(role="long_put_protection", action=Action.BUY,
+                option_type=OptionType.PUT, strike=95, premium=3.0, dte=365),
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=110, premium=1.2, dte=30),
+        ])
+    # 120 call - 10,000 shares - 300 put = -10,180
+    size = {"credit": 120.0, "max_loss": 680.0, "buying_power": 10180.0,
+            "open_cash": -10180.0, "shares_cost": 10000.0}
+    row = build_row(trade, "Covered Call - Model 1", size, True, "",
+                    trade_id="C1", opened_on=opened,
+                    expiration_on=opened + timedelta(days=30))
+    p = parse_rows(COLUMNS, [row])[0]
+
+    r = protection_read(p, underlying_price=100.0)
+    assert r["flat_to"] is None             # she is exposed from 100 down to 95
+    assert r["zones"][0]["slope"] == 100.0  # $100 per $1, as 100 shares do
+    assert r["capped"] is True              # the put stops it below 95
+    # The put caps it: 500 of share fall + 300 put - 120 credit = 680. The old
+    # reading would have called this a 10,180 max loss.
+    assert r["worst_case"] == -680.0
+    assert pl_at(p, 0.0) == pl_at(p, 95.0) == -680.0
+
+
+def test_sizing_stores_the_real_worst_case_for_the_models():
+    """max_loss is written to her log, so it has to be the real number."""
+    ratio_legs = legs_from_strategy(
+        STRATS["covered_call_model_3"],
+        {"long_put_protection": 300, "short_put_ratio": 240, "short_call": 311},
+        dte=30, leaps_dte=690)
+    s = sizing_from_fill(_qtrade(ratio_legs), STRATS["covered_call_model_3"],
+                         credit_total=160.0, share_price=300.0,
+                         protection_cost_total=700.0)
+    # open_cash = 160 - 30,000 - 700 = -30,540; at zero the options are worth
+    # 30,000 - 48,000 = -18,000, so the worst case is 48,540 - NOT the 30,540
+    # of capital, which is what the old code stored.
+    assert s["open_cash"] == -30540.0
+    assert s["buying_power"] == 30540.0
+    assert s["max_loss"] == 48540.0
+
+    collar_legs = legs_from_strategy(
+        STRATS["covered_call_model_1"],
+        {"long_put_protection": 95, "short_call": 110}, dte=30, leaps_dte=365)
+    c = sizing_from_fill(_qtrade(collar_legs), STRATS["covered_call_model_1"],
+                         credit_total=120.0, share_price=100.0,
+                         protection_cost_total=300.0)
+    # The collar's put caps it at 680 even though 10,180 of cash went out.
+    assert c["open_cash"] == -10180.0
+    assert c["buying_power"] == 10180.0
+    assert c["max_loss"] == 680.0
+
+
+def test_options_and_shares_split_adds_back_to_the_whole():
+    p = _ratio_position()
+    chain = OptionChain(underlying="MSFT", underlying_price=295.0, contracts=[
+        OptionContract(option_type=OptionType.PUT, strike=300,
+                       expiration=RATIO_PUT_EXP.isoformat(), dte=690,
+                       bid=28.40, ask=28.60),
+        OptionContract(option_type=OptionType.PUT, strike=240,
+                       expiration=RATIO_PUT_EXP.isoformat(), dte=690,
+                       bid=10.60, ask=10.72),
+        OptionContract(option_type=OptionType.CALL, strike=311,
+                       expiration=RATIO_CALL_EXP.isoformat(), dte=30,
+                       bid=1.05, ask=1.13),
+    ])
+    v = position_value_from_chain(p, chain, underlying_price=295.0)
+    # options: +2,850 long put - 2,132 short puts - 109 call = 609
+    # shares : 295 x 100 = 29,500
+    assert v["value"] == 609.0 + 29500.0
+    assert v["shares_pl"] == 29500.0 - 30000.0          # -500
+    # options cash out = -30,540 + 30,000 shares = -540, so -540 + 609 = 69
+    assert v["options_pl"] == 69.0
+    # The two halves must always reconcile to the whole.
+    assert round(v["options_pl"] + v["shares_pl"], 2) == v["open_pl"]
+
+
+def test_every_priced_field_reaches_the_card():
+    """price_position() is the only path the card reads, and it dropped
+    options_pl/shares_pl on the way through: the split computed correctly and
+    the card still showed the blended number, because the provider listed the
+    keys it forwarded by hand. It now forwards whatever the engine returns, so
+    this pins the contract - a new field must arrive without touching provider.
+    """
+    import inspect
+
+    from src.data.provider import DataProvider
+
+    src = inspect.getsource(DataProvider.price_position)
+    assert "out.update(" in src, (
+        "price_position must forward the whole priced dict, not cherry-pick "
+        "keys - that is how the options/shares split went missing")
