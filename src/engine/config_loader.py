@@ -82,6 +82,23 @@ def underlying_kind(underlying: str) -> str:
     return "stock"
 
 
+def default_spread_width(underlying: str) -> float:
+    """The SOP spread width for this name, in points.
+
+    One place, because the width is a POINT distance and the SOP's tiers assume
+    an SPX-sized index. A name at a different scale needs the same rule applied
+    at its own scale, which is what the by_symbol overrides in settings.yaml
+    are for - XSP being one tenth of SPX is the case that forced it.
+    """
+    settings = load_settings()
+    cfg = settings.get("spread_widths", {}) or {}
+    u = underlying.upper()
+    for sym, width in (cfg.get("by_symbol", {}) or {}).items():
+        if str(sym).upper() == u:
+            return float(width)
+    return float(cfg.get(underlying_kind(u), 25))
+
+
 def is_european_style(underlying: str) -> bool:
     """True for cash-settled European-style index names (SPX, NDX, RUT, XSP).
 

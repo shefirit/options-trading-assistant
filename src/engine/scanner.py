@@ -36,10 +36,13 @@ def can_scan(strategy_key: str) -> bool:
 
 def _auto_width(underlying_price: float, symbol: Optional[str] = None) -> float:
     """A sensible spread width if the user does not pick one, per the SOP:
-    indexes and ETFs use ~$25-50, individual stocks ~$5-10."""
+    indexes and ETFs use ~$25-50, individual stocks ~$5-10.
+
+    Reads config so the per-name overrides apply here too - this used to answer
+    25 for XSP because it is an index, ignoring that it is a tenth of SPX."""
     if symbol is not None:
-        from src.engine.config_loader import underlying_kind
-        return 5.0 if underlying_kind(symbol) == "stock" else 25.0
+        from src.engine.config_loader import default_spread_width
+        return default_spread_width(symbol)
     # Fallback by price when the symbol is unknown.
     if underlying_price >= 1000:
         return 25.0

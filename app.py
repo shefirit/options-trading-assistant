@@ -908,6 +908,27 @@ def _underlying_prices(underlyings, provider) -> None:
                    f"{chg:+.2f}% today" if chg is not None else None)
 
 
+def _width_sanity_note(names: tuple, width) -> None:
+    """Say something when the width is far outside the SOP tier for these names.
+
+    The tier is a distance in POINTS, so it means different things on indexes at
+    different scales: 25 on SPX is a 0.33% spread, and the same 25 on XSP is
+    3.3% and risks ten times what she expects to risk there.
+    """
+    if not width:
+        return
+    from src.engine.config_loader import default_spread_width
+    for u in names:
+        want = default_spread_width(u)
+        if width > want * 2 + 1e-9:
+            theme.note(
+                f"**\\${width:,.0f} is wide for {u}.** Your SOP's range there is "
+                f"about **\\${want:g} to \\${want * 2:g}** - that is what keeps "
+                f"the max loss where you expect it. At \\${width:,.0f} you are "
+                f"risking **\\${width * 100:,.0f}** per contract.")
+            return
+
+
 def _tab_build(settings, strategies, provider) -> None:
     from src.data import stock_universe
     keys = list(strategies.keys())
@@ -950,17 +971,24 @@ def _tab_build(settings, strategies, provider) -> None:
     contracts = row[0].number_input("Contracts", min_value=1, max_value=50, value=1, step=1)
     width = None
     if uses_width:
-        from src.engine.config_loader import underlying_kind
-        # SOP width: individual stocks $5-10; indexes and ETFs $25-50. Default to the
-        # right tier for the picked names, resetting when you switch types.
-        kinds = {underlying_kind(u) for u in underlyings} if underlyings else {"index"}
-        default_width = 5.0 if kinds == {"stock"} else 25.0
-        if st.session_state.get("_prev_width_kinds") != kinds:
-            st.session_state["_prev_width_kinds"] = kinds
+        from src.engine.config_loader import default_spread_width
+        # SOP width: individual stocks $5-10; indexes and ETFs $25-50. Read per
+        # name from config so a smaller-scale index (XSP is a tenth of SPX) gets
+        # the rule at ITS scale, not a spread ten times too wide. The narrowest
+        # of the picked names wins - never default anyone into more risk.
+        picked = tuple(sorted(underlyings)) or ("SPX",)
+        default_width = min(default_spread_width(u) for u in picked)
+        if st.session_state.get("_prev_width_names") != picked:
+            st.session_state["_prev_width_names"] = picked
             st.session_state["build_width"] = default_width
-        width = row[1].number_input("Spread width ($)", min_value=1.0, max_value=200.0,
-                                    step=1.0, key="build_width",
-                                    help="SOP: individual stocks $5-10; indexes and ETFs $25-50.")
+        width = row[1].number_input(
+            "Spread width ($)", min_value=1.0, max_value=200.0,
+            step=1.0, key="build_width",
+            help="How far the strike you BUY sits from the strike you SELL - it "
+                 "sets your max loss. Your SOP: indexes and ETFs $25-50, "
+                 "individual stocks $5-10. XSP is a tenth of SPX, so $5 there is "
+                 "your $50 SPX trade at a tenth the size.")
+        _width_sanity_note(picked, width)
 
     sig = (strategy_key, tuple(underlyings), int(contracts), width)
     if st.session_state.get("build_sig") != sig:

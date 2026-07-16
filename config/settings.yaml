@@ -111,6 +111,24 @@ underlyings:
     - PG     # Procter & Gamble
     - JNJ    # Johnson & Johnson
 
+# How far the long (protection) strike sits from the short one, when you do not
+# set a width yourself. Your SOP: indexes and ETFs $25-50, individual stocks
+# $5-10.
+spread_widths:
+  index: 25
+  etf: 25
+  stock: 5
+  # Names whose scale breaks the tier above. The SOP's $25-50 was written for
+  # SPX-sized indexes; it is a width in POINTS, so on a smaller index it buys a
+  # far wider spread.
+  by_symbol:
+    # XSP is one tenth of SPX (about 753 against 7,535). At 25 it would be a
+    # 3.3% wide spread risking ~$2,400 a contract - SPX money on the index you
+    # would pick precisely to trade smaller, and a worse return on risk for it
+    # (about 12% against 19%). At 5 it is exactly your 50-wide SPX trade at one
+    # tenth the size: same 0.66% of the index, same return, ~$420 at risk.
+    XSP: 5
+
 # The Notion hub this app mirrors.
 notion:
   hub_url: "https://app.notion.com/p/38803e90e032812d8958c92992c269ed"
