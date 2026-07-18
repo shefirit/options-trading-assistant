@@ -1170,13 +1170,18 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
     m[3].metric("Average winner", f"${perf['avg_win']:,.0f}" if perf["avg_win"] is not None else "-")
     m[4].metric("Average loser", f"${perf['avg_loss']:,.0f}" if perf["avg_loss"] is not None else "-")
 
-    # Buying power tied up across every open trade - the real monthly-limit view.
+    # Worst-case capital tied up by trades opened THIS month, vs the monthly
+    # budget. A gross sum of max losses - not broker buying power, which nets
+    # positions and reads lower. See positions.bp_in_use_this_month.
     used_pct = (bp_used / bp_limit) if bp_limit else 0.0
     tone = theme.RED if used_pct > 1.0 else theme.AMBER if used_pct > 0.8 else theme.GREEN
     st.markdown(
         f"<div style='margin-top:6px;font-weight:700;color:{tone};'>"
-        f"Open trades are using {_dollars(bp_used)} of your {_dollars(bp_limit)} monthly "
-        f"buying-power limit ({used_pct * 100:.0f}%).</div>",
+        f"Worst-case capital at risk this month: {_dollars(bp_used)} of your "
+        f"{_dollars(bp_limit)} monthly limit ({used_pct * 100:.0f}%).</div>"
+        f"<div style='font-size:.85rem;font-weight:500;color:{theme.MUTED};'>"
+        f"A gross sum of each trade's max loss - not your broker's buying power, "
+        f"which nets positions and will show less used.</div>",
         unsafe_allow_html=True)
     st.progress(min(used_pct, 1.0))
 

@@ -426,6 +426,23 @@ def bp_in_use(positions: list[Position]) -> float:
     return sum(p.buying_power for p in open_positions(positions))
 
 
+def bp_in_use_this_month(positions: list[Position], today: date | None = None) -> float:
+    """Worst-case capital tied up by trades OPENED this calendar month that are
+    still open - the figure that counts against the monthly buying-power budget.
+
+    This is a gross sum of each trade's max loss / collateral, not real broker
+    buying power: your broker nets and offsets positions against each other, so
+    this will read higher than the buying power your platform shows used. It is
+    a worst-case guardrail, not a margin figure. Trades opened in earlier months
+    (even if still open) do not count against THIS month's deployment."""
+    ref = today or date.today()
+    return sum(
+        p.buying_power for p in open_positions(positions)
+        if p.opened is not None
+        and p.opened.year == ref.year and p.opened.month == ref.month
+    )
+
+
 # ------------------------------------------------------------------ live pricing math
 def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, float]]:
     """What it costs to close the position's near-dated legs at today's mids.

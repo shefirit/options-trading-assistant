@@ -10,6 +10,7 @@ from src.engine.positions import (
     Position,
     _to_date,
     bp_in_use,
+    bp_in_use_this_month,
     closed_positions,
     cost_to_close_from_chain,
     monthly_summary,
@@ -91,6 +92,34 @@ def test_bp_in_use_counts_only_open_trades():
     ]
     positions = parse_rows(COLUMNS, rows)
     assert bp_in_use(positions) == 2200.0
+
+
+def test_bp_in_use_this_month_ignores_trades_opened_earlier_months():
+    today = date(2026, 7, 18)
+    last_month = date(2026, 6, 10)
+    rows = [
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="THIS", opened_on=today),
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="OLD", opened_on=last_month),
+    ]
+    positions = parse_rows(COLUMNS, rows)
+    # All-open sum sees both; the monthly figure only counts July's trade.
+    assert bp_in_use(positions) == 4400.0
+    assert bp_in_use_this_month(positions, today=today) == 2200.0
+
+
+def test_bp_in_use_this_month_excludes_closed_trades():
+    today = date(2026, 7, 18)
+    rows = [
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="OPEN", opened_on=today),
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="SHUT", opened_on=today),
+        build_close_row("SHUT", "SPX", "Put Credit Spread", 150.0, 150.0, "50%"),
+    ]
+    positions = parse_rows(COLUMNS, rows)
+    assert bp_in_use_this_month(positions, today=today) == 2200.0
 
 
 def test_cost_to_close_from_chain():
