@@ -107,26 +107,54 @@ def _fast_last_price(t) -> Optional[float]:
             return None
 
 
-def is_available(timeout: float = 8.0) -> bool:
+# How long the reachability probe gets. A cold process pays for the whole TLS
+# handshake to Yahoo on its very first call, and that routinely runs past ten
+# seconds - the old 8s budget lost that race on a normal connection and dropped
+# the app into demo mode, where SAMPLE numbers look exactly like real ones. A
+# slow start is the cheaper mistake, so the first attempt gets room to breathe.
+PROBE_TIMEOUT = 25.0
+# The retry rides the connection the first attempt already opened, so it only
+# needs enough time for one warm round trip.
+PROBE_RETRY_TIMEOUT = 8.0
+
+
+def _probe() -> bool:
+    """One round trip to Yahoo. True only if a real price came back."""
+    try:
+        import yfinance as yf  # noqa: F401
+        return _fast_last_price(_ticker("SPY")) is not None
+    except Exception:
+        return False
+
+
+def is_available(timeout: float = PROBE_TIMEOUT, tries: int = 2) -> bool:
     """True if yfinance is installed and Yahoo is reachable right now.
 
-    Runs with a hard timeout so a slow/blocked network (common on cloud hosts)
-    can never hang the app's startup - it just falls back to demo data instead.
+    Each attempt runs under a hard timeout so a slow or blocked network (common
+    on cloud hosts) can never hang the app's startup. A failed attempt is tried
+    once more, because the first one leaves the connection open behind it and
+    the second then answers straight away.
+
+    Getting this wrong in the "no" direction is the dangerous one: the app falls
+    back to demo data, and sample prices on screen read exactly like real ones.
     """
     import concurrent.futures
 
-    def _check() -> bool:
+    for attempt in range(max(int(tries), 1)):
+        budget = timeout if attempt == 0 else min(timeout, PROBE_RETRY_TIMEOUT)
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            import yfinance as yf  # noqa: F401
-            return _fast_last_price(_ticker("SPY")) is not None
+            if ex.submit(_probe).result(timeout=budget):
+                return True
         except Exception:
-            return False
-
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            return ex.submit(_check).result(timeout=timeout)
-    except Exception:
-        return False
+            pass
+        finally:
+            # Deliberately not waiting: a probe we gave up on keeps finishing
+            # its handshake in the background, which is what makes the retry
+            # fast. Waiting here would blow straight through the timeout - the
+            # one thing this function exists to guarantee.
+            ex.shutdown(wait=False)
+    return False
 
 
 def get_price(underlying: str) -> Optional[float]:
