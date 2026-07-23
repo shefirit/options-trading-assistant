@@ -899,6 +899,17 @@ h2{font-size:clamp(1.35rem,3vw,1.65rem);margin:0;letter-spacing:-.02em;
   text-wrap:balance;font-weight:800;}
 h3{font-size:1.02rem;margin:0;font-weight:700;letter-spacing:-.01em;}
 p{margin:0;} .stack{display:flex;flex-direction:column;gap:1rem;}
+.theme-toggle{position:fixed;top:.85rem;right:.85rem;z-index:100;
+  display:inline-flex;align-items:center;gap:.4rem;font:inherit;font-size:.78rem;
+  font-weight:800;letter-spacing:.03em;padding:.45rem .75rem;border-radius:999px;
+  cursor:pointer;background:var(--card);color:var(--ink);border:1px solid var(--ring);
+  box-shadow:var(--shadow);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
+.theme-toggle:hover{border-color:var(--accent);}
+.theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.tt-icon{font-size:.95rem;line-height:1;}
+@media print{.theme-toggle{display:none;}}
+@media (max-width:640px){.mh-sym{display:none;}.tt-label{display:none;}
+  .theme-toggle{padding:.5rem;}}
 .eyebrow{font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;
   color:var(--accent-ink);margin:0;font-weight:800;display:flex;align-items:center;
   gap:.5rem;}
@@ -1286,6 +1297,10 @@ def render(d: dict) -> str:
 
     return f'''<title>{_e(sym)} research note</title>
 <style>{CSS}</style>
+<button id="themeToggle" class="theme-toggle" type="button"
+  aria-label="Switch between light and dark mode">
+  <span class="tt-icon">&#9789;</span><span class="tt-label">Dark</span>
+</button>
 <div class="wrap">
 
   <header class="masthead">
@@ -1334,4 +1349,40 @@ def render(d: dict) -> str:
     Fundamentals as last reported by the company.</p>
   </footer>
 
-</div>'''
+</div>
+<script>
+(function(){{
+  var btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  var root = document.documentElement;
+  function effective(){{
+    var t = root.getAttribute('data-theme');
+    if (t === 'dark' || t === 'light') return t;
+    return (window.matchMedia &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }}
+  function paint(){{
+    var dark = effective() === 'dark';
+    btn.querySelector('.tt-icon').innerHTML = dark ? '&#9728;' : '&#9789;';
+    btn.querySelector('.tt-label').textContent = dark ? 'Light' : 'Dark';
+    btn.setAttribute('aria-label',
+      dark ? 'Switch to light mode' : 'Switch to dark mode');
+  }}
+  try {{
+    var saved = localStorage.getItem('report-theme');
+    if (saved === 'dark' || saved === 'light') root.setAttribute('data-theme', saved);
+  }} catch (e) {{}}
+  paint();
+  btn.addEventListener('click', function(){{
+    var next = effective() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);   // the chart's observer re-themes it
+    try {{ localStorage.setItem('report-theme', next); }} catch (e) {{}}
+    paint();
+  }});
+  if (window.matchMedia) {{
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    var onSys = function(){{ if (!root.getAttribute('data-theme')) paint(); }};
+    mq.addEventListener ? mq.addEventListener('change', onSys) : mq.addListener(onSys);
+  }}
+}})();
+</script>'''
