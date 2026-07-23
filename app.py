@@ -89,10 +89,21 @@ from src.data.market_read import days_phrase as _days_phrase  # noqa: E402
 
 # ------------------------------------------------------------------ main
 def _mode_badge(provider) -> tuple[str, str]:
-    tone = {"schwab": "green", "yahoo": "green", "demo": "amber"}[provider.mode]
+    # Demo is red, not amber, and says what the numbers actually are. Sample
+    # prices look exactly like real ones on screen, so a quiet badge is the one
+    # thing this must never be.
+    tone = {"schwab": "green", "yahoo": "green", "demo": "red"}[provider.mode]
     text = {"schwab": "● LIVE · real-time", "yahoo": "● REAL · 15 min delayed",
-            "demo": "● DEMO · sample data"}[provider.mode]
+            "demo": "⚠ DEMO · FAKE numbers · do not trade"}[provider.mode]
     return text, tone
+
+
+DEMO_WARNING = (
+    "### ⚠️ Demo mode - every number below is FAKE\n"
+    "Live market data could not be reached, so the app is showing bundled **sample** "
+    "prices, chains and premiums. They look real and they are not. **Do not place a "
+    "trade off anything on this screen.** Check your internet connection and reload "
+    "the page.")
 
 
 def _log_badge() -> tuple[str, str]:
@@ -128,6 +139,10 @@ def main() -> None:
         "Read the market, get today's picks, screen premium, analyze a name, build and "
         "check the trade.",
         [_mode_badge(provider), _log_badge()])
+
+    # Above the tabs, so it is on screen whichever tab she is reading.
+    if provider.mode == "demo":
+        st.error(DEMO_WARNING)
 
     t_market, t_picks, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
         ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Find a trade", "📒 My trades",
@@ -2105,8 +2120,7 @@ def _data_mode_note(provider) -> None:
     text, tone = _mode_badge(provider)
     st.markdown(theme.chip(text, tone), unsafe_allow_html=True)
     if provider.mode == "demo":
-        st.info("Offline - showing sample prices. Connect to the internet for real market "
-                "data, or set up Schwab for true real-time.")
+        st.error(DEMO_WARNING)
     elif provider.mode == "yahoo":
         theme.note("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
 

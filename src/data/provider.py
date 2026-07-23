@@ -32,9 +32,18 @@ from src.data.market_context import (
 )
 from src.data.schwab_client import SchwabClient
 from src.data.stock_analysis import StockAnalysis
+from src.engine.models import OptionType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_DIR = PROJECT_ROOT / "sample_data"
+
+# What a chain has to look like before the premium read can do anything with it.
+# The CBOE feed sprinkles thin weeklies among the real expirations: a couple of
+# dozen strikes hugging the money, no deltas at all. Landing on one made the
+# Premium tab say "No sellable put found" for names as liquid as SPY.
+MIN_PUTS = 20             # a real strike ladder, not a stub
+STRIKE_REACH = 0.93       # strikes must run at least this far below spot
+EXPIRATION_WINDOW = 15    # days either side of the target we'll look in
 
 _DEMO_FILES = {
     "SPX": "spx_chain.json", "NDX": "spx_chain.json",
@@ -104,15 +113,59 @@ class DataProvider:
                            fetched_at=chain.fetched_at, contracts=kept)
 
     @staticmethod
-    def _nearest_expiration(chain: OptionChain, target_dte: int) -> OptionChain:
+    def _only(chain: OptionChain, contracts: list) -> OptionChain:
+        """The same chain, narrowed to one expiration's contracts."""
+        return OptionChain(underlying=chain.underlying, underlying_price=chain.underlying_price,
+                           fetched_at=chain.fetched_at, contracts=contracts)
+
+    @classmethod
+    def _nearest_expiration(cls, chain: OptionChain, target_dte: int) -> OptionChain:
         if not chain.contracts:
             return chain
         exp = min({c.expiration for c in chain.contracts},
                   key=lambda e: abs(next(c.dte for c in chain.contracts if c.expiration == e)
                                     - target_dte))
-        kept = [c for c in chain.contracts if c.expiration == exp]
-        return OptionChain(underlying=chain.underlying, underlying_price=chain.underlying_price,
-                           fetched_at=chain.fetched_at, contracts=kept)
+        return cls._only(chain, [c for c in chain.contracts if c.expiration == exp])
+
+    @staticmethod
+    def _is_tradable(contracts: list, price: float) -> bool:
+        """Can you actually pick a put to sell out of this expiration?
+
+        Three ways a chain fails that: too few strikes to be a real ladder, no
+        deltas at all (so the ~0.30 delta pick has nothing to sort on), or a
+        strike band that stops short of the ground the sold put needs to sit on.
+        """
+        puts = [c for c in contracts if c.option_type == OptionType.PUT]
+        if len(puts) < MIN_PUTS or not any(c.abs_delta > 0 for c in puts):
+            return False
+        return not price or min(c.strike for c in puts) <= price * STRIKE_REACH
+
+    @classmethod
+    def _tradable_expiration(cls, chain: OptionChain, target_dte: int,
+                             window: int = EXPIRATION_WINDOW) -> OptionChain:
+        """The expiration nearest target_dte that you can actually trade from.
+
+        Picking purely by "closest to the target DTE" lands on thin weeklies.
+        SPY at 45 DTE picked one holding 29 puts, a 735-763 strike band against
+        a 742.97 spot, and every delta 0.0 - so the premium finder had nothing
+        to offer and the panel read "No sellable put found" for one of the most
+        liquid names on the board. So look across a window either side of the
+        target and keep only the expirations that pass _is_tradable.
+
+        If none do, still hand back the nearest one: a thin chain the caller can
+        judge for itself is a better answer than no chain at all.
+        """
+        if not chain.contracts:
+            return chain
+        by_exp: dict[str, list] = {}
+        for c in chain.contracts:
+            by_exp.setdefault(c.expiration, []).append(c)
+        usable = [(abs(cs[0].dte - target_dte), exp, cs) for exp, cs in by_exp.items()
+                  if abs(cs[0].dte - target_dte) <= window
+                  and cls._is_tradable(cs, chain.underlying_price)]
+        if not usable:
+            return cls._nearest_expiration(chain, target_dte)
+        return cls._only(chain, min(usable, key=lambda t: (t[0], t[1]))[2])
 
     def get_chain(self, underlying: str, dte_min: Optional[int] = None,
                  dte_max: Optional[int] = None) -> OptionChain:
@@ -135,12 +188,22 @@ class DataProvider:
                 lambda: yfinance_client.get_option_chain(underlying, from_dte=lo, to_dte=hi), 120)
         return self._demo_chain(underlying)
 
-    def _expiration_chain(self, symbol: str, target_dte: int) -> Optional[OptionChain]:
-        """One expiration nearest target_dte, same source order as get_chain."""
+    def _expiration_chain(self, symbol: str, target_dte: int,
+                          tradable: bool = False) -> Optional[OptionChain]:
+        """One expiration near target_dte, same source order as get_chain.
+
+        tradable=False takes the expiration nearest the target, full stop. That
+        is what pricing an OPEN position needs: her trade sits on one specific
+        expiration and must be priced on that one, thin or not.
+
+        tradable=True is for picking a NEW trade, where any expiration in the
+        neighbourhood will do and a thin weekly is simply the wrong one to show.
+        """
         if self.is_real:
             full = self._cboe_full(symbol)
             if full is not None:
-                return self._nearest_expiration(full, target_dte)
+                return (self._tradable_expiration(full, target_dte) if tradable
+                        else self._nearest_expiration(full, target_dte))
         if self.mode == "yahoo":
             return yfinance_client.get_expiration_chain(symbol, target_dte)
         return None
@@ -167,7 +230,8 @@ class DataProvider:
         """A far-dated chain (~7 months out) for a PMCC's long LEAPS. Real data only."""
         underlying = underlying.upper()
         return cache.get_or_fetch(
-            f"leaps:{underlying}", lambda: self._expiration_chain(underlying, target_dte), 300)
+            f"leaps:{underlying}",
+            lambda: self._expiration_chain(underlying, target_dte, tradable=True), 300)
 
     # ---------- market read (lightweight - no full option chain fetch) ----------
     def get_market_context(self, underlying: str) -> MarketContext:
@@ -366,7 +430,7 @@ class DataProvider:
 
         def _fetch():
             from src.data import stock_universe
-            chain = self._expiration_chain(symbol, target_dte)
+            chain = self._expiration_chain(symbol, target_dte, tradable=True)
             if chain is None:
                 chain = yfinance_client.get_expiration_chain(symbol, target_dte)
             closes = yfinance_client.get_history_closes(symbol, period="6mo")

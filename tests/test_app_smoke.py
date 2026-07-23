@@ -58,6 +58,20 @@ def test_picks_tab_stays_offline_in_demo_mode(demo_app):
     assert "Today's picks need real market data" in infos
 
 
+def test_demo_mode_shouts_that_the_numbers_are_fake(demo_app):
+    """Sample prices look exactly like real ones on screen. When the live feed
+    can't be reached the app has to say so loudly, above the tabs, on every
+    screen - a quiet amber badge is not enough to trade safely around."""
+    at = demo_app.run()
+    errors = " ".join(str(e.value) for e in at.error)
+    assert "Demo mode" in errors and "FAKE" in errors
+    assert "Do not place a trade" in errors
+    # And the badge in the hero has to match, not read like business as usual.
+    all_md = " ".join(str(m.value) for m in at.markdown)
+    assert "DEMO · FAKE numbers · do not trade" in all_md
+    assert "ota-chip-red" in all_md
+
+
 def test_settings_tab_shows_connections_and_plan(demo_app):
     at = demo_app.run()
     all_md = " ".join(str(m.value) for m in at.markdown)
