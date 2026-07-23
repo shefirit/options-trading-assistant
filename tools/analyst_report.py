@@ -84,56 +84,16 @@ def _days_until(d) -> int | None:
     return (d - dt.date.today()).days
 
 
-def _best_chain(provider: DataProvider, symbol: str, dte: int):
-    """The expiration nearest `dte` that actually has usable data.
-
-    The provider's own nearest-expiration pick can land on a thin weekly where
-    the CBOE feed returns a narrow strike band and all deltas are zero, which
-    makes the premium read come back empty. So we look across a +/-15 day window
-    and keep only expirations with real deltas and a wide enough strike ladder,
-    then take the one closest to the target.
-    """
-    chain = _safe(lambda: provider.get_chain(symbol, max(dte - 15, 1), dte + 15), None)
-    if not chain or not getattr(chain, "contracts", None):
-        return None
-
-    by_exp: dict = {}
-    for c in chain.contracts:
-        by_exp.setdefault(c.expiration, []).append(c)
-
-    usable = []
-    for exp, contracts in by_exp.items():
-        puts = [c for c in contracts if c.option_type.value == "put"]
-        if len(puts) < 20:
-            continue
-        if not any(c.abs_delta > 0 for c in puts):
-            continue
-        price = chain.underlying_price or 0
-        # needs strikes far enough below spot to hold a 0.30 delta short put
-        if price and min(c.strike for c in puts) > price * 0.93:
-            continue
-        usable.append((abs(contracts[0].dte - dte), exp, contracts))
-
-    if not usable:
-        return None
-    _, _, best = min(usable, key=lambda t: t[0])
-    return type(chain)(underlying=chain.underlying,
-                       underlying_price=chain.underlying_price,
-                       fetched_at=chain.fetched_at, contracts=best)
-
-
 def _premium_picture(provider: DataProvider, symbol: str, dte: int):
-    """premium_finder.snapshot() over a chain we know is populated."""
-    chain = _best_chain(provider, symbol, dte)
-    if chain is None:
-        return None
-    closes = _safe(lambda: yfinance_client.get_history_closes(symbol, period="6mo"), [])
-    hv = premium_finder.annualized_vol(closes) if isinstance(closes, list) and closes else None
-    trend = trend_from_prices(closes) if isinstance(closes, list) and closes else "unknown"
-    earnings, _ = _safe(lambda: yfinance_client.get_calendar_dates(symbol), (None, None))
-    return _safe(lambda: premium_finder.snapshot(
-        symbol, chain, hv, trend=trend, monthly_bp=50_000,
-        earnings_date=earnings if isinstance(earnings, dt.date) else None), None)
+    """The premium read, straight from the provider.
+
+    This used to assemble its own chain, because the provider's expiration pick
+    could land on a thin weekly and come back with nothing sellable. The
+    provider now does that search itself, so asking it directly gives the same
+    answer the app shows - which is the point: the report and the app should
+    never disagree about what a name pays.
+    """
+    return _safe(lambda: provider.get_premium_snapshot(symbol, target_dte=dte), None)
 
 
 def report(symbol: str, provider: DataProvider, dte: int) -> None:
@@ -298,17 +258,7 @@ def main() -> None:
                     help="days to expiration to price the options picture at (default 45)")
     args = ap.parse_args()
 
-    # Warm the connection first. DataProvider.create() probes Yahoo with a hard
-    # 8s timeout, and the very first TLS handshake of a cold run can exceed that,
-    # which silently drops the whole report into demo mode. One untimed call
-    # opens the connection so the probe that follows answers instantly.
-    _safe(lambda: yfinance_client.get_price("SPY"))
-
     provider = DataProvider.create()
-    if provider.mode == "demo":
-        print("NOTE: could not reach live market data - retrying once...")
-        _safe(lambda: yfinance_client.get_price("SPY"))
-        provider = DataProvider.create()
     if provider.mode == "demo":
         print("WARNING: running on SAMPLE data. Every number below is fake and "
               "must not be used for a real trade decision.")
