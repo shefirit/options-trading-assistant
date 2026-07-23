@@ -936,14 +936,31 @@ p{margin:0;} .stack{display:flex;flex-direction:column;gap:1rem;}
   gap:.35rem;}
 .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;
   opacity:.9;}
-.chip.good{background:rgba(12,163,12,.16);color:#7ee6a2;}
-.chip.warn{background:rgba(240,165,26,.18);color:#facb6b;}
-.chip.crit{background:rgba(208,59,59,.18);color:#ff9f9b;}
+/* Default chips (on light cards, e.g. the outlook scenarios) read dark-on-tint. */
+.chip.good{background:#cfeed9;color:#0a6e30;}
+.chip.warn{background:#f6e3b4;color:#8a5600;}
+.chip.crit{background:#f7d2d2;color:#9e2222;}
+/* On the dark masthead band the same chips flip to bright-on-translucent. */
+.masthead .chip.good{background:rgba(12,163,12,.20);color:#8ff0b0;}
+.masthead .chip.warn{background:rgba(240,165,26,.22);color:#ffd280;}
+.masthead .chip.crit{background:rgba(208,59,59,.22);color:#ffaca8;}
 
 .card{background:var(--card);border:1px solid var(--ring);border-radius:14px;
   padding:1.4rem 1.5rem;display:flex;flex-direction:column;gap:.95rem;
   box-shadow:var(--shadow);}
 .card.accent{border-left:4px solid var(--accent);}
+/* The three outlook scenarios become bright, distinct callout cards - kept light
+   with dark text in BOTH themes so the label and prose stay crisp. The only
+   .card elements that contain a chip are these three. */
+.card:has(.chip.good),.card:has(.chip.warn),.card:has(.chip.crit){color:#20201a;}
+.card:has(.chip.good) strong,.card:has(.chip.warn) strong,
+.card:has(.chip.crit) strong{color:#111;}
+.card:has(.chip.good){background:#e6f6ec;border-color:#b0dcbe;
+  border-left:4px solid var(--good);}
+.card:has(.chip.warn){background:#fdf3d8;border-color:#e9d29a;
+  border-left:4px solid var(--warning);}
+.card:has(.chip.crit){background:#fde3e3;border-color:#f0bcbc;
+  border-left:4px solid var(--critical);}
 .lead{font-size:1.2rem;line-height:1.5;text-wrap:pretty;font-weight:600;
   letter-spacing:-.01em;}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));
