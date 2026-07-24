@@ -37,7 +37,7 @@ from src.engine.config_loader import allowed_underlyings_for, load_settings, loa
 from src.engine.models import Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
-from ui import components, theme
+from ui import components, theme, tv_chart
 
 st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
 theme.inject()
@@ -889,6 +889,10 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
             st.info("The full name check needs real data.")
             return
         _stock_overview_block(sym, provider, key_prefix=key_prefix)
+
+    # The live chart draws itself in the browser, so it works on any data mode.
+    st.divider()
+    tv_chart.render(sym, kind=kind, key_prefix=key_prefix)
 
 
 # ------------------------------------------------------------------ Find a trade tab
