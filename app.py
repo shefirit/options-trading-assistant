@@ -890,9 +890,8 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
             return
         _stock_overview_block(sym, provider, key_prefix=key_prefix)
 
-    # The live chart draws itself in the browser, so it works on any data mode.
     st.divider()
-    tv_chart.render(sym, kind=kind, key_prefix=key_prefix)
+    tv_chart.render(sym, provider, kind=kind, key_prefix=key_prefix)
 
 
 # ------------------------------------------------------------------ Find a trade tab

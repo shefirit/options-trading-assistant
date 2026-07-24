@@ -405,6 +405,19 @@ class DataProvider:
         return cache.get_or_fetch(f"pxframe:{symbol}:{period}",
                                   lambda: yfinance_client.get_price_frame(symbol, period), 600)
 
+    def get_ohlc(self, symbol: str, period: str = "2y", interval: str = "1d"):
+        """Candle bars for the Analyze tab's chart. None when we have no real data.
+
+        Unlike get_price_frame this runs in Schwab mode too - price HISTORY comes
+        from Yahoo's chart endpoint either way, and the Schwab connection only
+        replaces the option chain and live quote.
+        """
+        if not self.is_real:
+            return None
+        return cache.get_or_fetch(
+            f"ohlc:{symbol}:{period}:{interval}",
+            lambda: yfinance_client.get_ohlc_frame(symbol, period, interval), 600)
+
     # ---------- TradingView second-opinion technical rating ----------
     def get_tradingview(self, symbol: str, is_index: bool = False) -> dict:
         """TradingView's Buy/Sell rating (daily + weekly). Needs internet."""

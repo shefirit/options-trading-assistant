@@ -531,6 +531,30 @@ def get_price_frame(underlying: str, period: str = "1y"):
         return None
 
 
+def get_ohlc_frame(underlying: str, period: str = "2y", interval: str = "1d"):
+    """Open/high/low/close/volume bars for the candle chart. None on failure.
+
+    Same history endpoint as get_price_frame (the one that keeps working from
+    hosted datacenter IPs when the option-chain endpoint is throttled), just
+    keeping every column the candles need rather than the close alone.
+    """
+    try:
+        hist = _ticker(underlying).history(period=period, interval=interval)
+        if hist is None or len(hist) == 0:
+            return None
+        cols = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in hist.columns]
+        if not {"Open", "High", "Low", "Close"}.issubset(set(cols)):
+            return None
+        df = hist[cols].copy()
+        try:
+            df.index = df.index.tz_localize(None)
+        except (TypeError, AttributeError):
+            pass          # already naive - some intervals come back without a tz
+        return df.dropna(subset=["Open", "High", "Low", "Close"])
+    except Exception:
+        return None
+
+
 def get_earnings_info(underlying: str) -> dict[str, Any]:
     """Next earnings/ex-div dates plus analyst EPS & revenue estimates."""
     import datetime as _dt
