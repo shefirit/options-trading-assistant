@@ -433,6 +433,136 @@ class DataProvider:
 
         return cache.get_or_fetch(f"tv:{symbol}:{is_index}", _fetch, 600)
 
+    # ---------- research tools (seasonality, analyst, LEAPS, valuation) ----------
+    def get_long_closes(self, symbol: str, period: str = "20y") -> list[float]:
+        """As many years of daily closes as Yahoo will give us.
+
+        Everything in the Research tab that talks about "how often has this
+        stock actually done that" rides on this one call, so it is cached hard
+        (a day) - twenty years of history does not change intraday.
+        """
+        symbol = symbol.upper()
+        if not self.is_real:
+            return []
+
+        def _fetch() -> list[float]:
+            frame = yfinance_client.get_price_frame(symbol, period)
+            if frame is None or len(frame) == 0:
+                return []
+            return [float(c) for c in frame["Close"] if c and float(c) > 0]
+
+        return cache.get_or_fetch(f"longcloses:{symbol}:{period}", _fetch, 24 * 3600) or []
+
+    def get_seasonality(self, symbol: str, lookback_years: int = 20):
+        """Month-by-month history. Uses Yahoo's adjusted closes, so these are
+        TOTAL returns with dividends reinvested - the right basis for asking
+        what owning it through a month actually paid."""
+        symbol = symbol.upper()
+        if not self.is_real:
+            return None
+
+        def _fetch():
+            from src.research import seasonality
+            frame = yfinance_client.get_price_frame(symbol, "max")
+            points = seasonality.frame_to_points(frame)
+            return seasonality.build(symbol, points, max_years=lookback_years)
+
+        return cache.get_or_fetch(f"season:{symbol}:{lookback_years}", _fetch, 24 * 3600)
+
+    def get_analyst_view(self, symbol: str):
+        """Consensus rating and targets, with the historical reality check."""
+        symbol = symbol.upper()
+        if not self.is_real:
+            return None
+
+        def _fetch():
+            from src.research import analyst
+            info = yfinance_client.get_fundamentals(symbol)
+            price = (info.get("currentPrice") or info.get("regularMarketPrice")
+                     or yfinance_client.get_price(symbol))
+            return analyst.build(symbol, price, yfinance_client.get_analyst_ratings(symbol),
+                                 info, self.get_long_closes(symbol))
+
+        return cache.get_or_fetch(f"analystview:{symbol}", _fetch, 3600)
+
+    def get_options_view(self, symbol: str, target_dte: int = 30):
+        """Implied volatility, expected move and put/call sentiment."""
+        symbol = symbol.upper()
+
+        def _fetch():
+            from src.research import options_view
+            chain = self.get_chain(symbol, dte_min=1, dte_max=400)
+            if chain is None or not chain.contracts:
+                return None
+            return options_view.build(chain, self.get_long_closes(symbol), target_dte)
+
+        return cache.get_or_fetch(f"optview:{symbol}:{target_dte}", _fetch, 300)
+
+    def get_leaps_candidate(self, symbol: str, target_delta: float = 0.75):
+        """The full LEAPS scorecard for one stock: chart, quality, the real
+        contract's economics, and the odds from its own history."""
+        symbol = symbol.upper()
+
+        def _fetch():
+            from src.research import leaps
+            closes = self.get_long_closes(symbol)
+            info = yfinance_client.get_fundamentals(symbol) if self.is_real else {}
+            candidate = leaps.score_setup(symbol, closes, market_cap=info.get("marketCap"),
+                                          info=info)
+            chain = self.get_leaps_chain(symbol, target_dte=400)
+            if chain is None:
+                chain = self.get_chain(symbol, dte_min=200, dte_max=800)
+            iv_pct = None
+            if chain is not None:
+                contract = leaps.pick_contract(chain, target_delta)
+                if contract is not None and contract.iv:
+                    iv_pct = leaps.vol_percentile(closes, contract.iv * 100)
+            earnings = self.get_earnings_info(symbol) if self.is_real else {}
+            next_earnings = earnings.get("earnings_date") if earnings else None
+            candidate.earnings_date = next_earnings
+            if next_earnings:
+                candidate.days_to_earnings = (next_earnings - date.today()).days
+            target = info.get("targetMeanPrice")
+            candidate.analyst_target = float(target) if target else None
+            return leaps.score_full(candidate, chain, closes, info, target_delta, iv_pct)
+
+        return cache.get_or_fetch(f"leapscand:{symbol}:{target_delta}", _fetch, 600)
+
+    def get_leaps_scan(self, cache_key: str, symbols: list[str]) -> Optional[list]:
+        """Stage one of the LEAPS Finder: score a whole universe on price action.
+
+        One batched history download covers hundreds of names. Deliberately no
+        option data here - a chain per stock would take many minutes. She picks
+        from this list and we price the actual contract on demand.
+
+        Returns None (uncached) when the batch came back empty, so a throttled
+        download retries on the next press rather than sticking for hours.
+        """
+        if self.mode != "yahoo":
+            return None
+
+        def _fetch():
+            from src.data import stock_universe
+            from src.research import leaps
+            names = [s.upper() for s in dict.fromkeys(symbols)]
+            history = yfinance_client.batch_history(names, period="2y")
+            if not history:
+                return None
+            caps = stock_universe.market_caps()
+            out = []
+            for symbol in names:
+                closes, volumes = history.get(symbol, ([], []))
+                if len(closes) < 60:
+                    continue
+                out.append(leaps.score_setup(symbol, closes, volumes,
+                                             market_cap=caps.get(symbol)))
+            return out
+
+        result = cache.get_or_fetch(f"leapsscan:{cache_key}", _fetch, 6 * 3600)
+        if result is None:
+            cache.clear(f"leapsscan:{cache_key}")
+        return result
+
     # ---------- premium finder ----------
     def get_premium_snapshot(self, symbol: str, target_dte: int = 30, monthly_bp: float = 50_000):
         """Premium + a clear plan (sell puts/calls, strategy, risk) - real data only."""

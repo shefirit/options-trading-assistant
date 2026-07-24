@@ -20,9 +20,50 @@ just helps you pick well and do it correctly.
 4. **Check any trade** - a green/red checklist confirms a trade passes every SOP rule before
    you place it. Works for trades the scanner found OR trades you built yourself.
 5. **Keep a record** - one click logs a trade to your Google Sheet (with a local backup).
+6. **Research any stock** - six tools in the 🔭 Research tab for the questions that come
+   *before* a trade (see below).
 
 Your rules live in plain text in the `config/` folder - change a number there and the whole
 app follows. No coding needed.
+
+---
+
+## The Research tab
+
+Six tools that size up a stock from every angle. None of them place or recommend a trade -
+they show their working and let you decide.
+
+1. **LEAPS Finder** - is a long-dated call worth buying? A LEAP is a call a year or more
+   out, bought instead of the shares: far less cash up front, and you can never lose more
+   than you paid. The catch is that you are paying for time, so a stock that merely sits
+   still costs you everything, where shares that go nowhere cost you nothing. Five scored
+   pillars decide it - trend, entry timing, quality, **what the option costs**, and
+   **the odds** - and cost plus odds are 45% of the score on purpose, because when you buy
+   options the price you pay and the move you need are roughly half the outcome.
+2. **Seasonality** - up to 20 years of month-by-month total returns (dividends reinvested)
+   as a heatmap, with each month's average, win rate and rank out of twelve.
+3. **Analyst targets** - the consensus rating and price targets, plus the reality check
+   almost nobody runs: how often this stock has *actually* gained that much in a year.
+4. **Instant Analyzer** - your own pass/fail rules applied to any stock, with five presets
+   to start from. Near misses are shown as near misses, not a flat red X.
+5. **Price calculator** - work backward from the return you want to the most you can pay
+   today, plus what growth today's price already assumes, and a grid showing what happens
+   when the two guesses inside the maths are wrong.
+6. **Options data** - implied volatility against what the stock actually does, the expected
+   move per expiration, put/call sentiment, and the chain itself.
+
+Three ideas run through the whole tab and are worth knowing about:
+
+- **Base rates.** Where another tool says "it needs to rise 14%", this one slides a window
+  the length of your contract across twenty years of the stock's own history and tells you
+  how often it really made that move - and how often it finished below the strike, where a
+  call expires worthless.
+- **The full cost.** Time premium annualized, *plus* the dividends you give up by holding
+  calls instead of shares. A 4% yielder quietly adds 4% a year to the cost of owning a LEAP
+  instead of the stock.
+- **Honest about the data.** Free feeds have no history of implied volatility, so rather
+  than invent an "IV percentile" the app compares today's implied volatility to the stock's
+  own realized volatility over the past year, and says that is what it is doing.
 
 ---
 

@@ -37,7 +37,7 @@ from src.engine.config_loader import allowed_underlyings_for, load_settings, loa
 from src.engine.models import Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
-from ui import components, theme, tv_chart
+from ui import components, research, theme, tv_chart
 
 st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
 theme.inject()
@@ -144,9 +144,10 @@ def main() -> None:
     if provider.mode == "demo":
         st.error(DEMO_WARNING)
 
-    t_market, t_picks, t_prem, t_analyze, t_build, t_trades, t_settings = st.tabs(
-        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🎯 Find a trade", "📒 My trades",
-         "⚙️ Settings"])
+    (t_market, t_picks, t_prem, t_analyze, t_research, t_build, t_trades,
+     t_settings) = st.tabs(
+        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🔭 Research",
+         "🎯 Find a trade", "📒 My trades", "⚙️ Settings"])
     with t_market:
         _guard(_tab_market, settings, provider, strategies)
     with t_picks:
@@ -155,6 +156,8 @@ def main() -> None:
         _guard(_tab_premium, settings, provider)
     with t_analyze:
         _guard(_tab_analyze, settings, provider, strategies)
+    with t_research:
+        _guard(_tab_research, settings, provider)
     with t_build:
         _guard(_tab_build, settings, strategies, provider)
     with t_trades:
@@ -892,6 +895,375 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
 
     st.divider()
     tv_chart.render(sym, provider, kind=kind, key_prefix=key_prefix)
+
+
+# ------------------------------------------------------------------ Research tab
+def _tab_research(settings, provider) -> None:
+    theme.section("Size up any stock from every angle", "Research")
+    theme.note(
+        "Six tools that answer the questions before a trade: is the trend real, is the "
+        "company any good, what is a fair price, what are the options pricing, does this "
+        "stock have months it likes, and is a long-dated call worth buying. Nothing here "
+        "places or recommends a trade.")
+
+    if not provider.is_real:
+        st.info("The research tools need real market data - connect to the internet first.")
+        return
+
+    t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts = st.tabs(
+        ["🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets", "✅ Instant Analyzer",
+         "🧮 Price calculator", "⛓️ Options data"])
+
+    with t_leaps:
+        _research_leaps(settings, provider)
+    with t_season:
+        _research_seasonality(settings, provider)
+    with t_analyst:
+        _research_analyst(settings, provider)
+    with t_screen:
+        _research_analyzer(settings, provider)
+    with t_calc:
+        _research_calculator(settings, provider)
+    with t_opts:
+        _research_options(settings, provider)
+
+
+def _research_symbol(settings, key: str, label: str = "Symbol") -> Optional[str]:
+    """Shared ticker picker - the same universe the Analyze tab offers."""
+    opts = _symbol_options(settings)
+    default = st.session_state.get(key)
+    idx = opts.index(default) if default in opts else None
+    return st.selectbox(label, opts, index=idx, key=key,
+                        placeholder="Type any ticker - AAPL, NVDA, KO...")
+
+
+# ---------- LEAPS Finder ----------
+LEAPS_UNIVERSES = {
+    "Featured names (fast)": "featured",
+    "Nasdaq 100": "nasdaq100",
+    "S&P 500 (slowest, most thorough)": "sp500",
+}
+
+
+def _research_leaps(settings, provider) -> None:
+    from src.research import leaps
+
+    st.markdown("#### Is a long-dated call worth buying here?")
+    theme.note(
+        "A LEAP is a call a year or more out, bought instead of the shares. Far less cash "
+        "up front and you can never lose more than you paid - but you are paying for time, "
+        "and if the stock just sits still you lose all of it. Shares that go nowhere cost "
+        "you nothing. Everything below exists to weigh that trade-off honestly.")
+
+    mode = st.radio("How do you want to look?",
+                    ["Check one stock", "Scan for candidates"],
+                    horizontal=True, key="leaps_mode")
+
+    if mode == "Check one stock":
+        sym = _research_symbol(settings, "leaps_sym")
+        target_delta = st.select_slider(
+            "How deep in the money?", options=[0.60, 0.65, 0.70, 0.75, 0.80, 0.85],
+            value=0.75, key="leaps_delta",
+            format_func=lambda d: f"{d:.2f} delta")
+        theme.note(
+            "Delta is how much of the stock's move the option captures. Around 0.75 is the "
+            "usual stock-replacement zone - deep enough to track the shares closely, "
+            "shallow enough that you are not tying up nearly the full share price.")
+        if not sym:
+            return
+        with st.spinner(f"Pricing {sym} LEAPS and checking its history..."):
+            candidate = provider.get_leaps_candidate(sym, target_delta)
+        if candidate is None:
+            st.info(f"No long-dated option data came back for {sym}.")
+            return
+        st.divider()
+        research.render_leaps_detail(candidate)
+        return
+
+    universe_label = st.selectbox("Universe", list(LEAPS_UNIVERSES), key="leaps_universe")
+    universe_key = LEAPS_UNIVERSES[universe_label]
+
+    with st.expander("Scan criteria", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        min_cap = col1.number_input("Smallest company ($B)", 0.0, 5000.0, 10.0, 5.0,
+                                    key="leaps_cap")
+        min_vol = col2.number_input("Least daily volume (M shares)", 0.0, 100.0, 1.0, 0.5,
+                                    key="leaps_vol")
+        max_off = col3.number_input("Most it can be below its 52-week high (%)",
+                                    0.0, 90.0, 25.0, 5.0, key="leaps_offhigh")
+        col4, col5 = st.columns(2)
+        above200 = col4.checkbox("Only stocks above their 200-day average", value=True,
+                                 key="leaps_200")
+        above50 = col5.checkbox("Only stocks above their 50-day average", value=False,
+                                key="leaps_50")
+        stoch_lo, stoch_hi = st.slider("Weekly stochastic between", 0, 100, (20, 90),
+                                       key="leaps_stoch")
+        theme.note(
+            "That last one is the filter the paid tools lean on hardest. Left wide it "
+            "barely excludes anything, which is rather the point - momentum position is "
+            "one input here, not the thesis.")
+
+    filters = leaps.Filters(
+        min_market_cap_b=min_cap, min_avg_volume_m=min_vol, max_pct_off_high=max_off,
+        require_above_200dma=above200, require_above_50dma=above50,
+        stoch_min=float(stoch_lo), stoch_max=float(stoch_hi),
+    )
+
+    if st.button("Scan the universe ▸", type="primary", key="leaps_scan_btn"):
+        st.session_state["leaps_scanned"] = universe_key
+    if st.session_state.get("leaps_scanned") != universe_key:
+        theme.note("Press scan to score the universe. Results cache for six hours.")
+        return
+
+    symbols = _leaps_universe(universe_key, settings)
+    with st.spinner(f"Scoring {len(symbols)} names..."):
+        scanned = provider.get_leaps_scan(universe_key, symbols)
+    if not scanned:
+        st.warning("The market data provider did not return history for that scan. "
+                   "Press scan again in a moment - free data throttles from time to time.")
+        return
+
+    ranked = leaps.rank(scanned, filters)
+    st.markdown(f"**{len(ranked)} of {len(scanned)} names pass your criteria**")
+    theme.note(
+        "This is the chart-and-quality half of the score only. Pricing an actual contract "
+        "for hundreds of names would take many minutes, so pick one below and we will "
+        "fetch its real chain, work out what it costs, and check the odds against its own "
+        "history.")
+    if not ranked:
+        st.info("Nothing passed. Loosen a filter above.")
+        return
+
+    st.dataframe(research.leaps_frame(ranked[:60]), hide_index=True,
+                 column_config=research.leaps_columns(), width="stretch")
+
+    picked = st.selectbox("Price the contract for", [c.symbol for c in ranked[:60]],
+                          key="leaps_pick")
+    if picked and st.button(f"Score {picked} in full ▸", key="leaps_full_btn"):
+        with st.spinner(f"Pricing {picked} LEAPS..."):
+            candidate = provider.get_leaps_candidate(picked, 0.75)
+        if candidate is None:
+            st.info(f"No long-dated option data came back for {picked}.")
+        else:
+            st.divider()
+            research.render_leaps_detail(candidate)
+
+
+def _leaps_universe(key: str, settings) -> list:
+    from src.data import stock_universe
+    if key == "nasdaq100":
+        return stock_universe.nasdaq100()
+    if key == "sp500":
+        return stock_universe.sp500()
+    return stock_universe.FEATURED
+
+
+# ---------- Seasonality ----------
+def _research_seasonality(settings, provider) -> None:
+    st.markdown("#### Does this stock have months it likes?")
+    theme.note(
+        "Total returns with dividends reinvested, month by month, for as far back as the "
+        "data goes. Useful as a tiebreaker on timing. Never a reason to trade on its own - "
+        "a month that was green 16 years out of 20 is still not a promise about this year.")
+    sym = _research_symbol(settings, "season_sym")
+    years = st.select_slider("How far back?", options=[5, 10, 15, 20, 25],
+                             value=20, key="season_years",
+                             format_func=lambda y: f"{y} years")
+    if not sym:
+        return
+    with st.spinner(f"Loading {sym} history..."):
+        data = provider.get_seasonality(sym, years)
+    if data is None or not data.months:
+        st.info(f"No usable price history came back for {sym}.")
+        return
+    st.divider()
+    research.render_seasonality(data)
+
+
+# ---------- Analyst ----------
+def _research_analyst(settings, provider) -> None:
+    st.markdown("#### What Wall Street says, and whether it has ever happened")
+    theme.note(
+        "Consensus ratings and price targets, plus the check almost nobody runs: how often "
+        "this stock has actually gained that much in a year. Targets are twelve-month "
+        "opinions that cluster optimistic - worth reading as sentiment, not forecast.")
+    sym = _research_symbol(settings, "analyst_sym")
+    if not sym:
+        return
+    with st.spinner(f"Loading analyst coverage for {sym}..."):
+        view = provider.get_analyst_view(sym)
+    if view is None:
+        st.info(f"No analyst data came back for {sym}.")
+        return
+    st.divider()
+    research.render_analyst(view)
+
+
+# ---------- Instant Analyzer ----------
+def _research_analyzer(settings, provider) -> None:
+    import pandas as pd
+
+    from src.research import criteria
+
+    st.markdown("#### Your rules, applied to any stock")
+    theme.note(
+        "Decide what a good company looks like to you, then grade any stock against "
+        "exactly that. Misses show how far off they were - failing by a hair is a very "
+        "different thing from failing by a mile, and a plain red X hides that.")
+
+    preset_name = st.selectbox("Start from", list(criteria.PRESETS), key="crit_preset")
+    theme.note(criteria.PRESETS[preset_name]["note"])
+
+    if st.session_state.get("_crit_loaded") != preset_name:
+        st.session_state["_crit_loaded"] = preset_name
+        st.session_state["_crit_rules"] = [
+            {"Measure": criteria.FIELDS[c.field]["label"], "Test": c.op, "Value": c.value}
+            for c in criteria.preset(preset_name)]
+
+    label_to_field = {spec["label"]: key for key, spec in criteria.FIELDS.items()}
+    edited = st.data_editor(
+        pd.DataFrame(st.session_state["_crit_rules"]),
+        num_rows="dynamic", hide_index=True, width="stretch", key="crit_editor",
+        column_config={
+            "Measure": st.column_config.SelectboxColumn(
+                "Measure", options=list(label_to_field), required=True),
+            "Test": st.column_config.SelectboxColumn(
+                "Test", options=[">=", "<=", ">", "<"], required=True),
+            "Value": st.column_config.NumberColumn("Value", required=True),
+        })
+
+    rules = []
+    for _i, row in edited.iterrows():
+        field = label_to_field.get(row.get("Measure"))
+        if field and pd.notna(row.get("Value")):
+            rules.append(criteria.Criterion(field=field, op=row.get("Test") or ">=",
+                                            value=float(row["Value"])))
+    if not rules:
+        st.info("Add at least one rule above.")
+        return
+
+    with st.expander("What each measure means"):
+        for field in {r.field for r in rules}:
+            spec = criteria.FIELDS[field]
+            st.markdown(f"- **{spec['label']}** - {spec['help']}")
+
+    sym = _research_symbol(settings, "crit_sym", "Grade this stock")
+    if not sym:
+        return
+    with st.spinner(f"Checking {sym} against your rules..."):
+        info = provider.get_raw_info(sym)
+        extras = _criteria_extras(sym, provider)
+        result = criteria.evaluate(sym, rules, info, extras)
+    st.divider()
+    research.render_criteria_result(result)
+
+
+def _criteria_extras(sym, provider) -> dict:
+    """The rule fields that come from price history rather than fundamentals."""
+    from src.research import leaps
+    closes = provider.get_long_closes(sym)
+    if not closes:
+        return {}
+    price = closes[-1]
+    window = closes[-leaps.TRADING_DAYS_YEAR:] if len(closes) >= leaps.TRADING_DAYS_YEAR \
+        else closes
+    high = max(window)
+    sma200 = leaps.sma(closes, 200)
+    extras = {
+        "pct_off_high": abs((price / high - 1) * 100) if high else None,
+        "rsi": leaps.rsi(closes),
+        "above_200dma": (1.0 if sma200 and price > sma200 else 0.0) if sma200 else None,
+    }
+    if len(closes) > leaps.TRADING_DAYS_YEAR:
+        extras["year_return"] = (price / closes[-leaps.TRADING_DAYS_YEAR] - 1) * 100
+    return extras
+
+
+# ---------- Price calculator ----------
+def _research_calculator(settings, provider) -> None:
+    from src.research import fair_value
+
+    st.markdown("#### What should I pay to earn the return I want?")
+    theme.note(
+        "Estimate what the company earns in a few years, decide what the market pays for "
+        "those earnings, then discount it back at the return you insist on. Whatever comes "
+        "out is the most you can pay. The answer rests entirely on two guesses, so the grid "
+        "at the bottom shows what happens when you are wrong about them.")
+
+    sym = _research_symbol(settings, "calc_sym")
+    if not sym:
+        return
+
+    info = provider.get_raw_info(sym)
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    eps_default = float(info.get("trailingEps") or 0.0)
+    pe_default = float(info.get("trailingPE") or 18.0)
+    growth_default = float((info.get("earningsGrowth") or info.get("revenueGrowth") or 0.08)
+                           * 100)
+
+    if eps_default <= 0:
+        st.warning(f"{sym} has no positive trailing earnings, so an earnings-based "
+                   "calculation cannot say anything useful here. Judge it on sales or "
+                   "cash flow instead.")
+
+    col1, col2, col3 = st.columns(3)
+    eps = col1.number_input("Earnings per share now ($)", value=round(eps_default, 2),
+                            step=0.10, key="calc_eps")
+    growth = col2.number_input("Growth a year (%)", value=round(min(growth_default, 30.0), 1),
+                               step=1.0, key="calc_growth")
+    years = col3.number_input("Years to hold", 1, 20, 5, key="calc_years")
+    col4, col5, col6 = st.columns(3)
+    exit_pe = col4.number_input("P/E at the end", value=round(min(pe_default, 40.0), 1),
+                                step=1.0, key="calc_pe")
+    required = col5.number_input("Return you want (%/yr)", value=12.0, step=1.0,
+                                 key="calc_req")
+    div = col6.number_input("Dividend yield (%)",
+                            value=round(_dividend_pct(info), 2), step=0.25, key="calc_div")
+
+    theme.note(
+        "Sensible starting points: growth no higher than the company has actually managed, "
+        "and an exit P/E at or below today's - assuming the market will pay MORE for it "
+        "later is how these calculations flatter themselves.")
+
+    inputs = fair_value.ValuationInputs(
+        symbol=sym, eps=eps, growth_pct=growth, years=int(years), exit_pe=exit_pe,
+        required_return_pct=required, dividend_yield_pct=div, current_price=price)
+    result = fair_value.project(inputs)
+
+    st.divider()
+    research.render_valuation(result)
+
+    st.markdown("**What if the two guesses are wrong?**")
+    theme.note("Buy-below price at each combination of growth and exit P/E. If the answer "
+               "only works in one corner of this grid, it is not much of an answer.")
+    st.dataframe(research.sensitivity_frame(fair_value.sensitivity(inputs)),
+                 width="stretch")
+
+
+def _dividend_pct(info: dict) -> float:
+    from src.research.leaps import dividend_yield_pct
+    return dividend_yield_pct(info)
+
+
+# ---------- Options data ----------
+def _research_options(settings, provider) -> None:
+    st.markdown("#### What the option market is pricing")
+    theme.note(
+        "Implied volatility, the move options expect, and which way the money is leaning - "
+        "plus the check most chain viewers skip: how often this stock has actually exceeded "
+        "that expected move. That tells you whether options are dear or cheap, which "
+        "matters whether you are buying or selling them.")
+    sym = _research_symbol(settings, "opts_sym")
+    dte = st.slider("Days to expiration to focus on", 7, 120, 30, key="opts_dte")
+    if not sym:
+        return
+    with st.spinner(f"Loading the {sym} option chain..."):
+        view = provider.get_options_view(sym, dte)
+    if view is None:
+        st.info(f"No option chain came back for {sym}.")
+        return
+    st.divider()
+    research.render_options_view(view)
 
 
 # ------------------------------------------------------------------ Find a trade tab

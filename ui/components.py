@@ -275,10 +275,7 @@ def render_price_chart(frame, earnings_dates: list | None = None) -> None:
                      tooltip=alt.value("Earnings report")))
 
     chart = alt.layer(*layers).properties(height=260).configure_view(strokeOpacity=0)
-    try:
-        st.altair_chart(chart, width="stretch")
-    except TypeError:  # older Streamlit
-        st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 def render_stock_overview(
@@ -411,10 +408,7 @@ def render_stock_overview(
                          alt.Tooltip("Surprise:N", title="Surprise"),
                          alt.Tooltip("Result:N")],
             ).properties(height=210).configure_view(strokeOpacity=0)
-            try:
-                st.altair_chart(scatter, width="stretch")
-            except TypeError:
-                st.altair_chart(scatter, use_container_width=True)
+            st.altair_chart(scatter, width="stretch")
             graded = [q for q in eps_history if q["beat"] is not None]
             if graded:
                 beats = sum(1 for q in graded if q["beat"])
@@ -857,7 +851,7 @@ def render_payoff_chart(payoff_profile, current_price=None) -> None:
                                                color=theme.ACCENT, fontWeight=600,
                                                fontSize=12).encode(x="price:Q", text="label:N"))
 
-    st.altair_chart(alt.layer(*layers).properties(height=260), use_container_width=True)
+    st.altair_chart(alt.layer(*layers).properties(height=260), width="stretch")
 
     caveats = []
     if p.loss_grows_below:
@@ -1202,7 +1196,7 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
             y=alt.Y("total:Q", title="Running total ($)"),
             tooltip=[alt.Tooltip("date:T", title="Date"),
                      alt.Tooltip("total:Q", title="Total $", format=",.0f")])
-        st.altair_chart(chart.properties(height=220), use_container_width=True)
+        st.altair_chart(chart.properties(height=220), width="stretch")
 
 
 # ================================================================== month view
@@ -1365,7 +1359,7 @@ def render_month_bars(summaries: list[dict], monthly_goal: float) -> None:
         rule = alt.Chart(pd.DataFrame({"goal": [monthly_goal]})).mark_rule(
             color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(y="goal:Q")
         chart = bars + rule
-    st.altair_chart(chart.properties(height=240), use_container_width=True)
+    st.altair_chart(chart.properties(height=240), width="stretch")
     if monthly_goal:
         theme.note(f"The dashed line is your **\\${monthly_goal:,.0f}** "
                    "monthly goal.")

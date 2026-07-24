@@ -1,4 +1,4 @@
-"""The app must render all seven tabs offline (demo data) with no tab erroring.
+"""The app must render all eight tabs offline (demo data) with no tab erroring.
 
 Every tab body runs on every rerun, so one broken tab would take the whole
 app down for Rita on her phone - this catches that before a deploy. Network
@@ -22,13 +22,25 @@ def demo_app(monkeypatch):
     return at
 
 
-def test_all_seven_tabs_render_without_a_snag(demo_app):
+def test_all_eight_tabs_render_without_a_snag(demo_app):
     at = demo_app.run()
     assert not at.exception
-    assert len(at.tabs) == 7
+    # Eight top-level tabs; the Research tab adds six of its own inside itself,
+    # which only build once she is on real data.
+    labels = [t.label for t in at.tabs]
+    assert "🔭 Research" in labels
+    assert len(labels) >= 8
     # _guard turns a tab crash into this error text - none may appear.
     snags = [e for e in at.error if "unexpected snag" in str(e.value)]
     assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
+
+
+def test_research_tab_stays_offline_in_demo_mode(demo_app):
+    """Every research tool needs real data. In demo mode the tab must say so
+    and stop, never reaching for the network."""
+    at = demo_app.run()
+    infos = " ".join(str(i.value) for i in at.info)
+    assert "research tools need real market data" in infos
 
 
 def test_market_tab_new_sections_render_in_demo(demo_app):
