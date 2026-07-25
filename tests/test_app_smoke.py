@@ -22,25 +22,40 @@ def demo_app(monkeypatch):
     return at
 
 
-def test_all_eight_tabs_render_without_a_snag(demo_app):
+def test_all_six_tabs_render_without_a_snag(demo_app):
     at = demo_app.run()
     assert not at.exception
-    # Eight top-level tabs; the Research tab adds six of its own inside itself,
-    # which only build once she is on real data.
     labels = [t.label for t in at.tabs]
-    assert "🔭 Research" in labels
-    assert len(labels) >= 8
+    for expected in ("📊 Market", "💡 Picks", "🔬 Analyze", "🎯 Find a trade",
+                     "📒 My trades", "⚙️ Settings"):
+        assert expected in labels, f"{expected} is missing from the tab bar"
     # _guard turns a tab crash into this error text - none may appear.
     snags = [e for e in at.error if "unexpected snag" in str(e.value)]
     assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
 
 
-def test_research_tab_stays_offline_in_demo_mode(demo_app):
-    """Every research tool needs real data. In demo mode the tab must say so
-    and stop, never reaching for the network."""
+def test_the_look_alike_tabs_are_gone(demo_app):
+    """Picks, Premium, Analyze and Research all read as "look at names" and gave
+    no clue which to open. Premium is a mode inside Picks now, and the six
+    research tools are sub-tabs of Analyze - neither may return to the top row."""
+    at = demo_app.run()
+    labels = [t.label for t in at.tabs]
+    assert "🔎 Premium" not in labels
+    assert "🔭 Research" not in labels
+    # The research tools kept their own labels, one level down inside Analyze.
+    for tool in ("🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets",
+                 "✅ Instant Analyzer", "🧮 Price calculator", "⛓️ Options data"):
+        assert tool in labels, f"{tool} was lost in the merge"
+
+
+def test_the_research_tools_stay_offline_in_demo_mode(demo_app):
+    """Every research tool needs real data. In demo mode each must say so and
+    stop, never reaching for the network."""
     at = demo_app.run()
     infos = " ".join(str(i.value) for i in at.info)
-    assert "research tools need real market data" in infos
+    for what in ("Seasonality", "Analyst coverage", "The price calculator",
+                 "The options read"):
+        assert f"{what} needs real market data" in infos, f"{what} did not guard itself"
 
 
 def test_market_tab_new_sections_render_in_demo(demo_app):

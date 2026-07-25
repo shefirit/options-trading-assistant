@@ -2,22 +2,23 @@
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Eight tabs, all open at once - use them in any order, nothing is locked. There
-is no sidebar: everything lives in the tabs, so nothing can hide behind a toggle
-or show up twice.
+Six tabs, in the order the work happens, all open at once - use them in any
+order, nothing is locked. There is no sidebar: everything lives in the tabs, so
+nothing can hide behind a toggle or show up twice.
 
   📊 Market   - is today a good day to sell premium? (holiday-aware)
-  💡 Picks    - WHAT looks good today: scans the indexes, the big ETFs, and the
-                S&P 500 for SOP-fitting monthly premium candidates, ranked,
-                with dividends and a risk picture
-  🔎 Premium  - screen names for the richest, safest option premium
-  🔬 Analyze  - any stock/ETF/index: full picture + the strategy that fits it
-  🔭 Research - six tools for sizing up a name before you trade it
+  💡 Picks    - WHO to sell on, two ways round: scan your whole universe and
+                rank it, or compare a list of names you type in yourself
+  🔬 Analyze  - everything about ONE name behind one symbol box: the overview
+                and strategy fit, plus LEAPS, seasonality, analyst targets, the
+                quality screener, the price calculator and the options read
   🎯 Find a trade    - pick a strategy, scan real setups, check your SOP rules, log it
   📒 My trades- every logged trade tracked live against your own exit rules,
                 plus your results vs your weekly/monthly goals
   ⚙️ Settings - connections (Google Sheet, earnings data, Schwab) and your plan
                 numbers
+
+A glossary sits above the tabs, reachable from all of them.
 
 It never places trades and never gives buy/sell advice. You place every trade
 yourself in thinkorswim; this just helps you do it correctly.
@@ -149,20 +150,18 @@ def main() -> None:
     # glossary cannot live on one of them. Collapsed, it costs a single line.
     glossary.render()
 
-    (t_market, t_picks, t_prem, t_analyze, t_research, t_build, t_trades,
-     t_settings) = st.tabs(
-        ["📊 Market", "💡 Picks", "🔎 Premium", "🔬 Analyze", "🔭 Research",
-         "🎯 Find a trade", "📒 My trades", "⚙️ Settings"])
+    # Six tabs in the order the work actually happens. It was eight, four of
+    # which (Picks, Premium, Analyze, Research) all read as "look at names" and
+    # gave no clue which to open. Now: Picks finds a name, Analyze studies one.
+    (t_market, t_picks, t_analyze, t_build, t_trades, t_settings) = st.tabs(
+        ["📊 Market", "💡 Picks", "🔬 Analyze", "🎯 Find a trade", "📒 My trades",
+         "⚙️ Settings"])
     with t_market:
         _guard(_tab_market, settings, provider, strategies)
     with t_picks:
         _guard(_tab_picks, settings, strategies, provider)
-    with t_prem:
-        _guard(_tab_premium, settings, provider)
     with t_analyze:
         _guard(_tab_analyze, settings, provider, strategies)
-    with t_research:
-        _guard(_tab_research, settings, provider)
     with t_build:
         _guard(_tab_build, settings, strategies, provider)
     with t_trades:
@@ -339,12 +338,32 @@ def _market_news_section(provider) -> None:
 
 # ------------------------------------------------------------------ Today's picks tab
 def _tab_picks(settings, strategies, provider) -> None:
-    """WHAT looks good today: scan the allowed universe, rank the SOP fits."""
+    """WHO to sell on, two ways round: let the app find names, or bring your own.
+
+    These were two tabs, "Picks" and "Premium", which read as the same promise
+    and did overlap - Picks already prices the ~0.30 delta put for every name it
+    scans, which was Premium's whole job. They are the same question asked from
+    opposite ends, so they are one tab with two modes.
+    """
+    theme.section("Who looks good to sell premium on right now?", "Today's picks")
+
+    mode = st.radio(
+        "How do you want to find a name?",
+        ["⚡ Scan everything - let the app search your whole universe and rank it",
+         "📝 Compare my own list - names I type in"],
+        key="picks_mode")
+    st.write("")
+    if mode.startswith("📝"):
+        _premium_compare(settings, provider)
+        return
+    _picks_scan(settings, strategies, provider)
+
+
+def _picks_scan(settings, strategies, provider) -> None:
     import time as _time
 
     from src.engine import recommender
 
-    theme.section("Who looks good to sell premium on right now?", "Today's picks")
     theme.note("One button scans your allowed universe - the 4 cash-settled indexes, the big "
                "liquid ETFs, and the whole S&P 500 - and ranks who fits your SOP for a "
                "monthly premium trade today: generous premium, sane risk, and a dividend "
@@ -776,17 +795,17 @@ def _income_pick_detail(pick, strategies, settings, provider) -> None:
         st.success("Loaded into **🎯 Find a trade** - open that tab to scan and check it.")
 
 
-# ------------------------------------------------------------------ Find premium tab
-def _tab_premium(settings, provider) -> None:
+# ------------------------------------ Picks, mode 2: compare a list you type
+def _premium_compare(settings, provider) -> None:
+    """The old Premium finder, now the "bring your own names" half of Picks."""
     from src.data import stock_universe
 
-    theme.section("Which names pay the best premium - and are worth it?", "Premium finder")
     theme.note("For each name it prices the one-month put you'd sell (~0.30 delta) and lays out "
                "the income, your odds, the safety cushion, how rich the premium really is, and "
                "whether it's tradable. Sort the table by any column.")
 
     if not provider.is_real:
-        st.info("The premium finder needs real market data - connect to the internet first.")
+        st.info("Comparing premium needs real market data - connect to the internet first.")
         return
 
     etfs = settings["underlyings"]["us_style"]
@@ -846,20 +865,54 @@ def _tab_premium(settings, provider) -> None:
             components.render_premium_detail(detail)
             if st.button(f"Analyze {chosen} in depth ▸", key="prem_to_analyze"):
                 st.session_state["analyze_sym"] = chosen
-                st.success(f"Loaded {chosen} into **🔬 Analyze** - open that tab.")
+                st.success(f"Loaded {chosen} into **🔬 Analyze** - open that tab for its "
+                           f"chart, fundamentals and every research tool.")
 
 
 # ------------------------------------------------------------------ Analyze tab
 def _tab_analyze(settings, provider, strategies) -> None:
-    theme.section("Analyze any name - and get the strategy that fits it", "Deep dive")
+    """Everything about ONE name, behind one symbol box.
+
+    This was two tabs, "Analyze" and "Research", and six of the eight tools made
+    you type the same ticker again for each one. Type it once here and every
+    tool below reads it.
+    """
+    theme.section("Everything about one name, in one place", "Analyze")
     opts = _symbol_options(settings)
     default = st.session_state.get("analyze_sym")
     idx = opts.index(default) if default in opts else None
     sym = st.selectbox("Symbol", opts, index=idx, key="analyze_sym",
                        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...")
+    theme.note("Type a ticker once - every tool below reads it. Indexes (SPX, NDX) have no "
+               "company behind them, so the company tools stay empty for those.")
+
+    (t_over, t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts) = st.tabs(
+        ["📋 The name itself", "🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets",
+         "✅ Instant Analyzer", "🧮 Price calculator", "⛓️ Options data"])
+
+    with t_over:
+        _analyze_overview(sym, settings, provider, strategies)
+    # Each tool guards itself rather than the whole tab gating on a symbol: the
+    # LEAPS Finder's scan mode hunts for candidates and needs no symbol at all,
+    # and gating would have made it unreachable until you picked one.
+    with t_leaps:
+        _research_leaps(settings, provider, sym)
+    with t_season:
+        _research_seasonality(settings, provider, sym)
+    with t_analyst:
+        _research_analyst(settings, provider, sym)
+    with t_screen:
+        _research_analyzer(settings, provider, sym)
+    with t_calc:
+        _research_calculator(settings, provider, sym)
+    with t_opts:
+        _research_options(settings, provider, sym)
+
+
+def _analyze_overview(sym, settings, provider, strategies) -> None:
     if not sym:
-        theme.note("Pick an index, ETF, or stock for its full picture and the strategy that "
-                   "fits it.")
+        theme.note("Pick an index, ETF, or stock above for its full picture and the strategy "
+                   "that fits it.")
         return
     if not provider.is_real and _classify(sym, settings) != "index":
         st.info("The deep dive needs real market data - connect to the internet first.")
@@ -903,44 +956,17 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
     tv_chart.render(sym, provider, kind=kind, key_prefix=key_prefix)
 
 
-# ------------------------------------------------------------------ Research tab
-def _tab_research(settings, provider) -> None:
-    theme.section("Size up any stock from every angle", "Research")
-    theme.note(
-        "Six tools that answer the questions before a trade: is the trend real, is the "
-        "company any good, what is a fair price, what are the options pricing, does this "
-        "stock have months it likes, and is a long-dated call worth buying. Nothing here "
-        "places or recommends a trade.")
-
+# --------------------------------- the research tools, now inside Analyze
+def _research_ready(provider, sym, what: str) -> bool:
+    """Every tool needs real data and the symbol picked at the top of Analyze.
+    Says which one is missing instead of rendering an empty panel."""
     if not provider.is_real:
-        st.info("The research tools need real market data - connect to the internet first.")
-        return
-
-    t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts = st.tabs(
-        ["🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets", "✅ Instant Analyzer",
-         "🧮 Price calculator", "⛓️ Options data"])
-
-    with t_leaps:
-        _research_leaps(settings, provider)
-    with t_season:
-        _research_seasonality(settings, provider)
-    with t_analyst:
-        _research_analyst(settings, provider)
-    with t_screen:
-        _research_analyzer(settings, provider)
-    with t_calc:
-        _research_calculator(settings, provider)
-    with t_opts:
-        _research_options(settings, provider)
-
-
-def _research_symbol(settings, key: str, label: str = "Symbol") -> Optional[str]:
-    """Shared ticker picker - the same universe the Analyze tab offers."""
-    opts = _symbol_options(settings)
-    default = st.session_state.get(key)
-    idx = opts.index(default) if default in opts else None
-    return st.selectbox(label, opts, index=idx, key=key,
-                        placeholder="Type any ticker - AAPL, NVDA, KO...")
+        st.info(f"{what} needs real market data - connect to the internet first.")
+        return False
+    if not sym:
+        theme.note(f"Pick a symbol at the top of this tab and {what.lower()} appears here.")
+        return False
+    return True
 
 
 # ---------- LEAPS Finder ----------
@@ -951,7 +977,7 @@ LEAPS_UNIVERSES = {
 }
 
 
-def _research_leaps(settings, provider) -> None:
+def _research_leaps(settings, provider, sym) -> None:
     from src.research import leaps
 
     st.markdown("#### Is a long-dated call worth buying here?")
@@ -966,7 +992,6 @@ def _research_leaps(settings, provider) -> None:
                     horizontal=True, key="leaps_mode")
 
     if mode == "Check one stock":
-        sym = _research_symbol(settings, "leaps_sym")
         target_delta = st.select_slider(
             "How deep in the money?", options=[0.60, 0.65, 0.70, 0.75, 0.80, 0.85],
             value=0.75, key="leaps_delta",
@@ -975,7 +1000,7 @@ def _research_leaps(settings, provider) -> None:
             "Delta is how much of the stock's move the option captures. Around 0.75 is the "
             "usual stock-replacement zone - deep enough to track the shares closely, "
             "shallow enough that you are not tying up nearly the full share price.")
-        if not sym:
+        if not _research_ready(provider, sym, "The LEAPS check"):
             return
         with st.spinner(f"Pricing {sym} LEAPS and checking its history..."):
             candidate = provider.get_leaps_candidate(sym, target_delta)
@@ -1065,17 +1090,16 @@ def _leaps_universe(key: str, settings) -> list:
 
 
 # ---------- Seasonality ----------
-def _research_seasonality(settings, provider) -> None:
+def _research_seasonality(settings, provider, sym) -> None:
     st.markdown("#### Does this stock have months it likes?")
     theme.note(
         "Total returns with dividends reinvested, month by month, for as far back as the "
         "data goes. Useful as a tiebreaker on timing. Never a reason to trade on its own - "
         "a month that was green 16 years out of 20 is still not a promise about this year.")
-    sym = _research_symbol(settings, "season_sym")
     years = st.select_slider("How far back?", options=[5, 10, 15, 20, 25],
                              value=20, key="season_years",
                              format_func=lambda y: f"{y} years")
-    if not sym:
+    if not _research_ready(provider, sym, "Seasonality"):
         return
     with st.spinner(f"Loading {sym} history..."):
         data = provider.get_seasonality(sym, years)
@@ -1087,14 +1111,13 @@ def _research_seasonality(settings, provider) -> None:
 
 
 # ---------- Analyst ----------
-def _research_analyst(settings, provider) -> None:
+def _research_analyst(settings, provider, sym) -> None:
     st.markdown("#### What Wall Street says, and whether it has ever happened")
     theme.note(
         "Consensus ratings and price targets, plus the check almost nobody runs: how often "
         "this stock has actually gained that much in a year. Targets are twelve-month "
         "opinions that cluster optimistic - worth reading as sentiment, not forecast.")
-    sym = _research_symbol(settings, "analyst_sym")
-    if not sym:
+    if not _research_ready(provider, sym, "Analyst coverage"):
         return
     with st.spinner(f"Loading analyst coverage for {sym}..."):
         view = provider.get_analyst_view(sym)
@@ -1106,7 +1129,7 @@ def _research_analyst(settings, provider) -> None:
 
 
 # ---------- Instant Analyzer ----------
-def _research_analyzer(settings, provider) -> None:
+def _research_analyzer(settings, provider, sym) -> None:
     import pandas as pd
 
     from src.research import criteria
@@ -1153,8 +1176,7 @@ def _research_analyzer(settings, provider) -> None:
             spec = criteria.FIELDS[field]
             st.markdown(f"- **{spec['label']}** - {spec['help']}")
 
-    sym = _research_symbol(settings, "crit_sym", "Grade this stock")
-    if not sym:
+    if not _research_ready(provider, sym, "The grade for a stock"):
         return
     with st.spinner(f"Checking {sym} against your rules..."):
         info = provider.get_raw_info(sym)
@@ -1189,7 +1211,7 @@ def _criteria_extras(sym, provider) -> dict:
 
 
 # ---------- Price calculator ----------
-def _research_calculator(settings, provider) -> None:
+def _research_calculator(settings, provider, sym) -> None:
     from src.research import fair_value
 
     st.markdown("#### What should I pay to earn the return I want?")
@@ -1199,8 +1221,7 @@ def _research_calculator(settings, provider) -> None:
         "out is the most you can pay. The answer rests entirely on two guesses, so the grid "
         "at the bottom shows what happens when you are wrong about them.")
 
-    sym = _research_symbol(settings, "calc_sym")
-    if not sym:
+    if not _research_ready(provider, sym, "The price calculator"):
         return
 
     info = provider.get_raw_info(sym)
@@ -1255,16 +1276,15 @@ def _dividend_pct(info: dict) -> float:
 
 
 # ---------- Options data ----------
-def _research_options(settings, provider) -> None:
+def _research_options(settings, provider, sym) -> None:
     st.markdown("#### What the option market is pricing")
     theme.note(
         "Implied volatility, the move options expect, and which way the money is leaning - "
         "plus the check most chain viewers skip: how often this stock has actually exceeded "
         "that expected move. That tells you whether options are dear or cheap, which "
         "matters whether you are buying or selling them.")
-    sym = _research_symbol(settings, "opts_sym")
     dte = st.slider("Days to expiration to focus on", 7, 120, 30, key="opts_dte")
-    if not sym:
+    if not _research_ready(provider, sym, "The options read"):
         return
     with st.spinner(f"Loading the {sym} option chain..."):
         view = provider.get_options_view(sym, dte)
