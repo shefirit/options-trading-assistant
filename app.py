@@ -2111,7 +2111,7 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
         credit = st.number_input(
             "Credit you collected ($ total, from your TOS fill)",
             min_value=0.0, step=5.0, value=float(suggested or 0.0),
-            key=f"write_credit_{p.trade_id}_{strike:g}_{exp}",
+            key=f"write_credit_{kp}_{p.trade_id}_{strike:g}_{exp}",
             help="The fill price x100 x contracts. This is what your 50% "
                  "profit target measures against from now on.")
         if suggested:
@@ -2240,7 +2240,7 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         new_credit = st.number_input(
             "What the NEW call sold for on its own ($ total)",
             min_value=0.0, step=5.0, value=float(suggested or 0.0),
-            key=f"roll_credit_{p.trade_id}_{new_strike:g}_{new_exp}",
+            key=f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
             help="Not the net - what the call you just sold was worth by "
                  "itself. Your 50% profit target measures against this from "
                  "now on.")
@@ -2349,7 +2349,23 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             st.rerun()
 
 
-ACTION_SIGNALS = ("stop", "time", "profit")
+# "uncovered" is here because a PMCC with no call written against it is idle
+# capital - the whole income of that strategy is the call she has not sold. Her
+# SOP allows sitting uncovered for a while after taking a win at 50%, so it is a
+# nudge rather than an alarm, but it is still something to do today.
+ACTION_SIGNALS = ("stop", "time", "profit", "uncovered")
+
+
+def _first_sentence(text: str, limit: int = 150) -> str:
+    """The gist of an exit reason, for the Today list.
+
+    The full reasoning runs to a paragraph and belongs in the detail card. Shown
+    twice on one screen it just pushed the buttons off the bottom.
+    """
+    text = (text or "").strip()
+    cut = text.find(". ")
+    first = text[:cut + 1] if 0 < cut <= limit else text
+    return first if len(first) <= limit else first[:limit].rsplit(" ", 1)[0] + "..."
 
 
 def _today_section(items: list[dict], provider) -> None:
@@ -2361,11 +2377,12 @@ def _today_section(items: list[dict], provider) -> None:
     back, picking the other. Every trade that needs a decision is listed here
     with its reason and its own Close / Roll forms.
     """
+    # Silent with nothing open - the Open trades section says so once, and two
+    # "no open trades" messages in a row was the same duplication all over again.
+    if not items:
+        return
     theme.section("Anything to do today?", "Today")
     needs = [it for it in items if it["signal"].action in ACTION_SIGNALS]
-    if not items:
-        theme.note("No open trades, so nothing to decide today.")
-        return
     if not needs:
         st.success(f"✅ Nothing to do today - all {len(items)} open trades are inside "
                    "your rules. Come back tomorrow, or check on them below.")
@@ -2381,10 +2398,18 @@ def _today_section(items: list[dict], provider) -> None:
             head = (f"{p.underlying} · {components.short_strategy(p.strategy_name)}"
                     + (f" · {dte} days left" if dte is not None else ""))
             import html as _h
+            tone = {"red": theme.RED, "amber": theme.AMBER,
+                    "green": theme.GREEN}.get(sig.tone, theme.INK)
+            # Headline + the gist, not the whole essay. The detail card below
+            # carries the full reasoning and every warning note.
             st.markdown(
-                f"<div style='font-size:1.1rem;font-weight:800;color:{theme.INK};'>"
-                f"{_h.escape(head)}</div>", unsafe_allow_html=True)
-            components.render_exit_signal(sig)
+                f"<div style='font-size:1.05rem;font-weight:800;color:{theme.INK};'>"
+                f"{_h.escape(head)}</div>"
+                f"<div style='font-size:1.15rem;font-weight:800;color:{tone};"
+                f"margin:2px 0;'>{components._SIGNAL_WORD.get(sig.action, sig.action)}</div>"
+                f"<div style='color:{theme.CAPTION};line-height:1.55;'>"
+                f"{_h.escape(_first_sentence(sig.reason))}</div>",
+                unsafe_allow_html=True)
             # The same forms as the detail card below, with their own widget
             # keys so one trade can appear in both places without colliding.
             if p.is_uncovered:
@@ -2660,11 +2685,28 @@ def _tab_trades(settings, strategies, provider) -> None:
                    "everywhere, connect your Google Sheet in the **⚙️ Settings** "
                    "tab (one-time, ~2 minutes).")
 
+    # Her numbers first, always on screen. They used to live only inside the
+    # Results block - below the open trades and behind a month picker - so "how
+    # am I doing" took three scrolls to answer.
+    import datetime as _dt
+
+    perf = pos_mod.performance(all_pos)
+    # Match on the actual month rather than taking the newest entry: a trade
+    # mistyped with a future date would otherwise become "this month".
+    key_now = f"{_dt.date.today():%Y-%m}"
+    this_month = next((m for m in pos_mod.monthly_summary(all_pos)
+                       if m["month"] == key_now), None)
+    rules = (f"{this_month['rules_followed']} of {this_month['closed_count']}"
+             if this_month and this_month["closed_count"] else "")
+    components.render_headline_stats(perf, settings["targets"], rules)
+
     items, priced_at = ([], None)
     if open_pos:
         items, priced_at = _price_positions(open_pos, provider, strategies)
 
-    _today_section(items, provider)
+    if items:
+        st.divider()
+        _today_section(items, provider)
     st.divider()
     _open_section(items, strategies, provider, priced_at)
     st.divider()

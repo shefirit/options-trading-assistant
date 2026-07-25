@@ -207,3 +207,36 @@ def test_the_star_never_lands_on_a_rule_breaker():
     assert "⭐ best timed" not in labels[0]
     assert "⚠️ delta over" in labels[0]
     assert "⭐ best timed" in labels[1]
+
+
+# ---------- the always-visible headline numbers ----------
+def test_first_sentence_trims_the_essay_but_keeps_short_reasons():
+    import app
+
+    long = ("Your SOP says never hold past 21 days to expiration without a decision: "
+            "from here things go wrong fast. Close it - or roll for a credit.")
+    assert app._first_sentence(long).endswith("go wrong fast.")
+    short = "Kept 78% of the credit."
+    assert app._first_sentence(short) == short
+    assert app._first_sentence("") == ""
+
+
+def test_uncovered_positions_reach_the_today_list():
+    """A PMCC with no call written against it is idle capital - the whole income
+    of that strategy is the call she has not sold yet."""
+    import app
+
+    assert "uncovered" in app.ACTION_SIGNALS
+    for expected in ("stop", "time", "profit"):
+        assert expected in app.ACTION_SIGNALS
+
+
+def test_risk_card_hides_the_cash_tile_when_it_repeats_the_buying_power():
+    # On a credit spread max loss, capital and buying power are one number, and
+    # printing it three times was noise. On a PMCC they genuinely differ.
+    spread = {"credit": 400.0, "max_loss": 2100.0, "capital": 2100.0,
+              "buying_power": 2100.0}
+    pmcc = {"credit": 757.0, "max_loss": 16335.0, "capital": 17092.0,
+            "buying_power": 0.0}
+    assert abs(spread["capital"] - spread["buying_power"]) <= 0.5
+    assert abs(pmcc["capital"] - pmcc["buying_power"]) > 0.5

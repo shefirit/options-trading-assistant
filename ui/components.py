@@ -862,11 +862,10 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
     max_loss = float(size.get("max_loss", 0.0))
     bp = float(size.get("buying_power", 0.0))
     capital = float(size.get("capital", bp))
-    # Cash out of the account and buying power held are different things, and
-    # showing only one of them hid the other. On a PMCC the LEAPS is all cash
-    # and no buying power; on a credit spread they are the same number.
-    cash_label = "CASH OUT TODAY" if capital > 0 and bp == 0 else "CAPITAL AT WORK"
-    cash_out = capital
+    # Cash out and buying power held are different things - but only on the
+    # shapes where they differ. On a credit spread max loss, capital and buying
+    # power are all the same number, and showing it a third time was noise.
+    show_cash = capital > 0 and abs(capital - bp) > 0.5
     contracts = max(int(trade.contracts), 1)
     exit_cfg = strategy.get("exit", {})
 
@@ -878,28 +877,33 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
 
     be_txt = " / ".join(f"{b:,.2f}" for b in breakevens) if breakevens else "-"
     pct_of_limit = (bp / bp_limit * 100) if bp_limit else 0.0
+    def _tile(label: str, value: str, color: str, extra: str = "") -> str:
+        return (f'<div><div style="color:#213229;font-weight:600;font-size:.85rem;">'
+                f'{label}</div><div style="font-size:1.5rem;font-weight:800;'
+                f'color:{color};">{value}{extra}</div></div>')
+
+    # Built as one joined string, never as a placeholder that can come out
+    # empty: an empty line inside the HTML ends the block as far as markdown is
+    # concerned, and everything after it rendered as visible raw tags.
+    tiles = [
+        _tile("MOST YOU CAN LOSE", _dollars(max_loss), theme.RED),
+        _tile("MOST YOU CAN MAKE", _dollars(max_profit), theme.GREEN),
+        _tile("BREAKEVEN PRICE", be_txt, theme.INK),
+    ]
+    if show_cash:
+        tiles.append(_tile("CASH OUT TODAY", _dollars(capital), theme.INK))
+    tiles.append(_tile(
+        "BUYING POWER USED", _dollars(bp), theme.INK,
+        f'<span style="font-size:.9rem;font-weight:600;">'
+        f' ({pct_of_limit:.0f}% of your monthly limit)</span>'))
 
     st.markdown(
-        f"""
-        <div style="border:2px solid {theme.RED};border-radius:14px;padding:14px 18px;
-                    background:#FDF3F2;margin:8px 0 4px;">
-          <div style="font-weight:800;color:{theme.RED};font-size:1.05rem;">
-            ⚠️ Know your risk before you log this</div>
-          <div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:10px;">
-            <div><div style="color:#5B2320;font-weight:600;font-size:.85rem;">MOST YOU CAN LOSE</div>
-                 <div style="font-size:1.5rem;font-weight:800;color:{theme.RED};">{_dollars(max_loss)}</div></div>
-            <div><div style="color:#1F4433;font-weight:600;font-size:.85rem;">MOST YOU CAN MAKE</div>
-                 <div style="font-size:1.5rem;font-weight:800;color:{theme.GREEN};">{_dollars(max_profit)}</div></div>
-            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BREAKEVEN PRICE</div>
-                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{be_txt}</div></div>
-            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">{cash_label}</div>
-                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{_dollars(cash_out)}</div></div>
-            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BUYING POWER USED</div>
-                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{_dollars(bp)}
-                 <span style="font-size:.9rem;font-weight:600;"> ({pct_of_limit:.0f}% of your monthly limit)</span></div></div>
-          </div>
-        </div>
-        """,
+        f'<div style="border:2px solid {theme.RED};border-radius:14px;'
+        f'padding:14px 18px;background:#FDF3F2;margin:8px 0 4px;">'
+        f'<div style="font-weight:800;color:{theme.RED};font-size:1.05rem;">'
+        f'⚠️ Know your risk before you log this</div>'
+        f'<div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:10px;">'
+        f'{"".join(tiles)}</div></div>',
         unsafe_allow_html=True)
     if capital > 0 and bp == 0:
         # A PMCC's LEAPS is paid for in cash, so thinkorswim holds no buying
@@ -1146,6 +1150,51 @@ def positions_column_config():
                  "takes the win at 50%. On a PMCC this is about the call only - "
                  "the P&L column is the whole trade."),
     }
+
+
+def render_headline_stats(perf: dict, targets: dict, rules_followed: str = "") -> None:
+    """The numbers Rita asked never to have to hunt for: this month against her
+    goal, this week against hers, the win rate, and how far along she is.
+
+    They lived only inside the Results block, below the open trades and behind a
+    month picker - so the answer to "how am I doing" was three scrolls away.
+    This sits at the top of My trades and is always current-month, always on.
+    """
+    month_goal = float(targets.get("monthly", 0) or 0)
+    week_goal = float(targets.get("weekly", 0) or 0)
+    month_pl = float(perf.get("month_pl", 0.0))
+    week_pl = float(perf.get("week_pl", 0.0))
+    win = perf.get("win_rate")
+    pct = (month_pl / month_goal) if month_goal else 0.0
+    tone = theme.GREEN if pct >= 1 else theme.AMBER if pct >= 0.5 else theme.INK
+
+    def cell(label: str, value: str, sub: str, color: str = theme.INK) -> str:
+        return (f"<div style='min-width:150px;'>"
+                f"<div style='font-size:.78rem;font-weight:700;color:{theme.SECONDARY};"
+                f"letter-spacing:.04em;'>{label}</div>"
+                f"<div style='font-size:1.65rem;font-weight:800;color:{color};"
+                f"line-height:1.15;'>{value}</div>"
+                f"<div style='font-size:.82rem;font-weight:600;color:{theme.SECONDARY};'>"
+                f"{sub}</div></div>")
+
+    cells = [
+        cell("THIS MONTH", _dollars(month_pl),
+             f"of {_dollars(month_goal)} goal &middot; {pct * 100:.0f}%", tone),
+        cell("THIS WEEK", _dollars(week_pl), f"of {_dollars(week_goal)} goal"),
+        cell("WIN RATE", f"{win * 100:.0f}%" if win is not None else "-",
+             f"{perf.get('closed_count', 0)} closed"),
+        cell("ALL TIME", _dollars(float(perf.get("total_pl", 0.0))), "since you started"),
+    ]
+    if rules_followed:
+        cells.append(cell("BY THE RULES", rules_followed, "closes this month"))
+
+    st.markdown(
+        f"<div style='display:flex;gap:26px;flex-wrap:wrap;padding:14px 18px;"
+        f"border:1px solid {theme.BORDER_STRONG};border-radius:14px;"
+        f"background:{theme.TILE};margin:6px 0 4px;'>{''.join(cells)}</div>",
+        unsafe_allow_html=True)
+    if month_goal:
+        st.progress(min(max(pct, 0.0), 1.0))
 
 
 def render_exit_signal(sig) -> None:
