@@ -1711,66 +1711,95 @@ def _delete_control(trade_id, what: str, key: str) -> None:
             st.warning("Nothing was deleted - it may already be gone. Press ↻ Refresh.")
 
 
+def _keep_fix_open() -> None:
+    """Every widget in the fix panel calls this. Streamlit re-renders an expander
+    closed unless told otherwise, so without it the panel snapped shut the moment
+    she picked a trade or typed a number - which is what "editing closed trades
+    is not working" meant. Touch anything, it stays open."""
+    st.session_state["fix_open"] = True
+
+
 def _fix_close_form(closed: list, labels: list[str]) -> None:
     """Correct a close recorded with the wrong fill price.
 
     She typed $2,300 for an NDX condor that actually filled at $2,260 - an easy
-    slip when two similar orders go through seconds apart - and there was no way
-    to put it right from inside the app. Editing the sheet by hand was not an
-    option for her, and deleting the trade to re-log it risks losing the whole
-    record over a $40 typo.
+    slip when two similar orders go through seconds apart. She cannot edit the
+    sheet by hand, and deleting the trade to re-log it risks the whole record
+    over a $40 typo.
 
     So this appends a fresh close event instead. The log is an event log read in
-    order, and the LAST close for a trade wins, so a correction supersedes the
-    mistake without deleting anything - and the wrong row stays visible in the
-    sheet as history.
-    """
-    with st.expander("✏️ Fix a close I typed wrong"):
-        theme.note("Got the fill price wrong when you recorded a close? Put the right "
-                   "number in here. Nothing is deleted - the app writes a correction "
-                   "that replaces the old figure.")
-        i = st.selectbox("Which close", range(len(closed)),
-                         format_func=lambda n: labels[n], key="fix_close_pick")
-        p = closed[int(i)]
-        was_cost = float(p.exit_cost or 0.0)
-        was_result = float(p.realized_pl or 0.0)
-        theme.note(f"Recorded now: closed for **\\${was_cost:,.0f}**, "
-                   f"result **\\${was_result:,.0f}**.")
+    order and the LAST close for a trade wins, so a correction supersedes the
+    mistake without deleting anything, and the wrong row stays as history.
 
+    Top level, never nested inside another expander: this used to live inside
+    "All closed trades", and an expander two deep collapses on every rerun.
+    """
+    if not closed:
+        return
+    with st.expander("✏️ Fix a close I typed wrong",
+                     expanded=bool(st.session_state.get("fix_open"))):
+        theme.note("Recorded a close with the wrong fill price? Put the right number "
+                   "in here. Nothing is deleted - the app writes a correction that "
+                   "replaces the old figure, and you can correct it again if needed.")
+        i = st.selectbox("Which close", range(len(closed)),
+                         format_func=lambda n: labels[n], key="fix_close_pick",
+                         on_change=_keep_fix_open)
+        p = closed[int(i)]
+        was_result = float(p.realized_pl or 0.0)
         pays_to_close = p.is_debit
-        label = ("What you RECEIVED when you closed it ($ total)" if pays_to_close
-                 else "What you PAID to close it ($ total)")
-        cost = st.number_input(label, min_value=0.0, step=5.0,
-                               value=round(abs(float(p.close_cash or was_cost)), 2),
-                               key=f"fixcost_{p.trade_id}",
-                               help="From your thinkorswim fill - the real one.")
+        # What she actually typed last time, whichever shape the trade is.
+        was_cash = abs(float(p.close_cash if p.close_cash is not None
+                             else -(p.exit_cost or 0.0)))
+
+        c1, c2 = st.columns(2)
+        c1.metric("Recorded now", money(was_result),
+                  help="The result currently in your log for this trade.")
+        # Keyed per trade on purpose. With one shared key, switching trades kept
+        # the previous one's number in the box and offered to "correct" the new
+        # trade to a figure that had nothing to do with it.
+        cost = c2.number_input(
+            "What you RECEIVED closing it ($)" if pays_to_close
+            else "What you PAID to close it ($)",
+            min_value=0.0, step=5.0, value=round(was_cash, 2),
+            key=f"fix_cost_{p.trade_id}", on_change=_keep_fix_open,
+            help="The real fill from thinkorswim.")
+
         close_cash = float(cost) if pays_to_close else -float(cost)
         realized = p.open_cash + close_cash
         delta = realized - was_result
-        theme.note(f"New result: **\\${realized:,.0f}** "
-                   f"({'+' if delta >= 0 else ''}\\${delta:,.0f} against what is recorded).")
-        why = st.text_input("What was wrong (optional)", key=f"fixwhy_{p.trade_id}",
+        if abs(delta) < 0.005:
+            theme.note("That matches what is already recorded - change the number to "
+                       "correct it.")
+        else:
+            theme.note(f"New result would be **\\${realized:,.0f}** - a change of "
+                       f"**{'+' if delta >= 0 else '-'}\\${abs(delta):,.0f}**.")
+        why = st.text_input("What was wrong (optional)", key=f"fix_why_{p.trade_id}",
+                            on_change=_keep_fix_open,
                             placeholder="e.g. typed the wrong fill price")
-        if st.button("Save the correction", type="primary", key=f"fixgo_{p.trade_id}"):
-            if abs(delta) < 0.005:
-                st.warning("That is the same number already recorded - nothing to correct.")
-                return
+
+        if st.button("Save the correction", type="primary", key="fix_go",
+                     disabled=abs(delta) < 0.005):
             from src.logging_tools.trade_logger import close_trade
-            reason = (p.exit_reason or "").split(" - ")[0] or "Corrected"
-            note = why.strip() or "Corrected fill price"
             try:
                 dest, live = close_trade(
                     p.trade_id, p.underlying, p.strategy_name,
                     exit_cost=(0.0 if pays_to_close else float(cost)),
-                    realized_pl=round(realized, 2), reason=reason, note=note,
+                    realized_pl=round(realized, 2),
+                    # Keep the original exit reason so the rules-followed score
+                    # is untouched by a bookkeeping fix.
+                    reason=(p.exit_reason or "").split(" - ")[0] or "Corrected",
+                    note=why.strip() or "Corrected fill price",
                     closed_on=p.closed_on, close_cash=close_cash)
             except Exception as e:
                 st.error(f"Could not save the correction: {e}")
                 return
             st.session_state.pop("trades_rows", None)
+            for k in ("fix_open", f"fix_cost_{p.trade_id}", f"fix_why_{p.trade_id}"):
+                st.session_state.pop(k, None)
             st.session_state["ql_flash"] = (
-                f"Corrected {p.underlying}: result is now ${realized:,.0f} "
-                f"(was ${was_result:,.0f}). Saved to {'your Google Sheet' if live else 'the local log'}.")
+                f"✏️ {p.underlying} corrected: result is now ${realized:,.0f} "
+                f"(was ${was_result:,.0f}). Saved to "
+                f"{'your Google Sheet' if live else 'the local log'}.")
             st.rerun()
 
 
@@ -2318,6 +2347,14 @@ def _tab_trades(settings, strategies, provider) -> None:
     bp_used = pos_mod.bp_committed_this_month(all_pos)
     st.session_state["month_bp_used"] = bp_used
 
+    # Beside Quick Log, not buried in the closed-trades expander: correcting a
+    # fill is the same kind of bookkeeping job as recording one.
+    fixable = [p for p in closed if p.trade_id]
+    if fixable:
+        _fix_close_form(fixable, [
+            f"{p.underlying}  ·  {p.strategy_name}  ·  closed {p.closed_on}"
+            f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
+
     if not all_pos:
         theme.note("Nothing here yet. Two ways to log your first trade: use "
                    "**➕ Quick Log** above for a trade you already placed in "
@@ -2558,8 +2595,6 @@ def _tab_trades(settings, strategies, provider) -> None:
                                    format_func=lambda i: labels[i], key="del_closed_pick")
                 cp = deletable[int(idx)]
                 _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
-                st.divider()
-                _fix_close_form(deletable, labels)
     else:
         theme.note("No closed trades yet - your results dashboard starts building the "
                    "first time you record a close. Remember: you are paper trading to "
