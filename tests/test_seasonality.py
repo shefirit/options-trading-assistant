@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from src.research import seasonality
 
 
@@ -106,3 +108,58 @@ def test_empty_history_is_handled():
 
 def test_frame_to_points_skips_a_missing_close_column():
     assert seasonality.frame_to_points(None) == []
+
+
+# ---------- the month that has not finished yet ----------
+def _monthly_points(through_year: int, through_month: int, monthly_gain: float = 0.02,
+                    start: float = 100.0):
+    """One point on the 28th of every month, compounding steadily."""
+    points, price = [], start
+    for year in range(2020, through_year + 1):
+        last = through_month if year == through_year else 12
+        for month in range(1, last + 1):
+            price *= (1 + monthly_gain)
+            points.append((dt.date(year, month, 28), price))
+    return points
+
+
+def test_a_month_still_running_is_left_out_of_the_averages():
+    """Standing in mid-July, July's month-to-date is not a July result. Letting
+    it in would rewrite twenty years of July every single day."""
+    points = _monthly_points(2026, 6)
+    # July so far: down 10% with three weeks still to go.
+    points.append((dt.date(2026, 7, 3), points[-1][1] * 0.90))
+
+    result = seasonality.build("TEST", points, today=dt.date(2026, 7, 25))
+    july = next(m for m in result.months if m.short == "Jul")
+
+    assert july.avg_pct == pytest.approx(2.0, abs=0.01)   # the completed Julys only
+    assert july.hit_rate == 100.0
+    assert july.years == 6                                # 2020-2025, not 2026
+
+
+def test_the_running_month_is_still_shown_in_the_heatmap():
+    points = _monthly_points(2026, 6)
+    points.append((dt.date(2026, 7, 3), points[-1][1] * 0.90))
+    result = seasonality.build("TEST", points, today=dt.date(2026, 7, 25))
+
+    assert result.partial_month == 7
+    newest = result.rows[0]
+    assert newest.year == 2026
+    assert newest.returns[6] == pytest.approx(-10.0, abs=0.1)   # visible...
+    assert newest.partial_month == 7                            # ...but marked
+
+
+def test_a_year_with_a_running_month_has_no_full_year_figure():
+    points = _monthly_points(2026, 11)
+    points.append((dt.date(2026, 12, 3), points[-1][1] * 1.05))
+    result = seasonality.build("TEST", points, today=dt.date(2026, 12, 10))
+    assert result.rows[0].year == 2026
+    assert result.rows[0].full_year_pct is None
+
+
+def test_no_partial_flag_when_the_data_stops_before_this_month():
+    points = _monthly_points(2025, 12)
+    result = seasonality.build("TEST", points, today=dt.date(2026, 7, 25))
+    assert result.partial_month is None
+    assert all(row.partial_month is None for row in result.rows)

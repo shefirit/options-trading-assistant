@@ -10,6 +10,7 @@ from __future__ import annotations
 import html as _html
 from typing import Optional
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -59,16 +60,23 @@ def stat_row(tiles: list[str]) -> None:
 
 
 # ------------------------------------------------------------------ pillars
-def render_pillars(pillars: list, score: float, headline: str = "") -> None:
+def render_pillars(pillars: list, score: float, headline: str = "",
+                   raw_score: Optional[float] = None, gated: bool = False) -> None:
     """The score breakdown - a labelled bar per pillar, each expandable to the
     reasons behind it. This is the part their tool hides behind a tap."""
     tone = theme.GREEN if score >= 70 else theme.AMBER if score >= 50 else theme.RED
+    capped = ""
+    if gated and raw_score is not None:
+        capped = (f"<div style='font-size:0.78rem;color:{theme.SECONDARY};"
+                  f"font-weight:600;text-align:right;'>capped from "
+                  f"{raw_score:.0f}</div>")
     st.markdown(
         f"<div style='display:flex;align-items:baseline;justify-content:space-between;'>"
         f"<div style='font-size:1.05rem;font-weight:700;'>LEAPS score</div>"
-        f"<div style='font-size:1.9rem;font-weight:800;color:{tone};'>{score:.0f}"
+        f"<div><div style='font-size:1.9rem;font-weight:800;color:{tone};"
+        f"text-align:right;line-height:1.1;'>{score:.0f}"
         f"<span style='font-size:0.9rem;color:{theme.SECONDARY};font-weight:600;'>"
-        f"/100</span></div></div>", unsafe_allow_html=True)
+        f"/100</span></div>{capped}</div></div>", unsafe_allow_html=True)
     if headline:
         theme.note(headline)
 
@@ -129,7 +137,7 @@ def render_leaps_detail(c) -> None:
         _render_economics(c)
 
     st.write("")
-    render_pillars(c.pillars, c.score, c.headline)
+    render_pillars(c.pillars, c.score, c.headline, c.raw_score, c.gated)
 
     if c.base_rate and c.base_rate.hit_rate is not None:
         st.write("")
@@ -148,6 +156,7 @@ def render_leaps_detail(c) -> None:
                 "Deeper strikes cost more but need a smaller move and lose less to time. "
                 "Cheaper ones give you more leverage and need a much bigger move. This "
                 "is the real decision - a fixed 0.75 delta is only one row of it.")
+            render_ladder_chart(c.strike_ladder, c.econ.strike if c.econ else None)
             st.dataframe(ladder_frame(c.strike_ladder), hide_index=True,
                          column_config=ladder_columns(), width="stretch")
 
@@ -210,8 +219,114 @@ def _render_base_rate(c) -> None:
             tiles.append(stat_tile("Bad to good", f"{b.p10_pct:+.0f}% to {b.p90_pct:+.0f}%",
                                    "10th to 90th percentile"))
         stat_row(tiles)
+        render_base_rate_chart(b)
         theme.note("Overlapping windows, so treat this as texture rather than a clean "
                    "statistic. It is still this stock's own behaviour rather than a guess.")
+
+
+def render_base_rate_chart(b) -> None:
+    """Every outcome this stock has produced over a window this long, with the
+    move you need drawn across it. Green bars cleared the bar, red fell short."""
+    if not b.distribution:
+        return
+    frame = pd.DataFrame(b.distribution)
+    frame["Outcome"] = frame["clears"].map(
+        {True: "Cleared the move", False: "Fell short"})
+
+    # Drawn from each bucket's real edges rather than a fixed pixel width, so
+    # the bars stay flush against each other at any width the column happens to
+    # be - a fixed size leaves gaps on a wide screen and overlaps on a phone.
+    bars = alt.Chart(frame).mark_bar(stroke=None).encode(
+        x=alt.X("from:Q", title=f"Return over {b.horizon_days} days (%)",
+                scale=alt.Scale(nice=False, zero=False),
+                axis=alt.Axis(format="+.0f", labelFlush=True)),
+        x2=alt.X2("to:Q"),
+        y=alt.Y("pct:Q", title="Share of stretches (%)"),
+        color=alt.Color("Outcome:N",
+                        scale=alt.Scale(domain=["Cleared the move", "Fell short"],
+                                        range=[theme.ACCENT_BRIGHT, "#E4A79F"]),
+                        legend=alt.Legend(title=None, orient="top")),
+        tooltip=[alt.Tooltip("from:Q", title="From", format="+.1f"),
+                 alt.Tooltip("to:Q", title="To", format="+.1f"),
+                 alt.Tooltip("pct:Q", title="Share of stretches", format=".1f"),
+                 alt.Tooltip("Outcome:N")],
+    )
+
+    marks = [bars]
+    need = pd.DataFrame({"x": [b.required_pct]})
+    marks.append(alt.Chart(need).mark_rule(
+        color=theme.INK, strokeWidth=2, strokeDash=[5, 3]).encode(x="x:Q"))
+    marks.append(alt.Chart(need).mark_text(
+        align="left", dx=6, dy=-6, baseline="top", color=theme.INK,
+        fontWeight=600, fontSize=11,
+        text=f"needs {b.required_pct:+.1f}%").encode(x="x:Q", y=alt.value(0)))
+
+    if b.median_pct is not None:
+        median = pd.DataFrame({"x": [b.median_pct]})
+        marks.append(alt.Chart(median).mark_rule(
+            color=theme.SECONDARY, strokeWidth=1.5).encode(x="x:Q"))
+        marks.append(alt.Chart(median).mark_text(
+            align="left", dx=6, dy=10, baseline="top", color=theme.SECONDARY,
+            fontSize=11, text=f"typical {b.median_pct:+.1f}%").encode(
+                x="x:Q", y=alt.value(0)))
+
+    st.altair_chart(
+        alt.layer(*marks).properties(height=230).configure_view(strokeOpacity=0),
+        width="stretch")
+    theme.note(
+        f"Each bar is a slice of the {b.windows:,} overlapping {b.horizon_days}-day "
+        "stretches in this stock's history. The dashed line is what this contract "
+        "needs. Everything green of it made money.")
+
+
+def render_ladder_chart(rows: list[dict], chosen: Optional[float] = None) -> None:
+    """The whole trade-off on one pair of axes: what each strike costs against
+    the move it needs. The shape - cost falling as the required move climbs -
+    is the decision, and a table makes you reconstruct it row by row."""
+    if not rows:
+        return
+    frame = pd.DataFrame([{
+        "Strike": r["strike"],
+        "Cost": r["cost"],
+        "Needs": r["required_move_pct"],
+        "Time cost": r["extrinsic_ann_pct"],
+        "Delta": r["delta"],
+    } for r in rows])
+
+    line = alt.Chart(frame).mark_line(
+        color=theme.BORDER_STRONG, strokeWidth=1.5).encode(
+        x=alt.X("Needs:Q", title="Move it needs to break even (%)",
+                axis=alt.Axis(format="+.0f")),
+        y=alt.Y("Cost:Q", title="What one contract costs ($)",
+                axis=alt.Axis(format="$,.0f")))
+    points = alt.Chart(frame).mark_circle(size=110, opacity=0.9).encode(
+        x="Needs:Q", y="Cost:Q",
+        color=alt.Color("Time cost:Q",
+                        title="Time cost /yr",
+                        scale=alt.Scale(scheme="yellowgreenblue", reverse=True),
+                        legend=alt.Legend(orient="top", format=".0f")),
+        tooltip=[alt.Tooltip("Strike:Q", title="Strike", format="$,.0f"),
+                 alt.Tooltip("Cost:Q", title="Cost", format="$,.0f"),
+                 alt.Tooltip("Needs:Q", title="Needs", format="+.1f"),
+                 alt.Tooltip("Time cost:Q", title="Time cost /yr", format=".1f"),
+                 alt.Tooltip("Delta:Q", title="Delta", format=".2f")])
+
+    layers = [line, points]
+    if chosen is not None:
+        picked = frame[frame["Strike"] == chosen]
+        if not picked.empty:
+            layers.append(alt.Chart(picked).mark_point(
+                size=260, shape="circle", stroke=theme.INK, strokeWidth=2.5,
+                fillOpacity=0).encode(x="Needs:Q", y="Cost:Q"))
+            layers.append(alt.Chart(picked).mark_text(
+                align="left", dx=12, dy=-10, color=theme.INK, fontWeight=600,
+                fontSize=11, text="scored above").encode(x="Needs:Q", y="Cost:Q"))
+
+    st.altair_chart(
+        alt.layer(*layers).properties(height=260).configure_view(strokeOpacity=0),
+        width="stretch")
+    theme.note("Down and to the right is cheaper but needs a bigger move. The circled "
+               "point is the contract scored above. Darker dots rent time more cheaply.")
 
 
 def leaps_frame(candidates: list) -> pd.DataFrame:
@@ -325,15 +440,16 @@ def render_seasonality(s) -> None:
     stat_row(tiles)
 
     st.markdown("**Average return by calendar month**")
-    chart = pd.DataFrame({
-        "Month": [m.short for m in s.months],
-        "Average %": [m.avg_pct if m.avg_pct is not None else 0.0 for m in s.months],
-    }).set_index("Month")
-    st.bar_chart(chart, color=theme.ACCENT, height=240)
+    render_month_chart(s)
 
     st.markdown("**Month by month, year by year**")
-    theme.note(f"Total returns with dividends reinvested, {s.first_year} to {s.last_year}. "
-               "Green is a positive month, red negative.")
+    note = (f"Total returns with dividends reinvested, {s.first_year} to {s.last_year}. "
+            "Green is a positive month, red negative.")
+    if s.partial_month:
+        from src.research.seasonality import MONTH_NAMES
+        note += (f" {MONTH_NAMES[s.partial_month - 1]} is still running - it is marked "
+                 "with * and left out of the averages until it finishes.")
+    theme.note(note)
     st.markdown(_heatmap_html(s), unsafe_allow_html=True)
 
     st.write("")
@@ -347,6 +463,47 @@ def render_seasonality(s) -> None:
                 f"{m.hit_rate:.0f}% of {m.years} years "
                 f"(best {m.best_pct:+.1f}%, worst {m.worst_pct:+.1f}%). {_esc(m.read)}")
     theme.note(s.summary)
+
+
+def render_month_chart(s) -> None:
+    """Average return per calendar month, red below zero and green above.
+
+    A single accent colour here would say a -3% January and a +4% November are
+    the same kind of thing, and the heatmap directly underneath already reads
+    red/green - the two should agree.
+    """
+    rows = [{"Month": m.short, "Average": m.avg_pct, "Hit": m.hit_rate,
+             "Years": m.years, "Current": m.month == (s.this_month.month
+                                                      if s.this_month else 0)}
+            for m in s.months if m.avg_pct is not None]
+    if not rows:
+        return
+    frame = pd.DataFrame(rows)
+    order = [r["Month"] for r in rows]
+
+    bars = alt.Chart(frame).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3,
+                                     cornerRadiusBottomLeft=3,
+                                     cornerRadiusBottomRight=3).encode(
+        x=alt.X("Month:N", sort=order, title=None,
+                axis=alt.Axis(labelAngle=0, labelFontWeight=600)),
+        y=alt.Y("Average:Q", title="Average return (%)",
+                axis=alt.Axis(format="+.1f")),
+        color=alt.condition(alt.datum.Average >= 0,
+                            alt.value(theme.ACCENT), alt.value(theme.RED)),
+        # the month she is standing in gets an outline so it is findable at a glance
+        stroke=alt.condition(alt.datum.Current, alt.value(theme.INK),
+                             alt.value("transparent")),
+        strokeWidth=alt.condition(alt.datum.Current, alt.value(2), alt.value(0)),
+        tooltip=[alt.Tooltip("Month:N"),
+                 alt.Tooltip("Average:Q", title="Average", format="+.2f"),
+                 alt.Tooltip("Hit:Q", title="Green years (%)", format=".0f"),
+                 alt.Tooltip("Years:Q", title="Years measured")],
+    )
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+        color=theme.BORDER_STRONG, strokeWidth=1).encode(y="y:Q")
+    st.altair_chart(
+        alt.layer(bars, zero).properties(height=240).configure_view(strokeOpacity=0),
+        width="stretch")
 
 
 def _heatmap_html(s) -> str:
@@ -363,12 +520,21 @@ def _heatmap_html(s) -> str:
             f"</tr></thead><tbody>"]
 
     def row(label: str, values: list[Optional[float]], total: Optional[float],
-            bold: bool = False) -> str:
+            bold: bool = False, partial: Optional[int] = None) -> str:
         weight = "700" if bold else "500"
-        cells = "".join(
-            f"<td style='{cell}background:{_heat_colour(v)};color:{_heat_text(v)};"
-            f"font-weight:{weight};'>" + (f"{v:+.1f}" if v is not None else "-") + "</td>"
-            for v in values)
+        cells = []
+        for index, v in enumerate(values, start=1):
+            # The month still running is shown but dashed, so it never reads as
+            # a finished result - it is excluded from every average above.
+            edge = (f"outline:2px dashed {theme.SECONDARY};outline-offset:-2px;"
+                    if partial and index == partial else "")
+            text = (f"{v:+.1f}" if v is not None else "-")
+            if partial and index == partial and v is not None:
+                text = f"{v:+.1f}*"
+            cells.append(f"<td style='{cell}background:{_heat_colour(v)};"
+                         f"color:{_heat_text(v)};font-weight:{weight};{edge}'>"
+                         f"{text}</td>")
+        cells = "".join(cells)
         total_cell = (f"<td style='{cell}background:{_heat_colour(total)};"
                       f"color:{_heat_text(total)};font-weight:700;'>"
                       + (f"{total:+.1f}" if total is not None else "-") + "</td>")
@@ -384,7 +550,8 @@ def _heatmap_html(s) -> str:
             + (f"{m.hit_rate:.0f}%" if m.hit_rate is not None else "-") + "</td>"
             for m in s.months) + f"<td style='{cell}'></td></tr>")
     for r in s.rows:
-        html.append(row(str(r.year), r.returns, r.full_year_pct))
+        html.append(row(str(r.year), r.returns, r.full_year_pct,
+                        partial=r.partial_month))
     html.append("</tbody></table></div>")
     return "".join(html)
 

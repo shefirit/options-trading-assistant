@@ -95,6 +95,10 @@ class BaseRate(BaseModel):
                                          # the strike, i.e. the LEAP expired worthless
     years_used: float = 0.0
     read: str = ""
+    # The shape of those outcomes, for the chart: one entry per bucket with
+    # {"from", "to", "mid", "pct", "clears"}. `pct` is the share of windows in
+    # the bucket, `clears` says the bucket sits at or above the required move.
+    distribution: list[dict] = Field(default_factory=list)
 
 
 class LeapEconomics(BaseModel):
@@ -151,6 +155,8 @@ class LeapsCandidate(BaseModel):
     avg_volume: Optional[float] = None
 
     score: float = 0.0
+    raw_score: float = 0.0               # before the critical-pillar cap
+    gated: bool = False                  # True when a failing pillar held it down
     stage: str = "setup"                 # "setup" (no option data yet) | "full"
     rank: Optional[int] = None
     pillars: list[Pillar] = Field(default_factory=list)
@@ -314,17 +320,41 @@ def vol_percentile(closes: list[float], current_iv_pct: float,
     return round(100.0 * below / len(samples), 1)
 
 
-def dividend_yield_pct(info: dict) -> float:
-    """Yahoo has shipped this both as a fraction (0.0053) and as a percent
-    (0.53) depending on the version, so normalize. Nobody yields 25%."""
-    raw = info.get("dividendYield") or info.get("trailingAnnualDividendYield") or 0.0
+def _pos_float(value) -> Optional[float]:
     try:
-        value = float(raw)
+        number = float(value)
     except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def dividend_yield_pct(info: dict, price: Optional[float] = None) -> float:
+    """The annual dividend yield as a percent (2.58 means 2.58%).
+
+    Prefers the dollar rate divided by the share price, because dollars per
+    share carry no unit ambiguity. Yahoo's own yield field has shipped both as
+    a fraction (0.0053) and as an already-percent number (0.53) depending on
+    the yfinance version, and no threshold can separate the two cleanly: a
+    genuine 0.2%-yielder in percent form is indistinguishable from a 20%
+    yielder in fraction form. Falling back to the rate avoids the guess for
+    every stock that reports one.
+    """
+    info = info or {}
+    rate = _pos_float(info.get("trailingAnnualDividendRate")) or _pos_float(
+        info.get("dividendRate"))
+    if rate is not None and price and price > 0:
+        return rate / price * 100.0
+
+    raw = _pos_float(info.get("dividendYield")) or _pos_float(
+        info.get("trailingAnnualDividendYield"))
+    if raw is None:
         return 0.0
-    if value <= 0:
-        return 0.0
-    return value if value > 0.25 else value * 100.0
+    # No rate to check against, so fall back to the units heuristic the rest of
+    # the app uses (see recommender._normalize_yield_pct): under 0.12 reads as
+    # a fraction, 0.12-25 as a percent, anything above that is junk.
+    if raw < 0.12:
+        return raw * 100.0
+    return raw if raw <= 25 else 0.0
 
 
 def _percentile(values: list[float], pct: float) -> Optional[float]:
@@ -375,12 +405,47 @@ def historical_base_rate(closes: list[float], horizon_days: int, required_pct: f
     if strike_drop_pct is not None:
         result.loss_rate = 100.0 * sum(1 for f in forwards if f <= strike_drop_pct) / len(forwards)
 
+    result.distribution = _histogram(forwards, required_pct)
+
     result.read = (
         f"Over {result.years_used:.0f} years, this stock cleared {required_pct:+.1f}% in "
         f"{result.hit_rate:.0f}% of {horizon_days}-day stretches. A typical stretch "
         f"returned {result.median_pct:+.1f}%."
     )
     return result
+
+
+def _histogram(values: list[float], required_pct: float,
+               buckets: int = 24) -> list[dict]:
+    """Bucket the forward returns so the spread can be drawn, not just described.
+
+    The bar chart is the point of this: a hit rate of 62% says little next to
+    seeing where the bar you must clear actually falls inside the pile of
+    everything this stock has done.
+    """
+    if not values:
+        return []
+    low, high = min(values), max(values)
+    if high - low < 1e-9:                      # every window identical
+        return [{"from": low, "to": high, "mid": low, "pct": 100.0,
+                 "clears": low >= required_pct}]
+    width = (high - low) / buckets
+    counts = [0] * buckets
+    for v in values:
+        idx = min(buckets - 1, int((v - low) / width))
+        counts[idx] += 1
+    total = len(values)
+    rows = []
+    for i, count in enumerate(counts):
+        start, end = low + i * width, low + (i + 1) * width
+        mid = (start + end) / 2
+        rows.append({"from": round(start, 2), "to": round(end, 2),
+                     "mid": round(mid, 2),
+                     "pct": round(100.0 * count / total, 2),
+                     # a bucket counts as clearing when its midpoint does, which
+                     # keeps the colour split visually where the line sits
+                     "clears": mid >= required_pct})
+    return rows
 
 
 def probability_above(spot: float, target: float, dte: int, iv: float,
@@ -457,7 +522,7 @@ def economics(contract: OptionContract, spot: float, info: Optional[dict] = None
     if spot > 0:
         econ.total_loss_drop_pct = (contract.strike / spot - 1.0) * 100.0
 
-    econ.dividend_yield_pct = dividend_yield_pct(info)
+    econ.dividend_yield_pct = dividend_yield_pct(info, spot)
     econ.dividend_give_up_pct = econ.dividend_yield_pct * years
     econ.all_in_cost_ann_pct = econ.extrinsic_ann_pct + econ.dividend_yield_pct
 
@@ -867,6 +932,16 @@ def score_odds(econ: LeapEconomics, base: Optional[BaseRate],
 
 
 # ------------------------------------------------------------------ assembly
+# A pillar at or below this is not a weak spot, it is a reason not to trade.
+CRITICAL_FLOOR = 35.0
+# The best overall score a candidate can show while one of those is failing.
+CAPPED_SCORE = 55.0
+# Cost and odds are the two that can sink a LEAP on their own. A wonderful
+# company bought at a terrible price is still a losing trade, and a plain
+# average lets three strong pillars bury that.
+CRITICAL_PILLARS = ("cost", "odds")
+
+
 def blend(pillars: list[Pillar]) -> float:
     """Weighted score over the pillars we could actually measure."""
     live = [p for p in pillars if p.measured]
@@ -874,6 +949,28 @@ def blend(pillars: list[Pillar]) -> float:
     if total_weight <= 0:
         return 0.0
     return round(sum(p.score * p.weight for p in live) / total_weight, 1)
+
+
+def failing_pillars(pillars: list[Pillar]) -> list[Pillar]:
+    """The critical pillars that are failing outright, worst first."""
+    bad = [p for p in pillars
+           if p.measured and p.key in CRITICAL_PILLARS and p.score <= CRITICAL_FLOOR]
+    return sorted(bad, key=lambda p: p.score)
+
+
+def apply_gate(score: float, pillars: list[Pillar]) -> float:
+    """Hold the headline score down while a make-or-break pillar is failing.
+
+    Weighting cost and odds at 45% was meant to stop a great company with
+    terrible option pricing scoring well. It does not quite manage it: a stock
+    can score 100 on trend, 94 on quality and still carry a cost pillar of 22 -
+    "very expensive, this is where LEAPS quietly lose money" - and the average
+    lands near 74, which reads as a green light.
+
+    So a failing critical pillar caps the headline instead of merely dragging on
+    it. Ranking still works below the cap, and the reason is always shown.
+    """
+    return min(score, CAPPED_SCORE) if failing_pillars(pillars) else score
 
 
 def share_comparison(econ: LeapEconomics, spot: float) -> ShareComparison:
@@ -985,7 +1082,9 @@ def score_full(candidate: LeapsCandidate, chain: Optional[OptionChain],
     odds = score_odds(econ, base, implied)
 
     candidate.pillars = [trend, entry, quality, cost, odds]
-    candidate.score = blend(candidate.pillars)
+    candidate.raw_score = blend(candidate.pillars)
+    candidate.score = apply_gate(candidate.raw_score, candidate.pillars)
+    candidate.gated = candidate.score < candidate.raw_score
     candidate.comparison = share_comparison(econ, spot)
     candidate.strike_ladder = strike_ladder(chain, spot, contract.dte, info)
     candidate.headline = _headline(candidate)
@@ -1014,9 +1113,17 @@ def _headline(c: LeapsCandidate) -> str:
     best = max(live, key=lambda p: p.score)
     worst = min(live, key=lambda p: p.score)
     if best.key == worst.key:
-        return f"{best.label} {best.score:.0f}/100."
-    return (f"Strongest on {best.label.lower()} ({best.score:.0f}), "
-            f"weakest on {worst.label.lower()} ({worst.score:.0f}).")
+        base = f"{best.label} {best.score:.0f}/100."
+    else:
+        base = (f"Strongest on {best.label.lower()} ({best.score:.0f}), "
+                f"weakest on {worst.label.lower()} ({worst.score:.0f}).")
+    if c.gated:
+        failing = failing_pillars(c.pillars)
+        names = " and ".join(p.label.lower() for p in failing)
+        base += (f" Held to {CAPPED_SCORE:.0f} because {names} "
+                 f"{'are' if len(failing) > 1 else 'is'} failing - it would have "
+                 f"scored {c.raw_score:.0f} on the average alone.")
+    return base
 
 
 def _summary(c: LeapsCandidate) -> str:

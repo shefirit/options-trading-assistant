@@ -49,6 +49,8 @@ class YearRow(BaseModel):
     year: int
     returns: list[Optional[float]] = Field(default_factory=lambda: [None] * 12)
     full_year_pct: Optional[float] = None
+    partial_month: Optional[int] = None   # 1-12 when this row's month is still
+                                          # running, so the heatmap can mark it
 
 
 class Seasonality(BaseModel):
@@ -64,6 +66,8 @@ class Seasonality(BaseModel):
     next_month: Optional[MonthStat] = None
     summary: str = ""
     enough_history: bool = False
+    partial_month: Optional[int] = None   # 1-12 when the newest row's last month
+                                          # is still running (excluded from stats)
 
 
 # ---------- turning prices into monthly returns ----------
@@ -157,12 +161,24 @@ def build(symbol: str, points: Iterable[tuple[dt.date, float]],
     result.years_covered = len(years)
     result.enough_history = len(years) >= MIN_YEARS
 
+    # The month we are standing in has not finished, so its "return" is only
+    # however many days have elapsed. Showing that in the heatmap is useful -
+    # it is this month so far - but letting it into the averages would rewrite
+    # history every day. A mid-July dip would drag down the average July of the
+    # last twenty years. So the statistics below run on completed months only.
+    current = (today.year, today.month)
+    result.partial_month = current[1] if current in returns else None
+    settled = {k: v for k, v in returns.items() if k != current}
+
     # Heatmap rows, newest year first - that is the order she reads them in.
     for year in reversed(years):
         row = YearRow(year=year)
         for month in range(1, 13):
             row.returns[month - 1] = returns.get((year, month))
-        present = [r for r in row.returns if r is not None]
+        if year == current[0] and result.partial_month:
+            row.partial_month = result.partial_month
+        present = [r for r in (settled.get((year, m)) for m in range(1, 13))
+                   if r is not None]
         if len(present) == 12:
             compounded = 1.0
             for r in present:
@@ -170,9 +186,9 @@ def build(symbol: str, points: Iterable[tuple[dt.date, float]],
             row.full_year_pct = (compounded - 1) * 100
         result.rows.append(row)
 
-    # Per-month statistics.
+    # Per-month statistics, completed months only.
     for month in range(1, 13):
-        values = [returns[(y, month)] for y in years if (y, month) in returns]
+        values = [settled[(y, month)] for y in years if (y, month) in settled]
         stat = MonthStat(month=month, name=MONTH_NAMES[month - 1],
                          short=MONTH_SHORT[month - 1], years=len(values))
         if values:

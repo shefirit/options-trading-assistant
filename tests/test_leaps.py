@@ -75,6 +75,38 @@ def test_dividend_yield_handles_both_yahoo_formats():
     assert leaps.dividend_yield_pct({}) == 0.0
 
 
+def test_dividend_yield_prefers_the_dollar_rate_over_the_ambiguous_field():
+    # AAPL as Yahoo actually reports it: rate in dollars, yield already a percent.
+    info = {"trailingAnnualDividendRate": 1.04, "dividendYield": 0.34}
+    assert leaps.dividend_yield_pct(info, price=333.02) == pytest.approx(0.312, abs=0.01)
+
+
+def test_a_small_percent_yield_is_not_read_as_a_huge_fraction():
+    """0.20 in percent form means 0.20%, not 20%. The old threshold sat at
+    0.25 and turned every low-yielding mega-cap - AAPL, QQQ - into one that
+    appeared to pay a fifth of its price a year, which then swamped the
+    all-in cost of the contract."""
+    assert leaps.dividend_yield_pct({"dividendYield": 0.20}) == pytest.approx(0.20)
+    assert leaps.dividend_yield_pct({"dividendYield": 0.34}) == pytest.approx(0.34)
+
+
+def test_the_fallback_heuristic_still_has_an_undecidable_band():
+    """Below 0.12 the two conventions genuinely overlap: 0.11 is either an
+    11% yield written as a fraction or a 0.11% one written as a percent, and
+    no threshold separates them. We keep the app-wide convention (fraction)
+    and rely on the dollar rate, which every real payer reports, to settle it."""
+    assert leaps.dividend_yield_pct({"dividendYield": 0.11}) == pytest.approx(11.0)
+    # ...but the rate wins whenever it is there, which is the point of the fix.
+    assert leaps.dividend_yield_pct(
+        {"dividendYield": 0.11, "trailingAnnualDividendRate": 0.11},
+        price=100.0) == pytest.approx(0.11)
+
+
+def test_dividend_yield_ignores_junk_values():
+    assert leaps.dividend_yield_pct({"dividendYield": 900}) == 0.0
+    assert leaps.dividend_yield_pct({"dividendYield": -2}) == 0.0
+
+
 # ---------- base rate ----------
 def test_base_rate_of_a_steady_riser_is_high():
     base = leaps.historical_base_rate(_rising(), 365, required_pct=5.0)
@@ -352,3 +384,79 @@ def test_vol_percentile_places_a_high_reading_near_the_top():
     closes = _flat()
     calm = leaps.realized_vol(closes[-31:], lookback=30) * 100
     assert leaps.vol_percentile(closes, calm * 3) > 80
+
+
+# ---------- the critical-pillar gate ----------
+def _pillar(key: str, score: float) -> leaps.Pillar:
+    return leaps.Pillar(key=key, label=key.title(),
+                        weight=leaps.DEFAULT_WEIGHTS[key], score=score)
+
+
+def test_a_failing_cost_pillar_caps_an_otherwise_glowing_score():
+    """The whole point of weighting cost at 25% was to stop a great company
+    with terrible option pricing looking like a buy. A plain average does not
+    manage it - AAPL scored 74 on the average with a cost pillar of 22."""
+    pillars = [_pillar("trend", 100), _pillar("entry", 89), _pillar("quality", 94),
+               _pillar("cost", 22), _pillar("odds", 81)]
+    raw = leaps.blend(pillars)
+    assert raw > 70                                  # the average alone reads green
+    assert leaps.apply_gate(raw, pillars) == leaps.CAPPED_SCORE
+
+
+def test_a_failing_odds_pillar_also_caps():
+    pillars = [_pillar("trend", 95), _pillar("entry", 90), _pillar("quality", 95),
+               _pillar("cost", 80), _pillar("odds", 20)]
+    assert leaps.apply_gate(leaps.blend(pillars), pillars) == leaps.CAPPED_SCORE
+
+
+def test_a_weak_but_not_failing_pillar_does_not_cap():
+    pillars = [_pillar("trend", 90), _pillar("entry", 80), _pillar("quality", 85),
+               _pillar("cost", 50), _pillar("odds", 70)]
+    raw = leaps.blend(pillars)
+    assert leaps.apply_gate(raw, pillars) == raw
+
+
+def test_a_weak_non_critical_pillar_does_not_cap():
+    """Trend and quality are not make-or-break the way cost and odds are - a
+    cheap option on a dull company is still a legitimate thing to consider."""
+    pillars = [_pillar("trend", 20), _pillar("entry", 30), _pillar("quality", 25),
+               _pillar("cost", 90), _pillar("odds", 85)]
+    raw = leaps.blend(pillars)
+    assert leaps.apply_gate(raw, pillars) == raw
+
+
+def test_the_gate_never_raises_a_low_score():
+    pillars = [_pillar("trend", 10), _pillar("entry", 10), _pillar("quality", 10),
+               _pillar("cost", 10), _pillar("odds", 10)]
+    raw = leaps.blend(pillars)
+    assert leaps.apply_gate(raw, pillars) == raw < leaps.CAPPED_SCORE
+
+
+def test_failing_pillars_come_back_worst_first():
+    pillars = [_pillar("cost", 30), _pillar("odds", 12)]
+    assert [p.key for p in leaps.failing_pillars(pillars)] == ["odds", "cost"]
+
+
+def test_an_unmeasured_pillar_cannot_trigger_the_gate():
+    pillars = [_pillar("trend", 90), _pillar("entry", 90), _pillar("quality", 90),
+               _pillar("cost", 0), _pillar("odds", 90)]
+    pillars[3].measured = False
+    raw = leaps.blend(pillars)
+    assert leaps.apply_gate(raw, pillars) == raw
+
+
+# ---------- the base-rate distribution that feeds the chart ----------
+def test_the_distribution_buckets_cover_every_window():
+    base = leaps.historical_base_rate(_rising(), 365, required_pct=5.0)
+    assert base.distribution
+    assert sum(b["pct"] for b in base.distribution) == pytest.approx(100.0, abs=0.5)
+
+
+def test_buckets_above_the_required_move_are_marked_as_clearing():
+    base = leaps.historical_base_rate(_rising(), 365, required_pct=5.0)
+    for bucket in base.distribution:
+        assert bucket["clears"] == (bucket["mid"] >= 5.0)
+
+
+def test_distribution_is_empty_when_history_is_too_short():
+    assert leaps.historical_base_rate([100.0] * 10, 365, 5.0).distribution == []
