@@ -2087,7 +2087,7 @@ def _live_call_mid(provider, underlying: str, strike: float,
     return round(contract.mid * 100, 2)
 
 
-def _write_call_form(p, provider) -> None:
+def _write_call_form(p, provider, kp: str = "detail") -> None:
     """She is uncovered: record the new call she has just written."""
     import datetime as dt
 
@@ -2100,13 +2100,13 @@ def _write_call_form(p, provider) -> None:
         w1, w2, w3 = st.columns(3)
         sold_on = w1.date_input("Sold on", value=dt.date.today(),
                                 max_value=dt.date.today(),
-                                key=f"write_when_{p.trade_id}")
+                                key=f"write_when_{kp}_{p.trade_id}")
         strike = w2.number_input("Strike you SOLD", min_value=0.0, step=1.0,
-                                 key=f"write_strike_{p.trade_id}")
+                                 key=f"write_strike_{kp}_{p.trade_id}")
         exp = w3.date_input("Expiration",
                             value=dt.date.today() + dt.timedelta(days=30),
                             min_value=dt.date.today(),
-                            key=f"write_exp_{p.trade_id}")
+                            key=f"write_exp_{kp}_{p.trade_id}")
         suggested = _live_call_mid(provider, p.underlying, strike, exp)
         credit = st.number_input(
             "Credit you collected ($ total, from your TOS fill)",
@@ -2118,10 +2118,10 @@ def _write_call_form(p, provider) -> None:
             theme.note(f"Suggested from today's chain: **\\${suggested:,.0f}** "
                        f"for the {strike:g} call expiring {exp}. Change it if "
                        "your fill said otherwise.")
-        note = st.text_input("Note (optional)", key=f"write_note_{p.trade_id}")
+        note = st.text_input("Note (optional)", key=f"write_note_{kp}_{p.trade_id}")
 
         if st.button("Record the call I sold", type="primary",
-                     key=f"writebtn_{p.trade_id}"):
+                     key=f"writebtn_{kp}_{p.trade_id}"):
             if not strike:
                 st.warning("Type the strike you sold first.")
             elif not credit:
@@ -2142,7 +2142,7 @@ def _write_call_form(p, provider) -> None:
                 st.rerun()
 
 
-def _roll_form(p, live: dict, provider) -> None:
+def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
     """Record what happened to the short call: rolled in one order, or just
     bought back with the next one still to come.
 
@@ -2162,7 +2162,7 @@ def _roll_form(p, live: dict, provider) -> None:
             "What did you do?",
             ["Rolled it for a credit (one order)",
              "Closed the call (I'll sell a new one)"],
-            key=f"roll_mode_{p.trade_id}")
+            key=f"roll_mode_{kp}_{p.trade_id}")
         rolling = mode.startswith("Rolled")
 
         if not rolling:
@@ -2175,18 +2175,18 @@ def _roll_form(p, live: dict, provider) -> None:
             b1, b2 = st.columns(2)
             back_on = b1.date_input("Closed it on", value=dt.date.today(),
                                     max_value=dt.date.today(),
-                                    key=f"back_when_{p.trade_id}")
+                                    key=f"back_when_{kp}_{p.trade_id}")
             paid = b2.number_input(
                 "What you PAID to close it ($ total)",
                 min_value=0.0, step=5.0,
                 value=round(float(live.get("cost_to_close") or 0.0), 2),
-                key=f"back_paid_{p.trade_id}",
+                key=f"back_paid_{kp}_{p.trade_id}",
                 help="The fill price x100 x contracts. Buying back a short call "
                      "always costs money - that is the debit you were avoiding "
                      "by not rolling.")
-            note = st.text_input("Note (optional)", key=f"back_note_{p.trade_id}")
+            note = st.text_input("Note (optional)", key=f"back_note_{kp}_{p.trade_id}")
             if st.button("Record it", type="primary",
-                         key=f"backbtn_{p.trade_id}"):
+                         key=f"backbtn_{kp}_{p.trade_id}"):
                 if not paid:
                     st.warning("Type what you paid to close the call.")
                 else:
@@ -2209,18 +2209,18 @@ def _roll_form(p, live: dict, provider) -> None:
         r1, r2, r3 = st.columns(3)
         rolled_on = r1.date_input("Rolled on", value=dt.date.today(),
                                   max_value=dt.date.today(),
-                                  key=f"roll_when_{p.trade_id}")
+                                  key=f"roll_when_{kp}_{p.trade_id}")
         new_strike = r2.number_input(
             "New short call strike", min_value=0.0, step=1.0,
-            key=f"roll_strike_{p.trade_id}",
+            key=f"roll_strike_{kp}_{p.trade_id}",
             help="The call you SOLD in the roll - the further-out one.")
         new_exp = r3.date_input(
             "New expiration", value=dt.date.today() + dt.timedelta(days=30),
-            min_value=dt.date.today(), key=f"roll_exp_{p.trade_id}")
+            min_value=dt.date.today(), key=f"roll_exp_{kp}_{p.trade_id}")
 
         cash = st.number_input(
             "Net credit from the roll ($ total, from your TOS fill)",
-            step=5.0, key=f"roll_cash_{p.trade_id}",
+            step=5.0, key=f"roll_cash_{kp}_{p.trade_id}",
             help="The net price on the fill, x100 x contracts. A diagonal "
                  "filled at 0.80 credit on 1 contract = $80. If the roll cost "
                  "you money instead, type a negative number.")
@@ -2252,9 +2252,9 @@ def _roll_form(p, live: dict, provider) -> None:
             theme.note("That contract could not be priced from the chain just "
                        "now, so type what it sold for. Without it the app "
                        "cannot tell you when the new call hits your 50% target.")
-        note = st.text_input("Note (optional)", key=f"roll_note_{p.trade_id}")
+        note = st.text_input("Note (optional)", key=f"roll_note_{kp}_{p.trade_id}")
 
-        if st.button("Record the roll", type="primary", key=f"rollbtn_{p.trade_id}"):
+        if st.button("Record the roll", type="primary", key=f"rollbtn_{kp}_{p.trade_id}"):
             if not new_strike:
                 st.warning("Type the new short call's strike first.")
             elif not cash:
@@ -2280,49 +2280,341 @@ def _roll_form(p, live: dict, provider) -> None:
                 st.rerun()
 
 
-def _today_card(items: list[dict]) -> None:
-    """One line that answers the beginner's first question: anything to DO today?"""
-    needs = [it for it in items if it["signal"].action in ("stop", "time", "profit")]
-    if needs:
-        word = "trade needs" if len(needs) == 1 else "trades need"
-        st.error(f"🔔 {len(needs)} of {len(items)} open {word} action today - "
-                 "see the What to do column, then close in thinkorswim.")
-    else:
-        st.markdown(theme.chip(
-            f"✅ {len(items)} open · nothing to do today", "green"),
-            unsafe_allow_html=True)
+def _close_form(p, live: dict, label: str = "✔️ Close this trade (records the result)",
+                kp: str = "detail") -> None:
+    """Record the close of an open trade.
+
+    Pulled out of the one-trade detail card so the Today block can offer it too:
+    a trade that needs closing today should be closeable where she reads that,
+    not only after finding it again in a dropdown further down.
+    """
+    with st.expander(label):
+        theme.note("Close it in thinkorswim first, then record the fill here so "
+                   "your results stay accurate.")
+        default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
+            is not None else 0.0
+        if p.is_debit:
+            # Closing a PMCC or covered call PAYS her - she sells the
+            # long side back. The old "what you paid" box could not go
+            # below zero, so a close that paid had nowhere to be typed.
+            default_in = live.get("position_value")
+            proceeds = st.number_input(
+                "What you RECEIVED when you closed it (total $, from your "
+                "TOS fill)",
+                min_value=0.0, step=25.0,
+                value=round(max(float(default_in or 0.0), 0.0), 2),
+                key=f"exit_in_{kp}_{p.trade_id}",
+                help="Selling the LEAPS back, minus buying back the short "
+                     "call - the net on your fill, x100 x contracts. A "
+                     "50.00 credit on 1 contract = $5,000. If closing "
+                     "somehow cost you money, type 0 and note it below.")
+            close_cash = float(proceeds)
+            exit_cost = 0.0
+        else:
+            exit_cost = st.number_input(
+                "What you paid to close it (total $, from your TOS fill)",
+                min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
+                key=f"exit_cost_{kp}_{p.trade_id}")
+            close_cash = -float(exit_cost)
+        reason = st.selectbox(
+            "Why you closed it",
+            ["Profit target (50%) hit", "21 DTE time exit",
+             "21 DTE credit roll (opened a new spread)", "Stop loss hit",
+             "Rolled to a new position", "Expired worthless", "Other"],
+            key=f"exit_reason_{kp}_{p.trade_id}")
+        note = st.text_input("Lesson learned (optional - future you says thanks)",
+                             key=f"exit_note_{kp}_{p.trade_id}")
+        # The close banks the capital result. Roll credits were banked on
+        # the days they landed, so they are not counted again here.
+        realized = p.open_cash + close_cash
+        total = realized + p.roll_income
+        if p.is_debit:
+            st.markdown(components._esc(
+                f"Result: **${total:,.0f}** "
+                f"({'profit' if total >= 0 else 'loss'}) - "
+                f"${-p.open_cash:,.0f} out, ${p.roll_income:,.0f} banked "
+                f"from rolls, ${close_cash:,.0f} back today."))
+        else:
+            st.markdown(components._esc(
+                f"Result: **${realized:,.0f}** "
+                f"({'profit' if realized >= 0 else 'loss'})"))
+        if st.button("Record the close", type="primary",
+                     key=f"close_{kp}_{p.trade_id}"):
+            from src.logging_tools.trade_logger import close_trade
+            dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,
+                                         exit_cost, realized, reason, note,
+                                         close_cash=close_cash)
+            st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
+            st.rerun()
 
 
-def _month_section(all_pos, settings) -> None:
-    """Her requirement, verbatim: tracking separated by months, each month its
-    own trades, monthly profit easy to see."""
+ACTION_SIGNALS = ("stop", "time", "profit")
+
+
+def _today_section(items: list[dict], provider) -> None:
+    """What needs doing today, and the buttons to do it, in one place.
+
+    This used to be a single red line saying "2 of 5 need action - see the What
+    to do column", followed much further down by a dropdown that shows ONE trade
+    at a time. Acting on two meant picking one, scrolling, acting, scrolling
+    back, picking the other. Every trade that needs a decision is listed here
+    with its reason and its own Close / Roll forms.
+    """
+    theme.section("Anything to do today?", "Today")
+    needs = [it for it in items if it["signal"].action in ACTION_SIGNALS]
+    if not items:
+        theme.note("No open trades, so nothing to decide today.")
+        return
+    if not needs:
+        st.success(f"✅ Nothing to do today - all {len(items)} open trades are inside "
+                   "your rules. Come back tomorrow, or check on them below.")
+        return
+
+    word = "trade needs" if len(needs) == 1 else "trades need"
+    st.error(f"🔔 {len(needs)} of {len(items)} open {word} a decision today. "
+             f"Do it in thinkorswim first, then record it here.")
+    for it in needs:
+        p, live, sig = it["position"], it["live"], it["signal"]
+        with st.container(border=True):
+            dte = p.dte_left()
+            head = (f"{p.underlying} · {components.short_strategy(p.strategy_name)}"
+                    + (f" · {dte} days left" if dte is not None else ""))
+            import html as _h
+            st.markdown(
+                f"<div style='font-size:1.1rem;font-weight:800;color:{theme.INK};'>"
+                f"{_h.escape(head)}</div>", unsafe_allow_html=True)
+            components.render_exit_signal(sig)
+            # The same forms as the detail card below, with their own widget
+            # keys so one trade can appear in both places without colliding.
+            if p.is_uncovered:
+                _write_call_form(p, provider, kp="today")
+            elif p.is_debit:
+                _roll_form(p, live, provider, kp="today")
+            _close_form(p, live, kp="today")
+
+
+ALL_TIME = "All time"
+
+
+def _results_section(all_pos, settings, bp_used: float) -> None:
+    """One results block, scoped by a single picker.
+
+    There used to be two: "Monthly tracking" and "Your results". They answered
+    the same question at different scopes and printed the same four numbers -
+    closed trades, win rate, profit against goal, a chart - one above the other.
+    With every trade in one month they were literally identical on screen, which
+    is what made the tab look broken.
+
+    Now the picker decides the scope and everything below follows it.
+    """
     from src.engine import positions as pos_mod
 
-    theme.section("One month at a time", "Monthly tracking")
+    theme.section("Are you on pace for your goals?", "Results")
     summaries = pos_mod.monthly_summary(all_pos)
-    names = [m["label"] for m in summaries]
-    by_label = {m["label"]: m for m in summaries}
+    names = [ALL_TIME] + [m["label"] for m in summaries]
     if st.session_state.get("trades_month_pick") not in names:
         st.session_state.pop("trades_month_pick", None)
-    pick = st.selectbox("Month", names, key="trades_month_pick")
-    entry = by_label[pick]
+    # Default to this month: the question she opens the tab with is usually
+    # "how is THIS month going", not "how has it all gone".
+    idx = 1 if len(names) > 1 else 0
+    pick = st.selectbox("Show me", names, index=idx, key="trades_month_pick",
+                        help="One month at a time, or everything since you started.")
 
     monthly_goal = float(settings["targets"]["monthly"])
     bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
-    components.render_month_summary(entry, monthly_goal, bp_limit)
 
-    if entry["rows"]:
-        st.dataframe(components.month_trades_dataframe(entry["rows"]),
-                     width="stretch", hide_index=True,
-                     column_config=components.month_trades_column_config())
+    if pick == ALL_TIME:
+        perf = pos_mod.performance(all_pos)
+        components.render_results_dashboard(perf, settings["targets"], bp_used, bp_limit)
     else:
-        theme.note("No trades touched this month yet. Log one with ➕ Quick Log "
-                   "above, or build one in 🎯 Find a trade.")
+        entry = next(m for m in summaries if m["label"] == pick)
+        components.render_month_summary(entry, monthly_goal, bp_limit)
+        if entry["rows"]:
+            st.dataframe(components.month_trades_dataframe(entry["rows"]),
+                         width="stretch", hide_index=True,
+                         column_config=components.month_trades_column_config())
+        else:
+            theme.note("No trades touched this month. Log one with **➕ Quick Log** in "
+                       "Records below, or build one in 🎯 Find a trade.")
 
+    # The month-by-month bars sit under both views: they are the one picture
+    # that only makes sense across months, so scoping them to one would be odd.
     components.render_month_bars(summaries, monthly_goal)
 
 
+def _open_section(items, strategies, provider, priced_at) -> None:
+    """Every open trade at a glance, then one of them in full detail."""
+    from src.engine import positions as pos_mod
+
+    theme.section("How your open trades are doing", "Open trades")
+    if not items:
+        st.success("No open trades right now. Record one with **Quick Log** in Records "
+                   "below, or build one in 🎯 Find a trade.")
+        return
+
+    theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
+               "few minutes, or press ↻ Refresh at the top.")
+    st.dataframe(components.positions_dataframe(items), width="stretch",
+                 hide_index=True, column_config=components.positions_column_config())
+
+    labels = components.position_labels(items)
+    # Indexes, not label strings: two identical-looking trades must stay two
+    # separate choices, and the one needing action must say so here.
+    pick = st.selectbox("Look at one trade", range(len(items)),
+                        format_func=lambda i: labels[i], key="trades_pick")
+    it = items[int(pick)]
+    p, live, sig = it["position"], it["live"], it["signal"]
+    with st.container(border=True):
+        components.render_exit_signal(sig)
+        cols = st.columns(5)
+        px = live.get("underlying_price")
+        cols[0].metric(f"{p.underlying} now",
+                       f"${px:,.2f}" if px else "n/a",
+                       help="The underlying's price right now, about 15 minutes "
+                            "delayed. This is what decides whether your strikes "
+                            "are safe.")
+        cols[1].metric("Credit received", money(p.credit),
+                       help="What the short call paid you - the basis for your "
+                            "50% target." if p.is_debit else None)
+        cols[2].metric("Costs to close now",
+                       money(live["cost_to_close"]) if live.get("cost_to_close")
+                       is not None else "n/a",
+                       help="Buying back the short call alone." if p.is_debit
+                            else None)
+        dte_now = p.dte_left()
+        cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
+
+        # On the covered call models "max loss" was never the max loss - it
+        # was the cash she laid out for shares she still owns. What she
+        # actually needs is how far the put side protects her.
+        protection = (pos_mod.protection_read(p, px)
+                      if p.shares_cost > 0 else None)
+        if protection and protection["flat_to"] is not None:
+            cols[4].metric("Flat down to", f"${protection['flat_to']:,.0f}",
+                           help="Your shares are protected this far down - "
+                                "the P&L barely moves until here. See the "
+                                "line below for what happens past it.")
+        elif protection:
+            cols[4].metric("Most you can lose",
+                           money(abs(protection["worst_case"])),
+                           help="The real worst case from the payoff, not "
+                                "what you paid - your protective put caps "
+                                "it." if protection["capped"] else
+                                "The worst case if the stock went to zero.")
+        else:
+            cols[4].metric("Max loss", money(p.max_loss))
+
+        if p.is_debit:
+            components.render_debit_position_card(p, live)
+        if protection:
+            components.render_protection_read(p, protection)
+
+        # The single most useful read for a beginner: where is price, versus
+        # the option she SOLD, and how much room is between them.
+        cushion = pos_mod.strike_cushion(p, px)
+        if cushion:
+            side = "call" if cushion["option_type"] == "call" else "put"
+            direction = "rise" if side == "call" else "fall"
+            if cushion["breached"]:
+                theme.note(
+                    f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
+                    f"{side} you sold.** That strike is breached - your SOP says roll "
+                    f"{'up' if side == 'call' else 'down'} and out for a credit, or close.")
+            else:
+                theme.note(
+                    f"**{p.underlying} is at \\${px:,.2f}.** The closest option you sold "
+                    f"is the **{cushion['strike']:g} {side}** - price would have to "
+                    f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
+                    f"Your SOP says think about rolling once that room drops under 1.5%.")
+
+        target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
+        if sig.profit_pct is not None and p.credit > 0:
+            if sig.profit_pct >= 0:
+                st.progress(min(sig.profit_pct / target_pct, 1.0))
+                theme.note(f"You've kept **{sig.profit_pct:.0f}%** of the credit so far - "
+                           f"your SOP takes the win at **{target_pct:.0f}%**.")
+            else:
+                stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
+                st.progress(0.0)
+                theme.note(f"Right now closing costs **more** than you collected "
+                           f"({sig.profit_pct:.0f}% of the credit). Your stop-loss rule "
+                           f"says close if that reaches **-{stop_mult * 100:.0f}%**.")
+        if p.legs:
+            strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
+            theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
+                       + (f" · expires {p.expiration}" if p.expiration else ""))
+
+        if p.is_uncovered:
+            _write_call_form(p, provider)
+        elif p.is_debit:
+            _roll_form(p, live, provider)
+
+        _close_form(p, live)
+
+        with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
+            _delete_control(p.trade_id,
+                            f"{p.underlying} {p.strategy_name} opened {p.opened}",
+                            key=f"open_{p.trade_id}")
+
+
+def _records_section(settings, strategies, provider, closed, legacy, bp_used) -> None:
+    """The bookkeeping, in one place instead of scattered up and down the tab.
+
+    Logging a trade, correcting a fill and deleting a mistake are the same kind
+    of job, done occasionally. They used to sit ABOVE the alert saying a trade
+    needs closing today, which put the rarest task first.
+    """
+    theme.section("Log, correct, and look back", "Records")
+    _quick_log_form(settings, strategies, provider)
+
+    fixable = [p for p in closed if p.trade_id]
+    if fixable:
+        _fix_close_form(fixable, [
+            f"{p.underlying}  ·  {p.strategy_name}  ·  closed {p.closed_on}"
+            f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
+
+    if closed:
+        with st.expander(f"📓 All closed trades ({len(closed)})"):
+            st.dataframe(components.closed_dataframe(closed), width="stretch",
+                         hide_index=True)
+            if fixable:
+                st.divider()
+                theme.note("Delete a closed trade you only entered as a test:")
+                # Two closes matching on every field would have shared one
+                # dictionary key, and deleting the visible one would have
+                # removed the wrong row.
+                labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
+                          f"closed {p.closed_on}  ·  result ${(p.realized_pl or 0):,.0f}"
+                          for i, p in enumerate(fixable)]
+                idx = st.selectbox("Closed trade to delete", range(len(fixable)),
+                                   format_func=lambda i: labels[i], key="del_closed_pick")
+                cp = fixable[int(idx)]
+                _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
+
+    if legacy:
+        with st.expander(f"🗄️ Trades logged before tracking existed ({len(legacy)})"):
+            theme.note("These were logged with an older version of the app, so they "
+                       "can't be tracked live - shown for your records only.")
+            import pandas as pd
+            st.dataframe(pd.DataFrame([{
+                "Date": p.opened, "Symbol": p.underlying, "Strategy": p.strategy_name,
+                "Credit $": p.credit, "Notes": p.note} for p in legacy]),
+                width="stretch", hide_index=True)
+
+    if not closed and bp_used:
+        limit = float(settings["risk_limits"]["monthly_bp_limit"])
+        theme.note("No closed trades yet - your results build from the first close. "
+                   f"Meanwhile you have committed **\\${bp_used:,.0f}** of your "
+                   f"**\\${limit:,.0f}** monthly buying-power budget.")
+
+
 def _tab_trades(settings, strategies, provider) -> None:
+    """Four sections, in the order the questions come up: what needs doing
+    today, how the open trades are doing, whether she is on pace, and the
+    bookkeeping. It used to open with the bookkeeping and carry two overlapping
+    results blocks that printed the same four numbers twice.
+    """
     from src.engine import positions as pos_mod
 
     theme.section("Every logged trade, tracked against your own exit rules", "My trades")
@@ -2336,10 +2628,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     if flash:
         st.success(flash)
 
-    _quick_log_form(settings, strategies, provider)
-
     header, rows, source = _load_trade_log()
-
     all_pos = pos_mod.parse_rows(header, rows)
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)
@@ -2347,270 +2636,42 @@ def _tab_trades(settings, strategies, provider) -> None:
     bp_used = pos_mod.bp_committed_this_month(all_pos)
     st.session_state["month_bp_used"] = bp_used
 
-    # Beside Quick Log, not buried in the closed-trades expander: correcting a
-    # fill is the same kind of bookkeeping job as recording one.
-    fixable = [p for p in closed if p.trade_id]
-    if fixable:
-        _fix_close_form(fixable, [
-            f"{p.underlying}  ·  {p.strategy_name}  ·  closed {p.closed_on}"
-            f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
-
     if not all_pos:
-        theme.note("Nothing here yet. Two ways to log your first trade: use "
-                   "**➕ Quick Log** above for a trade you already placed in "
-                   "thinkorswim, or press **Log this trade** in 🎯 Find a trade when the "
-                   "app finds the setup for you. Either way it lands here and the "
-                   "app starts watching your exit rules: take the win at 50% of "
-                   "the credit, at 21 days to expiration close or roll for a credit, "
-                   "stop the loss at 2x the credit.")
+        theme.note("Nothing here yet. Two ways to log your first trade: **Quick Log** "
+                   "below for a trade you already placed in thinkorswim, or **Log this "
+                   "trade** in 🎯 Find a trade when the app finds the setup "
+                   "for you. Either way it lands here and the app starts watching your "
+                   "exit rules: take the win at 50% of the credit, at 21 days to "
+                   "expiration close or roll for a credit, stop the loss at 2x.")
         if source == "local" and not rows:
             from src.logging_tools import webhook_logger
             if webhook_logger.is_configured():
                 st.info("Your Google Sheet link is saved, but the log could not be read "
                         "back. That usually means the sheet still runs the older script - "
                         "paste the updated **LogTrade.gs** (in the google_apps_script "
-                        "folder) into Apps Script, then Deploy → Manage deployments → "
-                        "Edit → New version → Deploy.")
+                        "folder) into Apps Script, then Deploy → Manage deployments "
+                        "→ Edit → New version → Deploy.")
         st.divider()
-        _month_section(all_pos, settings)   # current month, zeros - shows the shape
+        _records_section(settings, strategies, provider, closed, legacy, bp_used)
         return
 
     if source == "local":
         theme.note("Reading the **local backup log** on this device. To track trades "
-                   "everywhere, connect your Google Sheet in the **⚙️ Settings** tab "
-                   "(one-time, ~2 minutes).")
+                   "everywhere, connect your Google Sheet in the **⚙️ Settings** "
+                   "tab (one-time, ~2 minutes).")
 
-    # ---------------- open positions, priced live
-    theme.note(f"**{len(open_pos)} open** · {len(closed)} closed"
-               + (f" · {len(legacy)} from before tracking" if legacy else ""))
-    items = []
+    items, priced_at = ([], None)
     if open_pos:
         items, priced_at = _price_positions(open_pos, provider, strategies)
 
-        _today_card(items)
-        theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
-                   "few minutes, or press ↻ Refresh.")
-
-        st.dataframe(components.positions_dataframe(items), width="stretch",
-                     hide_index=True, column_config=components.positions_column_config())
-
-        # ---- one position in detail + the close flow
-        st.divider()
-        labels = components.position_labels(items)
-        # Indexes, not label strings: two identical-looking trades must stay two
-        # separate choices, and the one needing action must say so here.
-        pick = st.selectbox("Look at one trade", range(len(items)),
-                            format_func=lambda i: labels[i], key="trades_pick")
-        it = items[int(pick)]
-        p, live, sig = it["position"], it["live"], it["signal"]
-        with st.container(border=True):
-            components.render_exit_signal(sig)
-            cols = st.columns(5)
-            px = live.get("underlying_price")
-            cols[0].metric(f"{p.underlying} now",
-                           f"${px:,.2f}" if px else "n/a",
-                           help="The underlying's price right now, about 15 minutes "
-                                "delayed. This is what decides whether your strikes "
-                                "are safe.")
-            cols[1].metric("Credit received", money(p.credit),
-                           help="What the short call paid you - the basis for your "
-                                "50% target." if p.is_debit else None)
-            cols[2].metric("Costs to close now",
-                           money(live["cost_to_close"]) if live.get("cost_to_close")
-                           is not None else "n/a",
-                           help="Buying back the short call alone." if p.is_debit
-                                else None)
-            dte_now = p.dte_left()
-            cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
-
-            # On the covered call models "max loss" was never the max loss - it
-            # was the cash she laid out for shares she still owns. What she
-            # actually needs is how far the put side protects her.
-            protection = (pos_mod.protection_read(p, px)
-                          if p.shares_cost > 0 else None)
-            if protection and protection["flat_to"] is not None:
-                cols[4].metric("Flat down to", f"${protection['flat_to']:,.0f}",
-                               help="Your shares are protected this far down - "
-                                    "the P&L barely moves until here. See the "
-                                    "line below for what happens past it.")
-            elif protection:
-                cols[4].metric("Most you can lose",
-                               money(abs(protection["worst_case"])),
-                               help="The real worst case from the payoff, not "
-                                    "what you paid - your protective put caps "
-                                    "it." if protection["capped"] else
-                                    "The worst case if the stock went to zero.")
-            else:
-                cols[4].metric("Max loss", money(p.max_loss))
-
-            if p.is_debit:
-                components.render_debit_position_card(p, live)
-            if protection:
-                components.render_protection_read(p, protection)
-
-            # The single most useful read for a beginner: where is price, versus
-            # the option she SOLD, and how much room is between them.
-            cushion = pos_mod.strike_cushion(p, px)
-            if cushion:
-                side = "call" if cushion["option_type"] == "call" else "put"
-                direction = "rise" if side == "call" else "fall"
-                if cushion["breached"]:
-                    theme.note(
-                        f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
-                        f"{side} you sold.** That strike is breached - your SOP says roll "
-                        f"{'up' if side == 'call' else 'down'} and out for a credit, or close.")
-                else:
-                    theme.note(
-                        f"**{p.underlying} is at \\${px:,.2f}.** The closest option you sold "
-                        f"is the **{cushion['strike']:g} {side}** - price would have to "
-                        f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
-                        f"Your SOP says think about rolling once that room drops under 1.5%.")
-
-            target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
-            if sig.profit_pct is not None and p.credit > 0:
-                if sig.profit_pct >= 0:
-                    st.progress(min(sig.profit_pct / target_pct, 1.0))
-                    theme.note(f"You've kept **{sig.profit_pct:.0f}%** of the credit so far - "
-                               f"your SOP takes the win at **{target_pct:.0f}%**.")
-                else:
-                    stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
-                    st.progress(0.0)
-                    theme.note(f"Right now closing costs **more** than you collected "
-                               f"({sig.profit_pct:.0f}% of the credit). Your stop-loss rule "
-                               f"says close if that reaches **-{stop_mult * 100:.0f}%**.")
-            if p.legs:
-                strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
-                theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
-                           + (f" · expires {p.expiration}" if p.expiration else ""))
-
-            if p.is_uncovered:
-                _write_call_form(p, provider)
-            elif p.is_debit:
-                _roll_form(p, live, provider)
-
-            with st.expander("✔️ Close this trade (records the result)"):
-                theme.note("Close it in thinkorswim first, then record the fill here so "
-                           "your results stay accurate.")
-                default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
-                    is not None else 0.0
-                if p.is_debit:
-                    # Closing a PMCC or covered call PAYS her - she sells the
-                    # long side back. The old "what you paid" box could not go
-                    # below zero, so a close that paid had nowhere to be typed.
-                    default_in = live.get("position_value")
-                    proceeds = st.number_input(
-                        "What you RECEIVED when you closed it (total $, from your "
-                        "TOS fill)",
-                        min_value=0.0, step=25.0,
-                        value=round(max(float(default_in or 0.0), 0.0), 2),
-                        key=f"exit_in_{p.trade_id}",
-                        help="Selling the LEAPS back, minus buying back the short "
-                             "call - the net on your fill, x100 x contracts. A "
-                             "50.00 credit on 1 contract = $5,000. If closing "
-                             "somehow cost you money, type 0 and note it below.")
-                    close_cash = float(proceeds)
-                    exit_cost = 0.0
-                else:
-                    exit_cost = st.number_input(
-                        "What you paid to close it (total $, from your TOS fill)",
-                        min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
-                        key=f"exit_cost_{p.trade_id}")
-                    close_cash = -float(exit_cost)
-                reason = st.selectbox(
-                    "Why you closed it",
-                    ["Profit target (50%) hit", "21 DTE time exit",
-                     "21 DTE credit roll (opened a new spread)", "Stop loss hit",
-                     "Rolled to a new position", "Expired worthless", "Other"],
-                    key=f"exit_reason_{p.trade_id}")
-                note = st.text_input("Lesson learned (optional - future you says thanks)",
-                                     key=f"exit_note_{p.trade_id}")
-                # The close banks the capital result. Roll credits were banked on
-                # the days they landed, so they are not counted again here.
-                realized = p.open_cash + close_cash
-                total = realized + p.roll_income
-                if p.is_debit:
-                    st.markdown(components._esc(
-                        f"Result: **${total:,.0f}** "
-                        f"({'profit' if total >= 0 else 'loss'}) - "
-                        f"${-p.open_cash:,.0f} out, ${p.roll_income:,.0f} banked "
-                        f"from rolls, ${close_cash:,.0f} back today."))
-                else:
-                    st.markdown(components._esc(
-                        f"Result: **${realized:,.0f}** "
-                        f"({'profit' if realized >= 0 else 'loss'})"))
-                if st.button("Record the close", type="primary",
-                             key=f"close_{p.trade_id}"):
-                    from src.logging_tools.trade_logger import close_trade
-                    dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,
-                                                 exit_cost, realized, reason, note,
-                                                 close_cash=close_cash)
-                    st.session_state.pop("trades_rows", None)
-                    st.session_state.pop("_priced_positions", None)
-                    st.rerun()
-
-            with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
-                _delete_control(p.trade_id,
-                                f"{p.underlying} {p.strategy_name} opened {p.opened}",
-                                key=f"open_{p.trade_id}")
-    else:
-        st.success("No open trades right now. Record one with ➕ Quick Log above, "
-                   "or build one in 🎯 Find a trade - it shows up here either way.")
-
-    if legacy:
-        with st.expander(f"Trades logged before tracking existed ({len(legacy)})"):
-            theme.note("These were logged with an older version of the app, so they can't "
-                       "be tracked live - shown for your records only.")
-            import pandas as pd
-            st.dataframe(pd.DataFrame([{
-                "Date": p.opened, "Symbol": p.underlying, "Strategy": p.strategy_name,
-                "Credit $": p.credit, "Notes": p.note} for p in legacy]),
-                width="stretch", hide_index=True)
-
-    # ---------------- month by month (her ask: monthly trades, monthly profit)
+    _today_section(items, provider)
     st.divider()
-    _month_section(all_pos, settings)
-
-    # ---------------- results vs her goals
+    _open_section(items, strategies, provider, priced_at)
     st.divider()
-    theme.section("Are you on pace for your goals?", "Your results")
-    if closed:
-        perf = pos_mod.performance(all_pos)
-        components.render_results_dashboard(
-            perf, settings["targets"], bp_used,
-            float(settings["risk_limits"]["monthly_bp_limit"]))
-        with st.expander(f"All closed trades ({len(closed)})"):
-            st.dataframe(components.closed_dataframe(closed), width="stretch",
-                         hide_index=True)
-            deletable = [p for p in closed if p.trade_id]
-            if deletable:
-                st.divider()
-                theme.note("Delete a closed trade you only entered as a test:")
-                # Same collision as the open-trades picker: two closes that match
-                # on every field would have shared one dictionary key, and
-                # deleting the visible one would have deleted the wrong row.
-                labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
-                          f"closed {p.closed_on}  ·  result ${(p.realized_pl or 0):,.0f}"
-                          for i, p in enumerate(deletable)]
-                idx = st.selectbox("Closed trade to delete", range(len(deletable)),
-                                   format_func=lambda i: labels[i], key="del_closed_pick")
-                cp = deletable[int(idx)]
-                _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
-    else:
-        theme.note("No closed trades yet - your results dashboard starts building the "
-                   "first time you record a close. Remember: you are paper trading to "
-                   "learn the **process**. Following your rules matters more than the "
-                   "P&L right now.")
-        if bp_used:
-            limit = float(settings["risk_limits"]["monthly_bp_limit"])
-            theme.note(f"You have committed **\\${bp_used:,.0f}** of your "
-                       f"**\\${limit:,.0f}** monthly buying-power budget "
-                       f"({bp_used / limit * 100:.0f}%), leaving "
-                       f"**\\${max(limit - bp_used, 0):,.0f}** for the rest of the month. "
-                       f"This counts every trade you OPENED this month, including ones you "
-                       f"have already closed - closing early frees the risk, not the "
-                       f"month's budget. It follows thinkorswim's **BP Effect**, so a "
-                       f"LEAPS you bought outright counts as cash spent rather than "
-                       f"buying power held.")
+    _results_section(all_pos, settings, bp_used)
+    st.divider()
+    _records_section(settings, strategies, provider, closed, legacy, bp_used)
+
 
 
 # ------------------------------------------------------------------ shared pieces
