@@ -299,10 +299,8 @@ def _market_radar_section(events) -> None:
     an expander) so the calendar is the first thing she sees."""
     st.markdown("### 🗓️ What's coming (events and data that move volatility)")
     theme.note("Selling premium right into a big event is risky - a surprise can blow "
-               "through your strikes. The **big movers** landing inside your trade window "
-               "get a red flag (rate decisions, inflation and jobs reports, earnings); "
-               "the rest are listed for awareness, because something is on the calendar "
-               "most weeks and flagging all of it would tell you nothing.")
+               "through your strikes. Only the **big movers** inside your trade window "
+               "get a red flag; the rest are here for awareness.")
     if events:
         components.render_events(events)
     else:

@@ -130,9 +130,11 @@ def _custom_events() -> list[tuple[dt.date, str]]:
     return out
 
 
-# Plain-English "why it matters" for each scheduled economic release.
+# Plain-English "why it matters" for each scheduled economic release. These sit
+# after the row's own label and (on a flagged one) after "big mover inside your
+# trade window", so they must not repeat either - just say what it does to you.
 _RELEASE_NOTES = {
-    "cpi": "Inflation report - a hot or cold number can swing the whole market.",
+    "cpi": "A hot or cold number can swing the whole market.",
     "pce": "The Fed's preferred inflation gauge - it can move rate expectations.",
     "gdp": "The first read on economic growth - a surprise can move the market.",
 }
@@ -188,7 +190,7 @@ def upcoming_events(
         "Can jolt the market at 8:30am that morning.")
     for d in _fomc_dates():
         add(d, "Fed interest-rate decision (FOMC)", "fomc",
-            "Big volatility event - be cautious selling premium right into it.")
+            "Be cautious selling premium right into it.")
     for d, kind, label in _economic_releases():
         add(d, label, kind, _RELEASE_NOTES.get(kind, ""))
     for d, label in _custom_events():
