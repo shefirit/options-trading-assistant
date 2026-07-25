@@ -38,7 +38,7 @@ import streamlit as st
 from src.data.provider import DataProvider
 from src.engine import scanner
 from src.engine.config_loader import allowed_underlyings_for, load_settings, load_strategies
-from src.engine.models import Leg, OptionType, Trade
+from src.engine.models import CheckStatus, Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
 from ui import components, glossary, research, theme, tv_chart
@@ -886,9 +886,12 @@ def _tab_analyze(settings, provider, strategies) -> None:
     theme.note("Type a ticker once - every tool below reads it. Indexes (SPX, NDX) have no "
                "company behind them, so the company tools stay empty for those.")
 
+    # Short labels on purpose: the full names needed 1320px of tab bar and a
+    # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind
+    # a scroll arrow. Each tab restates its own full title as a heading anyway.
     (t_over, t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts) = st.tabs(
-        ["📋 The name itself", "🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets",
-         "✅ Instant Analyzer", "🧮 Price calculator", "⛓️ Options data"])
+        ["📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
+         "✅ Screener", "🧮 Fair price", "⛓️ Options"])
 
     with t_over:
         _analyze_overview(sym, settings, provider, strategies)
@@ -957,14 +960,26 @@ def _symbol_research(sym, provider, settings, key_prefix) -> None:
 
 
 # --------------------------------- the research tools, now inside Analyze
-def _research_ready(provider, sym, what: str) -> bool:
+def _research_ready(provider, sym, what: str, settings=None,
+                    company_only: bool = False) -> bool:
     """Every tool needs real data and the symbol picked at the top of Analyze.
-    Says which one is missing instead of rendering an empty panel."""
+    Says which one is missing instead of rendering an empty panel.
+
+    company_only: this tool asks a question about a COMPANY. On an index there
+    is no company to ask about, so say that rather than "no data found" - which
+    reads like a broken lookup and invites her to retry something that will
+    never work.
+    """
     if not provider.is_real:
         st.info(f"{what} needs real market data - connect to the internet first.")
         return False
     if not sym:
         theme.note(f"Pick a symbol at the top of this tab and {what.lower()} appears here.")
+        return False
+    if company_only and settings is not None and _classify(sym, settings) == "index":
+        st.info(f"{sym} is an index - a basket of hundreds of companies, with no single "
+                f"company behind it - so {what.lower()} does not exist for it. This tool "
+                f"is for stocks and ETFs. For an index, the 📊 Market tab is your read.")
         return False
     return True
 
@@ -1117,7 +1132,8 @@ def _research_analyst(settings, provider, sym) -> None:
         "Consensus ratings and price targets, plus the check almost nobody runs: how often "
         "this stock has actually gained that much in a year. Targets are twelve-month "
         "opinions that cluster optimistic - worth reading as sentiment, not forecast.")
-    if not _research_ready(provider, sym, "Analyst coverage"):
+    if not _research_ready(provider, sym, "Analyst coverage", settings,
+                           company_only=True):
         return
     with st.spinner(f"Loading analyst coverage for {sym}..."):
         view = provider.get_analyst_view(sym)
@@ -1176,7 +1192,8 @@ def _research_analyzer(settings, provider, sym) -> None:
             spec = criteria.FIELDS[field]
             st.markdown(f"- **{spec['label']}** - {spec['help']}")
 
-    if not _research_ready(provider, sym, "The grade for a stock"):
+    if not _research_ready(provider, sym, "The grade for a stock", settings,
+                           company_only=True):
         return
     with st.spinner(f"Checking {sym} against your rules..."):
         info = provider.get_raw_info(sym)
@@ -1221,7 +1238,8 @@ def _research_calculator(settings, provider, sym) -> None:
         "out is the most you can pay. The answer rests entirely on two guesses, so the grid "
         "at the bottom shows what happens when you are wrong about them.")
 
-    if not _research_ready(provider, sym, "The price calculator"):
+    if not _research_ready(provider, sym, "The price calculator", settings,
+                           company_only=True):
         return
 
     info = provider.get_raw_info(sym)
@@ -1851,17 +1869,24 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 leaps_cost_total=leaps_cost, share_price=share_price,
                 protection_cost_total=protection_cost)
             passed = True
+            broke: list[str] = []
             try:
                 report = validate_trade(
                     trade,
                     existing_month_bp=st.session_state.get("open_bp_in_use", 0.0))
                 passed = report.passed
+                # Keep WHICH rules, not just whether. This is a trade she has
+                # already placed, so the checklist cannot stop her - but "you
+                # broke a rule" with no name teaches nothing, and learning
+                # which rule is the entire point of logging it here.
+                broke = [f"{r.name} - {r.message}" for r in report.results
+                         if r.status in (CheckStatus.FAIL, CheckStatus.WARN)]
             except Exception:
                 notes.append("The SOP check could not run just now - the trade "
                              "still gets logged and tracked.")
             st.session_state["ql_draft"] = {
                 "trade": trade, "strat_name": strat["name"], "sizing": sizing,
-                "passed": passed, "notes": notes, "note": note,
+                "passed": passed, "broke": broke, "notes": notes, "note": note,
                 "opened_on": opened_on, "expiration": expiration, "dte": dte,
             }
 
@@ -1895,13 +1920,22 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 m[0].metric("Credit", money(p_size["credit"]))
                 m[1].metric("Max loss", money(p_size["max_loss"]))
                 m[2].metric("Buying power", money(p_size["buying_power"]))
-            if draft["passed"]:
+            broke = draft.get("broke") or []
+            if draft["passed"] and not broke:
                 st.markdown(theme.chip("SOP check: passed", "green"),
                             unsafe_allow_html=True)
             else:
-                st.markdown(theme.chip(
-                    "Heads up: outside your SOP rules - logged anyway, since "
-                    "it is already placed", "amber"), unsafe_allow_html=True)
+                tone = "amber" if draft["passed"] else "red"
+                headline = ("Worth noting for next time - logged anyway, since it is "
+                            "already placed" if draft["passed"] else
+                            "Outside your SOP rules - logged anyway, since it is "
+                            "already placed")
+                st.markdown(theme.chip(headline, tone), unsafe_allow_html=True)
+                theme.note("**What your own rules say about this one:**")
+                for line in broke:
+                    theme.note("• " + line)
+                theme.note("Nothing to do about it now - the trade is placed. This is "
+                           "here so the next one starts cleaner.")
             for n in draft["notes"]:
                 theme.note(n)
             c1, c2 = st.columns([1, 1])
@@ -2253,11 +2287,12 @@ def _tab_trades(settings, strategies, provider) -> None:
 
         # ---- one position in detail + the close flow
         st.divider()
-        labels = {
-            f"{it['position'].underlying} · {it['position'].strategy_name}"
-            f" · opened {it['position'].opened}": it for it in items}
-        pick = st.selectbox("Look at one trade", list(labels.keys()), key="trades_pick")
-        it = labels[pick]
+        labels = components.position_labels(items)
+        # Indexes, not label strings: two identical-looking trades must stay two
+        # separate choices, and the one needing action must say so here.
+        pick = st.selectbox("Look at one trade", range(len(items)),
+                            format_func=lambda i: labels[i], key="trades_pick")
+        it = items[int(pick)]
         p, live, sig = it["position"], it["live"], it["signal"]
         with st.container(border=True):
             components.render_exit_signal(sig)
@@ -2441,12 +2476,16 @@ def _tab_trades(settings, strategies, provider) -> None:
             if deletable:
                 st.divider()
                 theme.note("Delete a closed trade you only entered as a test:")
-                labels = {f"{p.underlying} · {p.strategy_name} · closed {p.closed_on}"
-                          f" · result ${(p.realized_pl or 0):,.0f}": p for p in deletable}
-                choice = st.selectbox("Closed trade to delete", list(labels.keys()),
-                                      key="del_closed_pick")
-                cp = labels[choice]
-                _delete_control(cp.trade_id, choice, key=f"closed_{cp.trade_id}")
+                # Same collision as the open-trades picker: two closes that match
+                # on every field would have shared one dictionary key, and
+                # deleting the visible one would have deleted the wrong row.
+                labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
+                          f"closed {p.closed_on}  ·  result ${(p.realized_pl or 0):,.0f}"
+                          for i, p in enumerate(deletable)]
+                idx = st.selectbox("Closed trade to delete", range(len(deletable)),
+                                   format_func=lambda i: labels[i], key="del_closed_pick")
+                cp = deletable[int(idx)]
+                _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
     else:
         theme.note("No closed trades yet - your results dashboard starts building the "
                    "first time you record a close. Remember: you are paper trading to "

@@ -42,10 +42,25 @@ def test_the_look_alike_tabs_are_gone(demo_app):
     labels = [t.label for t in at.tabs]
     assert "🔎 Premium" not in labels
     assert "🔭 Research" not in labels
-    # The research tools kept their own labels, one level down inside Analyze.
-    for tool in ("🔭 LEAPS Finder", "📅 Seasonality", "🎯 Analyst targets",
-                 "✅ Instant Analyzer", "🧮 Price calculator", "⛓️ Options data"):
+    # All six tools survive one level down inside Analyze. Short labels, because
+    # the full names overflowed the tab row on a 1280-wide laptop.
+    for tool in ("🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
+                 "✅ Screener", "🧮 Fair price", "⛓️ Options"):
         assert tool in labels, f"{tool} was lost in the merge"
+
+
+ANALYZE_SUB_TABS = ("📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
+                    "✅ Screener", "🧮 Fair price", "⛓️ Options")
+
+
+def test_the_analyze_sub_tabs_stay_short_enough_to_fit(demo_app):
+    """Seven sub-tabs share one row. The full names needed about 1320px against
+    the ~1183px a 1280-wide laptop gives, which pushed "Options data" off-screen
+    behind a scroll arrow. Keep the row inside a budget so it cannot creep back."""
+    labels = [t.label for t in demo_app.run().tabs]
+    for lbl in ANALYZE_SUB_TABS:
+        assert lbl in labels
+    assert sum(len(lbl) for lbl in ANALYZE_SUB_TABS) <= 75, "the tab row got long again"
 
 
 def test_the_research_tools_stay_offline_in_demo_mode(demo_app):

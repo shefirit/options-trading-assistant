@@ -140,3 +140,70 @@ def test_candidate_labels_are_unique_so_the_picker_cannot_confuse_two():
 
     labels = candidate_labels([_cand("SPX", 41, 400), _cand("SPX", 41, 400)])
     assert len(set(labels)) == len(labels)
+
+
+# ---------- the open-trades picker ----------
+def _item(underlying, strikes, strategy, opened, dte, action):
+    from src.engine.exit_rules import ExitSignal
+    from src.engine.models import Action, Leg, OptionType
+
+    class _Pos:
+        def __init__(self):
+            self.underlying = underlying
+            self.strategy_name = strategy
+            self.opened = opened
+            self.legs = [Leg(role="short_put", action=Action.SELL,
+                             option_type=OptionType.PUT, strike=s, delta=-0.2,
+                             premium=5.0, dte=dte) for s in strikes]
+
+        def dte_left(self):
+            return dte
+
+    sig = ExitSignal(action=action, headline="", reason="", tone="neutral")
+    return {"position": _Pos(), "live": {}, "signal": sig}
+
+
+def test_position_labels_keep_same_day_twins_apart():
+    # The bug: labels were dictionary keys of underlying + strategy + open date,
+    # so a second SPX spread opened the same day overwrote the first and became
+    # impossible to select, close or roll.
+    from ui.components import position_labels
+
+    items = [_item("SPX", [7200, 7175], "Put Credit Spread", "2026-07-25", 40, "hold"),
+             _item("SPX", [7100, 7075], "Put Credit Spread", "2026-07-25", 40, "hold")]
+    labels = position_labels(items)
+    assert len(set(labels)) == 2, "two real trades must be two distinct choices"
+    assert "7200/7175" in labels[0]
+    assert "7100/7075" in labels[1]
+
+
+def test_position_labels_are_unique_even_when_everything_matches():
+    from ui.components import position_labels
+
+    items = [_item("SPX", [7200, 7175], "Put Credit Spread", "2026-07-25", 40, "hold")] * 2
+    assert len(set(position_labels(items))) == 2
+
+
+def test_position_labels_flag_the_ones_needing_action():
+    from ui.components import position_labels
+
+    items = [_item("SPX", [7200], "CSP", "2026-07-01", 13, "time"),
+             _item("QQQ", [500], "CSP", "2026-07-02", 40, "hold"),
+             _item("PLTR", [128], "CSP", "2026-06-23", 13, "stop")]
+    labels = position_labels(items)
+    assert "⏰ Decide today" in labels[0]
+    assert "🛑" in labels[2]
+    # A quiet position must not be dressed up as urgent.
+    assert "Decide today" not in labels[1] and "🛑" not in labels[1]
+
+
+def test_the_star_never_lands_on_a_rule_breaker():
+    # A star reads as a recommendation, so it may not sit on the setup that
+    # breaks the delta rule while the compliant one below goes unmarked.
+    from ui.components import candidate_labels
+
+    labels = candidate_labels([_cand("SPX", 45, 400, fits=False),
+                               _cand("SPX", 30, 380, fits=True)])
+    assert "⭐ best timed" not in labels[0]
+    assert "⚠️ delta over" in labels[0]
+    assert "⭐ best timed" in labels[1]

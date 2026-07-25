@@ -277,13 +277,26 @@ def check_position_delta(trade: Trade, red_flag: float) -> CheckResult:
     )
 
 
+def profit_target_keep(credit: float, profit_target_pct: float) -> float:
+    """What she keeps when the profit target is hit, in cents.
+
+    The checklist and the "set these alerts in TOS" card each worked this out on
+    their own - credit * pct/100 in one, credit - credit*(1 - pct/100) in the
+    other. Algebraically the same, but in floating point they land either side
+    of a half cent, and Python rounds .5 to the nearest EVEN dollar, so one
+    could print $207 while the other printed $208 for the same trade. She types
+    these into a TOS alert, so they have to be one number, computed once.
+    """
+    return round(round(credit, 2) * float(profit_target_pct) / 100, 2)
+
+
 def exit_plan_info(trade: Trade, exit_rules: dict[str, Any]) -> list[CheckResult]:
     """Not pass/fail - just reminders of your exits, with the dollar levels filled in."""
     out: list[CheckResult] = []
     credit = trade.net_credit_total
     pt = exit_rules.get("profit_target_pct")
     if pt and credit > 0:
-        keep = credit * pt / 100
+        keep = profit_target_keep(credit, pt)
         out.append(CheckResult(
             name=f"Profit target {pt:g}%",
             status=CheckStatus.INFO,

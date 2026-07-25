@@ -236,3 +236,25 @@ def test_runway_warning_wording_scales_with_the_squeeze():
     assert "almost as soon as you open it" in tight.message
     assert "almost as soon as you open it" not in short.message
     assert "short runway" in short.message
+
+
+# ---------- one profit-target number, not two ----------
+def test_profit_target_is_the_same_number_in_both_places():
+    """The checklist and the TOS-alert card each used to work this out on their
+    own, and could land on different dollars for the same trade. She types the
+    number into an alert, so they have to agree."""
+    from src.engine.rules import profit_target_keep
+
+    for credit in (415.0, 415.00000000000006, 414.999999, 207.5, 833.33, 1000.0, 5.0):
+        keep = profit_target_keep(credit, 50)
+        cost = round(credit, 2) - keep            # what the card shows
+        assert f"{keep:,.0f}" == f"{cost:,.0f}", f"disagreed on a {credit} credit"
+        assert abs(keep + cost - round(credit, 2)) < 0.005
+
+
+def test_profit_target_keep_handles_other_percentages():
+    from src.engine.rules import profit_target_keep
+
+    assert profit_target_keep(400.0, 50) == 200.0
+    assert profit_target_keep(400.0, 25) == 100.0
+    assert profit_target_keep(333.0, 75) == 249.75

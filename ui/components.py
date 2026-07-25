@@ -803,17 +803,27 @@ def candidate_labels(candidates: list[Candidate]) -> list[str]:
     # The list arrives sorted by how well each expiration fits the SOP target,
     # grouped by underlying - so the first row of each underlying is its
     # best-timed setup. Say which, rather than making her infer it.
-    best_seen: set[str] = set()
-    out = []
+    #
+    # The star only ever goes on a setup that PASSES the SOP. Marking the
+    # best-timed one regardless produced "⭐ best timed · ⚠️ delta over" sitting
+    # above a compliant setup with no star at all, and a star reads as a
+    # recommendation. Timing is not worth breaking a rule for.
+    star_rows: set[int] = set()
+    seen: set[str] = set()
     for i, c in enumerate(candidates):
         u = c.trade.underlying
+        if c.fits_sop and u not in seen:
+            seen.add(u)
+            star_rows.add(i)
+
+    out = []
+    for i, c in enumerate(candidates):
         strikes = "/".join(f"{leg.strike:g}" for leg in c.trade.legs)
-        bits = [f"#{i + 1}", f"{u} {strikes}"]
+        bits = [f"#{i + 1}", f"{c.trade.underlying} {strikes}"]
         if c.dte is not None:
             bits.append(f"{c.dte} days")
         bits.append(f"${c.credit:,.0f} credit")
-        if u not in best_seen:
-            best_seen.add(u)
+        if i in star_rows:
             bits.append("⭐ best timed")
         if not c.fits_sop:
             bits.append("⚠️ delta over")
@@ -888,12 +898,16 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
     lines = []
     pt = exit_cfg.get("profit_target_pct")
     if pt and credit > 0:
-        target_cost = credit * (1 - float(pt) / 100)
+        # Same number the checklist shows - see rules.profit_target_keep for why
+        # this is computed in one place instead of two.
+        from src.engine.rules import profit_target_keep
+        keep = profit_target_keep(credit, pt)
+        target_cost = round(credit, 2) - keep
         per_share = target_cost / (100 * contracts)
         lines.append(
             f"✅ <b>Profit target ({pt:g}%):</b> close when buying it back costs about "
             f"{_dollars(target_cost)} (&#36;{per_share:,.2f} per share) - you keep "
-            f"{_dollars(credit - target_cost)}.")
+            f"{_dollars(keep)}.")
     sl = exit_cfg.get("stop_loss_multiple")
     if sl and credit > 0:
         stop_cost = credit * (1 + float(sl))
@@ -1004,6 +1018,38 @@ def short_strategy(name: str) -> str:
     if acronym and len(acronym) <= 6 and acronym.isupper():
         return acronym
     return head.split(":")[0].replace(" - Model ", " M").strip()
+
+
+def position_labels(items: list[dict]) -> list[str]:
+    """One line per open trade, for the picker under the table.
+
+    Two things this has to do that the old label did not. It has to be UNIQUE:
+    the options used to be dictionary keys built from underlying, strategy and
+    open date, so two SPX put credit spreads opened the same day collapsed into
+    one entry and the second became unreachable - visible in the table, but
+    impossible to open, close or roll. Strikes and the position's own index fix
+    that.
+
+    And it has to carry the exit signal. The card above says "2 of 5 open trades
+    need action today" and then made her click through all five to find them.
+    """
+    out = []
+    for i, it in enumerate(items):
+        pos, sig = it["position"], it["signal"]
+        strikes = "/".join(f"{leg.strike:g}" for leg in pos.legs)
+        bits = [pos.underlying]
+        if strikes:
+            bits.append(strikes)
+        bits.append(short_strategy(pos.strategy_name))
+        dte = pos.dte_left()
+        if dte is not None:
+            bits.append(f"{dte} days left")
+        if sig.action in ("stop", "time", "profit"):
+            bits.append(_SIGNAL_WORD.get(sig.action, sig.action))
+        # The leading number guarantees uniqueness even if every other field
+        # matches, and it lines up with the table's row order.
+        out.append(f"{i + 1}.  " + "  ·  ".join(bits))
+    return out
 
 
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
