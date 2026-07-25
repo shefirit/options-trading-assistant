@@ -54,8 +54,11 @@ def test_market_tab_new_sections_render_in_demo(demo_app):
     assert "What's coming" in all_md
     assert "Sector pulse" in all_md
     assert "Market news" in all_md
-    # The retired fear gauge must be gone.
-    assert "fear gauge" not in all_md
+    # The retired fear-gauge SECTION must be gone - match its heading, not the
+    # phrase. "Fear gauge" is still the plain-English handle for VIX (the tile
+    # says "VIX (fear)", and the glossary explains it that way), so a bare
+    # substring check fails on prose that has nothing to do with the old chart.
+    assert "The fear gauge (VIX)" not in all_md
     # The _soft wrapper prints this only when a section crashed.
     assert "could not load right now" not in all_md
     snags = [e for e in at.error if "unexpected snag" in str(e.value)]
@@ -89,3 +92,28 @@ def test_settings_tab_shows_connections_and_plan(demo_app):
     all_md = " ".join(str(m.value) for m in at.markdown)
     assert "Where your trades log" in all_md
     assert "Your plan" in all_md
+
+
+def test_glossary_is_reachable_from_every_tab_and_filters(demo_app):
+    """It sits above the tab bar on purpose: an unknown word can appear in a
+    table on any tab, so the glossary cannot live inside one of them."""
+    at = demo_app.run()
+    assert not at.exception
+
+    def glossary_text(app):
+        return " ".join(str(m.value) for m in app.markdown)
+
+    full = glossary_text(at)
+    assert "Implied volatility (IV)" in full, "the glossary body should render"
+    assert "Buying power" in full
+
+    # Typing a word narrows it to the entries that mention that word.
+    at.text_input(key="glossary_search").set_value("gamma").run()
+    assert not at.exception
+    filtered = glossary_text(at)
+    assert "Gamma" in filtered
+    assert "Implied volatility (IV)" not in filtered, "unrelated entries should drop out"
+
+    # A word that is in no entry says so rather than showing a blank panel.
+    at.text_input(key="glossary_search").set_value("zzzzz").run()
+    assert "Nothing here matches" in glossary_text(at)

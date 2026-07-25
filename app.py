@@ -40,7 +40,7 @@ from src.engine.config_loader import allowed_underlyings_for, load_settings, loa
 from src.engine.models import Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
-from ui import components, research, theme, tv_chart
+from ui import components, glossary, research, theme, tv_chart
 
 st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
 theme.inject()
@@ -144,6 +144,10 @@ def main() -> None:
     # Above the tabs, so it is on screen whichever tab she is reading.
     if provider.mode == "demo":
         st.error(DEMO_WARNING)
+
+    # Same reason: an unknown word can turn up in any table on any tab, so the
+    # glossary cannot live on one of them. Collapsed, it costs a single line.
+    glossary.render()
 
     (t_market, t_picks, t_prem, t_analyze, t_research, t_build, t_trades,
      t_settings) = st.tabs(
