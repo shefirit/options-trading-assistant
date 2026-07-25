@@ -13,25 +13,41 @@ just helps you pick well and do it correctly.
 
 1. **Read the market** - price, VIX (the "fear gauge"), implied volatility, and a big
    **"best fit for today"** recommendation that picks the strategy matching current conditions.
-2. **Pick a strategy** - all 8 from your Notion system are built in. Choose your days to
-   expiration on a 21-35 day slider; contracts default to 1.
+2. **Find a name to sell on** - 💡 Picks either scans your whole allowed universe and ranks
+   it, or compares a list of names you type in yourself.
 3. **Find setups** - the scanner searches option chains for trades that match your rules
-   (short-leg delta under 0.10, your chosen DTE, inside your buying-power limit).
+   (the short-leg delta your SOP sets for that strategy, an expiration inside your window,
+   and your buying-power limit). Results are ordered by how close each expiration is to your
+   45-day target, so the best-timed one is first.
 4. **Check any trade** - a green/red checklist confirms a trade passes every SOP rule before
-   you place it. Works for trades the scanner found OR trades you built yourself.
+   you place it, including how much room is left before your 21-day time exit.
 5. **Keep a record** - one click logs a trade to your Google Sheet (with a local backup).
-6. **Research any stock** - six tools in the 🔭 Research tab for the questions that come
-   *before* a trade (see below).
+6. **Study one name** - 🔬 Analyze holds everything about a single ticker behind one symbol
+   box: the overview and strategy fit, plus six research tools (see below).
 
 Your rules live in plain text in the `config/` folder - change a number there and the whole
 app follows. No coding needed.
 
+### The six tabs
+
+| Tab | What it answers |
+|---|---|
+| 📊 Market | Is today a good day to sell premium? |
+| 💡 Picks | Who should I sell on? (scan everything, or compare my own list) |
+| 🔬 Analyze | Everything about one name, including the six research tools |
+| 🎯 Find a trade | Build the trade, check it against my SOP, log it |
+| 📒 My trades | Every open trade against my exit rules, plus results vs my goals |
+| ⚙️ Settings | Connections and my plan numbers |
+
+There is no sidebar - everything lives in the tabs. A plain-English **glossary** sits above
+the tab bar and is reachable from every tab.
+
 ---
 
-## The Research tab
+## The six research tools (inside 🔬 Analyze)
 
-Six tools that size up a stock from every angle. None of them place or recommend a trade -
-they show their working and let you decide.
+Pick a symbol once at the top of 🔬 Analyze and every tool below reads it. None of them place
+or recommend a trade - they show their working and let you decide.
 
 1. **LEAPS Finder** - is a long-dated call worth buying? A LEAP is a call a year or more
    out, bought instead of the shares: far less cash up front, and you can never lose more
@@ -52,7 +68,7 @@ they show their working and let you decide.
 6. **Options data** - implied volatility against what the stock actually does, the expected
    move per expiration, put/call sentiment, and the chain itself.
 
-Three ideas run through the whole tab and are worth knowing about:
+Three ideas run through all six tools and are worth knowing about:
 
 - **Base rates.** Where another tool says "it needs to rise 14%", this one slides a window
   the length of your contract across twenty years of the stock's own history and tells you
@@ -148,8 +164,8 @@ link into the app. About 5 minutes.
 5. Choose type **Web app**, set **Who has access: Anyone**, click **Deploy**, and approve
    the permissions (it is your own script).
 6. Copy the **Web app URL** it gives you.
-7. In the app sidebar, open **Connect Google Sheet**, paste the link, and click **Save**.
-   Click **Test it** to send a sample row you can then delete.
+7. In the app's **⚙️ Settings** tab, open **🔗 Connect Google Sheet**, paste the link, and
+   click **Save link**. Click **Test it** to send a sample row you can then delete.
 
 After that, the **Log this trade** button writes straight into your sheet. If the internet or
 the sheet is ever unreachable, it quietly saves to a local `trade_log.xlsx` backup instead, so
@@ -163,13 +179,18 @@ tried automatically if present - see `src/logging_tools/sheets_logger.py`.)*
 ## Everyday use
 
 1. Start the app.
-2. Pick a strategy and an underlying (SPX is the usual pick for spreads - but you can choose
-   or scan any allowed one).
-3. Read the **Market conditions** panel.
-4. **Find setups** tab: set your contracts and spread width, press **Scan**, and review the
-   candidates. Click one to see its full SOP checklist.
-5. **Check my own trade** tab: type in a trade you set up in thinkorswim and get the checklist.
-6. Enter the trade yourself in thinkorswim PaperMoney, then log it.
+2. **📊 Market** - is today a day to sell premium at all? Read the verdict card, the
+   strategy-fit board, and what is coming on the calendar.
+3. **💡 Picks** - who to sell on. Scan everything, or compare a list you type in.
+4. **🎯 Find a trade** - pick the strategy and underlying (SPX is the usual one for spreads),
+   set contracts and spread width, press **Scan the market now**, then choose a setup from
+   the dropdown to see its leg-by-leg build, its thinkorswim order line, and its full SOP
+   checklist.
+5. Enter the trade yourself in thinkorswim PaperMoney, then press **Log this trade**.
+6. **📒 My trades** - watch each open trade against your exit rules. Already placed something
+   the app did not find for you? Use **➕ Quick Log** there to record it from your fill.
+
+Any word you do not know is in the **📖 glossary** above the tab bar.
 
 ---
 

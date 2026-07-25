@@ -25,8 +25,64 @@ import streamlit as st
 
 from ui import theme
 
+
+def sop_numbers() -> dict[str, str]:
+    """The SOP values the glossary quotes, read from config.
+
+    The whole app is built so her rules live in config/ and the code follows.
+    Spelling those numbers out in glossary prose broke that: change a delta in
+    strategies.yaml and every checklist would follow while the glossary quietly
+    kept teaching the old one. These placeholders keep it honest.
+    """
+    from src.engine.config_loader import get_strategy, load_settings
+
+    def entry(key: str, field: str, default):
+        try:
+            return get_strategy(key)["entry"][field]
+        except Exception:
+            return default
+
+    def leaving(key: str, field: str, default):
+        try:
+            return get_strategy(key)["exit"][field]
+        except Exception:
+            return default
+
+    settings = load_settings()
+    put_delta = float(entry("put_credit_spread", "short_leg_delta_max", 0.25))
+    risk = settings.get("risk_limits", {})
+    read = settings.get("market_read", {})
+    widths = settings.get("spread_widths", {})
+    profit = float(leaving("put_credit_spread", "profit_target_pct", 50))
+    stop = float(leaving("put_credit_spread", "stop_loss_multiple", 2))
+    example_credit = 400
+    return {
+        "put_delta": f"{put_delta:.2f}",
+        # Delta doubles as a rough probability, so the odds sentence is derived
+        # from the same number rather than written next to it as "1-in-4".
+        "put_delta_pct": f"{put_delta * 100:.0f}",
+        "call_delta": f"{float(entry('call_credit_spread', 'short_leg_delta_max', 0.10)):.2f}",
+        "ic_delta": f"{float(entry('iron_condor', 'short_leg_delta_max', 0.15)):.2f}",
+        "dte_target": f"{int(entry('put_credit_spread', 'dte_target', 45))}",
+        "time_exit": f"{int(leaving('put_credit_spread', 'time_exit_dte', 21))}",
+        "profit_pct": f"{profit:g}",
+        "stop_mult": f"{stop:g}",
+        "bp_limit": f"{float(risk.get('monthly_bp_limit', 50000)):,.0f}",
+        "vix_low": f"{read.get('vix_zone_low', 13):g}",
+        "vix_high": f"{read.get('vix_zone_high', 25):g}",
+        "width_index": f"{float(widths.get('index', 25)):,.0f}",
+        "width_stock": f"{float(widths.get('stock', 5)):,.0f}",
+        # Worked examples, derived so they cannot contradict the rule above them.
+        "eg_credit": f"{example_credit:,.0f}",
+        "eg_keep": f"{example_credit * profit / 100:,.0f}",
+        "eg_loss": f"{example_credit * stop:,.0f}",
+        "eg_buyback": f"{example_credit * (1 + stop):,.0f}",
+    }
+
+
 # (term, definition). Order inside a section runs simple to advanced, because
-# reading it top to bottom should teach, not just index.
+# reading it top to bottom should teach, not just index. Anything in {braces}
+# is a number that lives in config - see sop_numbers().
 SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ("The basics", [
         ("Option",
@@ -88,15 +144,15 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Delta",
          "Two useful readings from one number. It is how much the option moves when the "
          "underlying moves $1, AND it is roughly the chance the option finishes in the "
-         "money. A 0.25 delta short put is about a 1-in-4 chance the market reaches your "
-         "strike. Lower delta is safer and pays less."),
+         "money. A {put_delta} delta short put is about a {put_delta_pct}% chance the "
+         "market reaches your strike. Lower delta is safer and pays less."),
         ("Theta",
          "How much value the option loses each day purely from time passing. When you "
          "sell premium, theta is the thing quietly working for you."),
         ("Gamma",
          "How fast delta changes. It turns violent close to expiration, so a trade that "
          "looked safe can go bad in a day. This is the whole reason your SOP closes at "
-         "21 days instead of holding to the end."),
+         "{time_exit} days instead of holding to the end."),
         ("Vega",
          "How much the option's price moves when volatility changes. Selling premium "
          "while volatility is high and watching it fall is a win that comes from vega."),
@@ -113,7 +169,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "you enter: the distance between your two strikes, minus the credit you took in."),
         ("Buying power",
          "Cash your broker freezes while the trade is open. Your SOP caps this at "
-         "$50,000 across a whole month, and the app's checklist enforces it."),
+         "${bp_limit} across a whole month, and the app's checklist enforces it."),
         ("Breakeven",
          "The price at which the trade makes exactly zero at expiration. Past it you are "
          "losing, short of it you are winning."),
@@ -122,8 +178,8 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "Higher usually means a higher delta too, so read the two together."),
         ("Spread width",
          "The distance between the strike you sold and the strike you bought. Wider pays "
-         "more credit and risks more. Your SOP: $25-50 on indexes and ETFs, $5-10 on "
-         "individual stocks."),
+         "more credit and risks more. Your SOP defaults to ${width_index} on indexes and "
+         "ETFs and ${width_stock} on individual stocks."),
         ("Position delta",
          "The whole position's delta added up, written as share-equivalents. It answers "
          "'if this were shares, how many would I own?' Your red flag is 90."),
@@ -136,17 +192,19 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ("Your exit rules", [
         ("DTE (days to expiration)",
-         "Days from today until the option expires. Your SOP enters at about 45 and "
-         "never holds past 21."),
-        ("Profit target (50%)",
-         "Close once you can buy the trade back for half what you sold it for, keeping "
-         "the other half. On a $400 credit, that means buying it back for about $200."),
-        ("Stop loss (2x credit)",
-         "Close if the loss reaches twice the credit you collected. On a $400 credit "
-         "that is an $800 loss, which happens when buying it back costs about $1,200. "
-         "No rolling at that point - just close."),
-        ("Time exit (21 DTE)",
-         "Close no matter what once 21 days to expiration are left, winning or losing. "
+         "Days from today until the option expires. Your SOP enters at about {dte_target} "
+         "and never holds past {time_exit}."),
+        ("Profit target ({profit_pct}%)",
+         "Close once you can buy the trade back for {profit_pct}% less than you sold it "
+         "for, keeping the rest. On a ${eg_credit} credit that means buying it back for "
+         "about ${eg_keep}."),
+        ("Stop loss ({stop_mult}x credit)",
+         "Close if the loss reaches {stop_mult} times the credit you collected. On a "
+         "${eg_credit} credit that is an ${eg_loss} loss, which happens when buying it "
+         "back costs about ${eg_buyback}. No rolling at that point - just close."),
+        ("Time exit ({time_exit} DTE)",
+         "Close no matter what once {time_exit} days to expiration are left, winning or "
+         "losing. "
          "It exists to get you out before gamma turns dangerous."),
         ("Rolling",
          "Closing the trade you have and opening a similar one further out in time. Your "
@@ -164,13 +222,14 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "between the strikes, which is why it is the beginner-safe way to sell."),
         ("Put credit spread",
          "A credit spread below the price. You win as long as the market does not fall "
-         "hard. Your SOP sells the 0.25 delta put."),
+         "hard. Your SOP sells the {put_delta} delta put."),
         ("Call credit spread",
          "A credit spread above the price. You win as long as the market does not rally "
-         "hard. Your SOP is stricter here, 0.10 delta, because markets drift up."),
+         "hard. Your SOP is stricter here, {call_delta} delta, because markets drift up."),
         ("Iron condor",
          "A put credit spread and a call credit spread at once, so you collect from both "
-         "sides. You win if price stays in the middle. Your SOP uses 0.15 delta per leg."),
+         "sides. You win if price stays in the middle. Your SOP uses {ic_delta} delta "
+         "per leg."),
         ("Cash secured put",
          "Sell a put and hold enough cash to buy the 100 shares if you get assigned. You "
          "get paid to wait for a price you would have been happy to buy at anyway."),
@@ -186,7 +245,8 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Market words the app uses", [
         ("VIX",
          "The market's fear gauge: how big a swing the S&P 500 is expected to make over "
-         "the next 30 days. Your comfort zone is 13 to 25. Below that premiums are thin, "
+         "the next 30 days. Your comfort zone is {vix_low} to {vix_high}. Below that "
+         "premiums are thin, "
          "above it the swings get big."),
         ("Trend",
          "The app's read on direction over recent weeks - up, down or sideways. It drives "
@@ -206,6 +266,26 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "decides whether assignment is possible and which strategies your SOP allows."),
     ]),
 ]
+
+
+def filled_sections() -> list[tuple[str, list[tuple[str, str]]]]:
+    """SECTIONS with every {placeholder} replaced by the live config value.
+
+    Everything that reads the glossary goes through here, so there is no path
+    that can render a stale number.
+    """
+    vals = sop_numbers()
+
+    def fill(text: str) -> str:
+        try:
+            return text.format(**vals)
+        except (KeyError, IndexError, ValueError):
+            # A typo in a placeholder must not blank the glossary - better a
+            # visible brace than a missing definition.
+            return text
+
+    return [(title, [(fill(term), fill(definition)) for term, definition in rows])
+            for title, rows in SECTIONS]
 
 
 def _term_matches(term: str, definition: str, needle: str) -> bool:
@@ -241,7 +321,7 @@ def render() -> None:
             placeholder="delta, credit, buying power, gamma...").strip().lower()
 
         shown = 0
-        for title, rows in SECTIONS:
+        for title, rows in filled_sections():
             hits = ([r for r in rows if _term_matches(r[0], r[1], needle)]
                     if needle else rows)
             if not hits:
@@ -259,4 +339,4 @@ def render() -> None:
 def all_terms() -> list[str]:
     """Every defined term, for tests and for anything that wants to cross-check
     that a word used on screen is actually explained somewhere."""
-    return [term for _title, rows in SECTIONS for term, _definition in rows]
+    return [term for _title, rows in filled_sections() for term, _definition in rows]

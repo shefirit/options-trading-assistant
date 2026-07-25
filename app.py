@@ -1478,8 +1478,14 @@ def _spread_width(cand) -> float:
 
 def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -> None:
     if not scanner.can_scan(key):
-        st.info("This strategy depends on the real shares you already own, so use **Check a "
-                "trade I built myself** above to validate it against your SOP.")
+        # Unreachable today - every one of the 8 strategies is in a scannable
+        # family. It stays as a guard for a 9th, but it must not point at the
+        # "check a trade I built myself" form, which no longer exists: Quick Log
+        # replaced it, and it reads the details off her real fill instead of
+        # asking her to hand-type a delta and a mid price for every leg.
+        st.info("The scanner does not cover this strategy yet. Place it in thinkorswim, then "
+                "record it with **➕ Quick Log** in 📒 My trades - it checks the trade against "
+                "your SOP and starts tracking your exit rules for it.")
         return
     if not underlyings:
         st.warning("Pick at least one underlying above.")

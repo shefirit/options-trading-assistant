@@ -12,7 +12,9 @@ from ui import glossary
 
 
 def _defs() -> list[tuple[str, str]]:
-    return [row for _title, rows in glossary.SECTIONS for row in rows]
+    # The filled text, not the templates - the style rules apply to what she
+    # actually reads on screen.
+    return [row for _title, rows in glossary.filled_sections() for row in rows]
 
 
 def test_every_term_is_defined_once():
@@ -65,3 +67,52 @@ def test_search_matches_inside_a_definition():
 def test_search_for_nonsense_finds_nothing():
     hits = [t for t, d in _defs() if glossary._term_matches(t, d, "zzzzz")]
     assert hits == []
+
+
+# ---------- the glossary must not drift from config ----------
+def test_no_placeholder_is_left_unfilled():
+    for term, definition in [r for _t, rows in glossary.filled_sections() for r in rows]:
+        assert "{" not in term and "}" not in term, f"unfilled placeholder in: {term}"
+        assert "{" not in definition and "}" not in definition, f"unfilled in: {term}"
+
+
+def test_the_glossary_quotes_the_live_config_numbers():
+    """Her rules live in config and the app follows. The glossary used to spell
+    them out in prose, so changing a delta in strategies.yaml would leave it
+    teaching the old one with nothing to catch it."""
+    from src.engine.config_loader import get_strategy, load_settings
+
+    text = " ".join(f"{t} {d}" for _s, rows in glossary.filled_sections() for t, d in rows)
+    put = get_strategy("put_credit_spread")
+    call = get_strategy("call_credit_spread")
+    condor = get_strategy("iron_condor")
+    settings = load_settings()
+
+    assert f"{put['entry']['short_leg_delta_max']:.2f} delta put" in text
+    assert f"{call['entry']['short_leg_delta_max']:.2f} delta" in text
+    assert f"{condor['entry']['short_leg_delta_max']:.2f} delta per leg" in text
+    assert f"about {put['entry']['dte_target']}" in text
+    assert f"past {put['exit']['time_exit_dte']}" in text
+    assert f"{float(settings['risk_limits']['monthly_bp_limit']):,.0f}" in text
+    assert str(settings["market_read"]["vix_zone_low"]) in text
+
+
+def test_a_config_change_moves_the_glossary_with_it(monkeypatch):
+    # The whole point: edit the rule, and the glossary teaches the new number.
+    real = glossary.sop_numbers()
+    bumped = dict(real, put_delta="0.20", put_delta_pct="20")
+    monkeypatch.setattr(glossary, "sop_numbers", lambda: bumped)
+    text = " ".join(d for _s, rows in glossary.filled_sections() for _t, d in rows)
+    assert "0.20 delta put" in text
+    assert "0.25 delta put" not in text
+
+
+def test_worked_examples_agree_with_the_rule_they_illustrate():
+    vals = glossary.sop_numbers()
+    credit = float(vals["eg_credit"].replace(",", ""))
+    keep = float(vals["eg_keep"].replace(",", ""))
+    loss = float(vals["eg_loss"].replace(",", ""))
+    buyback = float(vals["eg_buyback"].replace(",", ""))
+    assert keep == credit * float(vals["profit_pct"]) / 100
+    assert loss == credit * float(vals["stop_mult"])
+    assert buyback == credit + loss
