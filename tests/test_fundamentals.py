@@ -75,3 +75,52 @@ def test_a_debt_free_stock_passes_a_low_debt_rule():
     result = criteria.evaluate("MNST", rules, {"debtToEquity": 1.082}, {})
     assert result.verdict == "pass"
     assert [r.passed for r in result.rules] == [True]
+
+
+# ---------- NaN is not a number, and must not be treated as a failing one ----
+def test_nan_reads_as_unknown_not_as_a_failure():
+    """Yahoo's fields come off pandas frames, so NaN turns up. It is worse than
+    a missing value: it survives an `is not None` check and then loses every
+    comparison after it, so the stock scores as if it had failed the test
+    rather than as unmeasured."""
+    nan = float("nan")
+    assert fundamentals.debt_to_equity_ratio({"debtToEquity": nan}) is None
+    assert fundamentals.dividend_yield_pct({"dividendYield": nan}) == 0.0
+    assert fundamentals.dividend_yield_pct(
+        {"trailingAnnualDividendRate": nan, "dividendYield": 2.5}, 100.0
+    ) == pytest.approx(2.5)
+
+
+def test_infinities_are_rejected_too():
+    assert fundamentals.debt_to_equity_ratio({"debtToEquity": float("inf")}) is None
+    assert fundamentals.dividend_yield_pct({"dividendYield": float("inf")}) == 0.0
+
+
+def test_a_nan_debt_field_does_not_cost_the_quality_pillar_points():
+    from src.research import leaps
+    solid = {"marketCap": 300e9, "profitMargins": 0.30, "revenueGrowth": 0.20,
+             "returnOnEquity": 0.30}
+    clean = leaps.score_quality(dict(solid))
+    with_nan = leaps.score_quality(dict(solid, debtToEquity=float("nan")))
+    assert with_nan.score == clean.score
+    assert not any("Debt to equity" in f for f in with_nan.factors)
+
+
+# ---------- one implementation, three callers ----------
+def test_the_recommender_reads_dividends_the_same_way():
+    from src.engine import recommender
+
+    info = {"trailingAnnualDividendRate": 2.06, "dividendYield": 2.58}
+    shared = fundamentals.dividend_yield_pct(info, 82.25)
+    assert recommender.dividend_view(info, 82.25).yield_pct == pytest.approx(
+        round(shared, 2))
+
+
+def test_the_recommender_still_reports_a_non_payer_as_none():
+    """dividend_view wants None where the shared helper returns 0.0, because
+    "no dividend" and "a 0% dividend" read differently in the Picks card."""
+    from src.engine import recommender
+
+    view = recommender.dividend_view({}, 100.0)
+    assert view.yield_pct is None and not view.pays
+    assert "No dividend" in view.note

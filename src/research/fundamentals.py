@@ -16,12 +16,23 @@ from __future__ import annotations
 from typing import Optional
 
 
-def _pos_float(value) -> Optional[float]:
+def _float(value) -> Optional[float]:
+    """A real, finite number or None. Yahoo's fields come off pandas frames and
+    arrive as NaN often enough to matter, and NaN is worse than missing: it
+    passes an `is not None` check, then fails every comparison after it, so a
+    stock silently scores as if it had failed rather than as unknown."""
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _pos_float(value) -> Optional[float]:
+    number = _float(value)
+    return number if number is not None and number > 0 else None
 
 
 def dividend_yield_pct(info: dict, price: Optional[float] = None) -> float:
@@ -44,9 +55,10 @@ def dividend_yield_pct(info: dict, price: Optional[float] = None) -> float:
         info.get("trailingAnnualDividendYield"))
     if raw is None:
         return 0.0
-    # Nothing better to go on, so fall back to the app-wide convention (see
-    # recommender._normalize_yield_pct): under 0.12 reads as a fraction,
-    # 0.12-25 as a percent, above that is junk.
+    # Nothing better to go on, so fall back to the long-standing convention:
+    # under 0.12 reads as a fraction, 0.12-25 as a percent, above that is junk.
+    # The band below 0.12 is genuinely undecidable - 0.11 is either an 11%
+    # yield written as a fraction or a 0.11% one written as a percent.
     if raw < 0.12:
         return raw * 100.0
     return raw if raw <= 25 else 0.0
@@ -64,10 +76,7 @@ def debt_to_equity_ratio(info: dict) -> Optional[float]:
     debt-free large caps in the market heavily leveraged.
     """
     info = info or {}
-    try:
-        value = float(info.get("debtToEquity"))
-    except (TypeError, ValueError):
-        return None
-    if value < 0:
+    value = _float((info or {}).get("debtToEquity"))
+    if value is None or value < 0:
         return None
     return value / 100.0

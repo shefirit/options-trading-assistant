@@ -27,6 +27,7 @@ from src.data.premium_finder import PremiumSnapshot
 from src.engine import scanner
 from src.engine.config_loader import get_strategy
 from src.engine.models import Candidate, OptionType
+from src.research import fundamentals
 
 
 # ------------------------------------------------------------------ models
@@ -147,19 +148,6 @@ def _pos_float(value) -> Optional[float]:
         return None
 
 
-def _normalize_yield_pct(raw: Optional[float]) -> Optional[float]:
-    """Yahoo's dividendYield changed units across yfinance versions: older builds
-    return a fraction (0.0132), newer ones an already-percent number (1.32).
-    Values under 0.12 are read as fractions, 0.12-25 as percent, above 25 as junk."""
-    if raw is None or raw <= 0:
-        return None
-    if raw < 0.12:
-        return raw * 100
-    if raw <= 25:
-        return raw
-    return None
-
-
 def _epoch_date(value) -> Optional[dt.date]:
     """Yahoo's exDividendDate is epoch seconds; tolerate ISO strings and dates too."""
     if value is None:
@@ -185,14 +173,10 @@ def dividend_view(info: dict, price: Optional[float]) -> DividendView:
     info = info or {}
     rate = (_pos_float(info.get("trailingAnnualDividendRate"))
             or _pos_float(info.get("dividendRate")))
-    yield_pct = None
-    if rate is not None and price:
-        yield_pct = round(rate / price * 100, 2)
-    if yield_pct is None:
-        raw = (_pos_float(info.get("dividendYield"))
-               or _pos_float(info.get("trailingAnnualDividendYield")))
-        normalized = _normalize_yield_pct(raw)
-        yield_pct = round(normalized, 2) if normalized is not None else None
+    # One shared implementation of the rate-first rule (see fundamentals); this
+    # view only differs in wanting None rather than 0.0 for a non-payer.
+    computed = fundamentals.dividend_yield_pct(info, price)
+    yield_pct = round(computed, 2) if computed else None
 
     ex_div = _epoch_date(info.get("exDividendDate"))
     pays = bool(yield_pct and yield_pct > 0)
