@@ -247,13 +247,19 @@ def check_monthly_bp(
 ) -> CheckResult:
     projected = trade_bp + existing_month_bp
     ok = projected <= limit
+    # "Already committed", not "already tied up": her limit counts every trade
+    # opened this month, closed ones included, so the number does not fall back
+    # when she takes a win.
     return CheckResult(
         name=f"Monthly buying power under ${limit:,.0f}",
         status=CheckStatus.PASS if ok else CheckStatus.FAIL,
         message=(
-            f"This trade ties up ${trade_bp:,.0f}. With ${existing_month_bp:,.0f} already used "
-            f"this month, you'd be at ${projected:,.0f} of your ${limit:,.0f} limit."
-            + ("" if ok else " That is OVER your monthly limit - size down or skip.")
+            f"This trade ties up ${trade_bp:,.0f}. With ${existing_month_bp:,.0f} already "
+            f"committed this month, you'd be at ${projected:,.0f} of your ${limit:,.0f} "
+            f"budget"
+            + (f", leaving ${limit - projected:,.0f} for the rest of the month." if ok
+               else f". That is ${projected - limit:,.0f} OVER your monthly budget - size "
+                    f"down, or wait for next month.")
         ),
         expected=f"<= ${limit:,.0f}",
         actual=f"${projected:,.0f}",

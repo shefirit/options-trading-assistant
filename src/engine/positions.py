@@ -426,18 +426,26 @@ def bp_in_use(positions: list[Position]) -> float:
     return sum(p.buying_power for p in open_positions(positions))
 
 
-def bp_in_use_this_month(positions: list[Position], today: date | None = None) -> float:
-    """Worst-case capital tied up by trades OPENED this calendar month that are
-    still open - the figure that counts against the monthly buying-power budget.
+def bp_committed_this_month(positions: list[Position], today: date | None = None) -> float:
+    """Buying power committed by EVERY trade opened this calendar month, whether
+    it is still open or already closed. The figure the monthly limit is measured
+    against.
 
-    This is a gross sum of each trade's max loss / collateral, not real broker
-    buying power: your broker nets and offsets positions against each other, so
-    this will read higher than the buying power your platform shows used. It is
-    a worst-case guardrail, not a margin figure. Trades opened in earlier months
-    (even if still open) do not count against THIS month's deployment."""
+    Rita's ruling (2026-07-25): her SOP's "under $50,000 per month" is
+    CUMULATIVE deployment through the month, not how much happens to be tied up
+    at one moment. So closing a trade does not hand the buying power back for
+    the rest of the month - opening it spent that part of the budget.
+
+    Two consequences worth knowing. Trades opened in an EARLIER month never
+    count here even if they are still open: they were that month's deployment.
+    And this is a gross sum of each trade's max loss / collateral, not real
+    broker buying power - your broker nets positions against each other, so this
+    reads higher than the number your platform shows. It is a budget guardrail,
+    not a margin figure.
+    """
     ref = today or date.today()
     return sum(
-        p.buying_power for p in open_positions(positions)
+        p.buying_power for p in positions
         if p.opened is not None
         and p.opened.year == ref.year and p.opened.month == ref.month
     )

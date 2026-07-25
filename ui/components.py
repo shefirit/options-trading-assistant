@@ -1316,18 +1316,22 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
     m[3].metric("Average winner", f"${perf['avg_win']:,.0f}" if perf["avg_win"] is not None else "-")
     m[4].metric("Average loser", f"${perf['avg_loss']:,.0f}" if perf["avg_loss"] is not None else "-")
 
-    # Worst-case capital tied up by trades opened THIS month, vs the monthly
-    # budget. A gross sum of max losses - not broker buying power, which nets
-    # positions and reads lower. See positions.bp_in_use_this_month.
+    # Buying power committed by every trade OPENED this month, closed ones
+    # included - her limit is cumulative deployment through the month, not a
+    # snapshot of what is tied up now. See positions.bp_committed_this_month.
     used_pct = (bp_used / bp_limit) if bp_limit else 0.0
+    left = max(bp_limit - bp_used, 0.0)
     tone = theme.RED if used_pct > 1.0 else theme.AMBER if used_pct > 0.8 else theme.GREEN
     st.markdown(
         f"<div style='margin-top:6px;font-weight:700;color:{tone};'>"
-        f"Worst-case capital at risk this month: {_dollars(bp_used)} of your "
-        f"{_dollars(bp_limit)} monthly limit ({used_pct * 100:.0f}%).</div>"
-        f"<div style='font-size:.85rem;font-weight:500;color:{theme.MUTED};'>"
-        f"A gross sum of each trade's max loss - not your broker's buying power, "
-        f"which nets positions and will show less used.</div>",
+        f"Buying power committed this month: {_dollars(bp_used)} of your "
+        f"{_dollars(bp_limit)} budget ({used_pct * 100:.0f}%) - "
+        f"{_dollars(left)} left.</div>"
+        f"<div style='font-size:.85rem;font-weight:500;color:{theme.SECONDARY};'>"
+        f"Counts every trade you opened this month, closed ones included: closing "
+        f"early frees the risk, not the month's budget. A gross sum of each trade's "
+        f"max loss, not your broker's buying power, which nets positions and shows "
+        f"less used.</div>",
         unsafe_allow_html=True)
     st.progress(min(used_pct, 1.0))
 
@@ -1461,8 +1465,10 @@ def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float) -> N
     m[2].metric("Opened", entry["opened_count"],
                 help="Trades opened during this month, whatever happened later.")
     m[3].metric("BP used", _dollars(entry["bp_opened"]),
-                help=f"Buying power committed by trades opened this month. "
-                     f"Your SOP allows {_dollars(bp_limit)} per month.")
+                help=f"Buying power committed by every trade opened this month, "
+                     f"including ones already closed - your SOP's "
+                     f"{_dollars(bp_limit)} is a cumulative monthly budget, so "
+                     f"closing early does not hand it back.")
 
     if entry.get("roll_income"):
         # theme.note() HTML-escapes its input, so the &#36; entity _dollars()

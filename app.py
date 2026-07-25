@@ -1497,7 +1497,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
 
     existing_bp = st.number_input(
         "Buying power already used this month ($)", min_value=0.0,
-        value=float(st.session_state.get("open_bp_in_use", 0.0)), step=1000.0,
+        value=float(st.session_state.get("month_bp_used", 0.0)), step=1000.0,
         help="Auto-filled from trades you opened this month in My trades - adjust if you "
              "also have positions the app doesn't know about.")
     is_pmcc = strat.get("family") == "diagonal"
@@ -1879,7 +1879,7 @@ def _quick_log_form(settings, strategies, provider) -> None:
             try:
                 report = validate_trade(
                     trade,
-                    existing_month_bp=st.session_state.get("open_bp_in_use", 0.0))
+                    existing_month_bp=st.session_state.get("month_bp_used", 0.0))
                 passed = report.passed
                 # Keep WHICH rules, not just whether. This is a trade she has
                 # already placed, so the checklist cannot stop her - but "you
@@ -2249,8 +2249,8 @@ def _tab_trades(settings, strategies, provider) -> None:
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)
     legacy = [p for p in all_pos if p.status == "legacy"]
-    bp_used = pos_mod.bp_in_use_this_month(all_pos)
-    st.session_state["open_bp_in_use"] = bp_used
+    bp_used = pos_mod.bp_committed_this_month(all_pos)
+    st.session_state["month_bp_used"] = bp_used
 
     if not all_pos:
         theme.note("Nothing here yet. Two ways to log your first trade: use "
@@ -2499,11 +2499,14 @@ def _tab_trades(settings, strategies, provider) -> None:
                    "P&L right now.")
         if bp_used:
             limit = float(settings["risk_limits"]["monthly_bp_limit"])
-            theme.note(f"Trades you opened this month are risking **\\${bp_used:,.0f}** "
-                       f"of your **\\${limit:,.0f}** monthly capital limit "
-                       f"({bp_used / limit * 100:.0f}%). This is a worst-case sum of each "
-                       f"trade's max loss, not your broker's buying power - your platform "
-                       f"nets positions, so it will show less used.")
+            theme.note(f"You have committed **\\${bp_used:,.0f}** of your "
+                       f"**\\${limit:,.0f}** monthly buying-power budget "
+                       f"({bp_used / limit * 100:.0f}%), leaving "
+                       f"**\\${max(limit - bp_used, 0):,.0f}** for the rest of the month. "
+                       f"This counts every trade you OPENED this month, including ones you "
+                       f"have already closed - closing early frees the risk, not the "
+                       f"month's budget. It is a worst-case sum of each trade's max loss, "
+                       f"not your broker's buying power, so your platform will show less.")
 
 
 # ------------------------------------------------------------------ shared pieces

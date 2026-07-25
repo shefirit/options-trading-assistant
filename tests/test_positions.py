@@ -10,7 +10,7 @@ from src.engine.positions import (
     Position,
     _to_date,
     bp_in_use,
-    bp_in_use_this_month,
+    bp_committed_this_month,
     closed_positions,
     cost_to_close_from_chain,
     monthly_summary,
@@ -94,7 +94,7 @@ def test_bp_in_use_counts_only_open_trades():
     assert bp_in_use(positions) == 2200.0
 
 
-def test_bp_in_use_this_month_ignores_trades_opened_earlier_months():
+def test_bp_committed_ignores_trades_opened_earlier_months():
     today = date(2026, 7, 18)
     last_month = date(2026, 6, 10)
     rows = [
@@ -104,12 +104,15 @@ def test_bp_in_use_this_month_ignores_trades_opened_earlier_months():
                   trade_id="OLD", opened_on=last_month),
     ]
     positions = parse_rows(COLUMNS, rows)
-    # All-open sum sees both; the monthly figure only counts July's trade.
+    # An open June trade is still capital at work, but it spent JUNE's budget.
     assert bp_in_use(positions) == 4400.0
-    assert bp_in_use_this_month(positions, today=today) == 2200.0
+    assert bp_committed_this_month(positions, today=today) == 2200.0
 
 
-def test_bp_in_use_this_month_excludes_closed_trades():
+def test_bp_committed_counts_trades_already_closed_this_month():
+    """Rita's ruling: the monthly limit is cumulative deployment, not a snapshot
+    of what is tied up right now. Taking a win early frees the risk; it does not
+    hand back that slice of the month's budget."""
     today = date(2026, 7, 18)
     rows = [
         build_row(_trade(), "Put Credit Spread", SIZE, True, "",
@@ -119,7 +122,29 @@ def test_bp_in_use_this_month_excludes_closed_trades():
         build_close_row("SHUT", "SPX", "Put Credit Spread", 150.0, 150.0, "50%"),
     ]
     positions = parse_rows(COLUMNS, rows)
-    assert bp_in_use_this_month(positions, today=today) == 2200.0
+    # One open + one closed, both opened this month = both counted.
+    assert bp_committed_this_month(positions, today=today) == 4400.0
+    # The still-open figure is a different question and still answers it.
+    assert bp_in_use(positions) == 2200.0
+
+
+def test_bp_committed_matches_the_month_view_tile():
+    """The two numbers used to disagree on screen - one counted closed trades,
+    the other did not - while both were shown against the same limit."""
+    from src.engine.positions import monthly_summary
+
+    today = date(2026, 7, 18)
+    rows = [
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="OPEN", opened_on=today),
+        build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                  trade_id="SHUT", opened_on=today),
+        build_close_row("SHUT", "SPX", "Put Credit Spread", 150.0, 150.0, "50%"),
+    ]
+    positions = parse_rows(COLUMNS, rows)
+    july = next(m for m in monthly_summary(positions, today=today)
+                if m["month"] == "2026-07")
+    assert july["bp_opened"] == bp_committed_this_month(positions, today=today)
 
 
 def test_cost_to_close_from_chain():
