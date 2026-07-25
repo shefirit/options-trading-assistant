@@ -1711,6 +1711,69 @@ def _delete_control(trade_id, what: str, key: str) -> None:
             st.warning("Nothing was deleted - it may already be gone. Press ↻ Refresh.")
 
 
+def _fix_close_form(closed: list, labels: list[str]) -> None:
+    """Correct a close recorded with the wrong fill price.
+
+    She typed $2,300 for an NDX condor that actually filled at $2,260 - an easy
+    slip when two similar orders go through seconds apart - and there was no way
+    to put it right from inside the app. Editing the sheet by hand was not an
+    option for her, and deleting the trade to re-log it risks losing the whole
+    record over a $40 typo.
+
+    So this appends a fresh close event instead. The log is an event log read in
+    order, and the LAST close for a trade wins, so a correction supersedes the
+    mistake without deleting anything - and the wrong row stays visible in the
+    sheet as history.
+    """
+    with st.expander("✏️ Fix a close I typed wrong"):
+        theme.note("Got the fill price wrong when you recorded a close? Put the right "
+                   "number in here. Nothing is deleted - the app writes a correction "
+                   "that replaces the old figure.")
+        i = st.selectbox("Which close", range(len(closed)),
+                         format_func=lambda n: labels[n], key="fix_close_pick")
+        p = closed[int(i)]
+        was_cost = float(p.exit_cost or 0.0)
+        was_result = float(p.realized_pl or 0.0)
+        theme.note(f"Recorded now: closed for **\\${was_cost:,.0f}**, "
+                   f"result **\\${was_result:,.0f}**.")
+
+        pays_to_close = p.is_debit
+        label = ("What you RECEIVED when you closed it ($ total)" if pays_to_close
+                 else "What you PAID to close it ($ total)")
+        cost = st.number_input(label, min_value=0.0, step=5.0,
+                               value=round(abs(float(p.close_cash or was_cost)), 2),
+                               key=f"fixcost_{p.trade_id}",
+                               help="From your thinkorswim fill - the real one.")
+        close_cash = float(cost) if pays_to_close else -float(cost)
+        realized = p.open_cash + close_cash
+        delta = realized - was_result
+        theme.note(f"New result: **\\${realized:,.0f}** "
+                   f"({'+' if delta >= 0 else ''}\\${delta:,.0f} against what is recorded).")
+        why = st.text_input("What was wrong (optional)", key=f"fixwhy_{p.trade_id}",
+                            placeholder="e.g. typed the wrong fill price")
+        if st.button("Save the correction", type="primary", key=f"fixgo_{p.trade_id}"):
+            if abs(delta) < 0.005:
+                st.warning("That is the same number already recorded - nothing to correct.")
+                return
+            from src.logging_tools.trade_logger import close_trade
+            reason = (p.exit_reason or "").split(" - ")[0] or "Corrected"
+            note = why.strip() or "Corrected fill price"
+            try:
+                dest, live = close_trade(
+                    p.trade_id, p.underlying, p.strategy_name,
+                    exit_cost=(0.0 if pays_to_close else float(cost)),
+                    realized_pl=round(realized, 2), reason=reason, note=note,
+                    closed_on=p.closed_on, close_cash=close_cash)
+            except Exception as e:
+                st.error(f"Could not save the correction: {e}")
+                return
+            st.session_state.pop("trades_rows", None)
+            st.session_state["ql_flash"] = (
+                f"Corrected {p.underlying}: result is now ${realized:,.0f} "
+                f"(was ${was_result:,.0f}). Saved to {'your Google Sheet' if live else 'the local log'}.")
+            st.rerun()
+
+
 def _quick_log_form(settings, strategies, provider) -> None:
     """Record a trade she ALREADY placed in thinkorswim, in under a minute:
     strategy, strikes, expiration, contracts, and the credit on her fill.
@@ -2495,6 +2558,8 @@ def _tab_trades(settings, strategies, provider) -> None:
                                    format_func=lambda i: labels[i], key="del_closed_pick")
                 cp = deletable[int(idx)]
                 _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
+                st.divider()
+                _fix_close_form(deletable, labels)
     else:
         theme.note("No closed trades yet - your results dashboard starts building the "
                    "first time you record a close. Remember: you are paper trading to "

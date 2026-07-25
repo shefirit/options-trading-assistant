@@ -457,3 +457,40 @@ def test_shares_are_margined_even_though_she_paid_for_them():
     # And her real TOS number still overrides the conservative estimate.
     covered.bp_override = 18312.75
     assert covered.bp_effect == 18312.75
+
+
+def test_a_later_close_row_corrects_an_earlier_one():
+    """How a mistyped fill gets fixed without deleting anything: the log is an
+    event log read in order, so a second close for the same trade wins."""
+    today = date(2026, 7, 18)
+    rows = [
+        build_row(_trade(), "Iron Condor", SIZE, True, "",
+                  trade_id="NDX1", opened_on=today),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2300.0, 1470.0, "21 DTE time exit"),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2260.0, 1510.0,
+                        "21 DTE time exit", note="Corrected fill"),
+    ]
+    positions = parse_rows(COLUMNS, rows)
+    ndx = next(p for p in positions if p.trade_id == "NDX1")
+    assert ndx.exit_cost == 2260.0
+    assert ndx.realized_pl == 1510.0
+    assert "Corrected fill" in ndx.exit_reason
+    # And the trade is still ONE closed position, not two.
+    assert len([p for p in positions if p.trade_id == "NDX1"]) == 1
+    assert ndx.status == "closed"
+
+
+def test_a_correction_does_not_double_count_in_the_month():
+    from src.engine.positions import monthly_summary
+
+    today = date(2026, 7, 18)
+    rows = [
+        build_row(_trade(), "Iron Condor", SIZE, True, "",
+                  trade_id="NDX1", opened_on=today),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2300.0, 1470.0, "21 DTE time exit"),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2260.0, 1510.0, "21 DTE time exit"),
+    ]
+    july = next(m for m in monthly_summary(parse_rows(COLUMNS, rows), today=today)
+                if m["month"] == "2026-07")
+    assert july["closed_count"] == 1
+    assert july["realized_pl"] == 1510.0
