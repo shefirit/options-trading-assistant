@@ -2,7 +2,9 @@
 
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
-Seven tabs, all open at once - use them in any order, nothing is locked:
+Eight tabs, all open at once - use them in any order, nothing is locked. There
+is no sidebar: everything lives in the tabs, so nothing can hide behind a toggle
+or show up twice.
 
   📊 Market   - is today a good day to sell premium? (holiday-aware)
   💡 Picks    - WHAT looks good today: scans the indexes, the big ETFs, and the
@@ -10,11 +12,12 @@ Seven tabs, all open at once - use them in any order, nothing is locked:
                 with dividends and a risk picture
   🔎 Premium  - screen names for the richest, safest option premium
   🔬 Analyze  - any stock/ETF/index: full picture + the strategy that fits it
+  🔭 Research - six tools for sizing up a name before you trade it
   🎯 Find a trade    - pick a strategy, scan real setups, check your SOP rules, log it
   📒 My trades- every logged trade tracked live against your own exit rules,
                 plus your results vs your weekly/monthly goals
   ⚙️ Settings - connections (Google Sheet, earnings data, Schwab) and your plan
-                numbers, in the main screen where they work on a phone too
+                numbers
 
 It never places trades and never gives buy/sell advice. You place every trade
 yourself in thinkorswim; this just helps you do it correctly.
@@ -131,8 +134,6 @@ def main() -> None:
     settings = load_settings()
     strategies = load_strategies()
     provider = get_provider()
-
-    _sidebar(settings, provider)
 
     theme.hero(
         "Options Trading Assistant",
@@ -2518,7 +2519,7 @@ def _data_mode_note(provider) -> None:
         theme.note("Real market data, ~15 minutes delayed - fine for 21-45 day trades.")
 
 
-def _plan_metrics(settings, per_row: int = 2) -> None:
+def _plan_metrics(settings, per_row: int = 4) -> None:
     acct, tgt, risk = settings["account"], settings["targets"], settings["risk_limits"]
     vals = [("Capital", money(acct["starting_capital"])),
             ("Monthly goal", money(tgt["monthly"])),
@@ -2530,9 +2531,12 @@ def _plan_metrics(settings, per_row: int = 2) -> None:
 
 
 def _tab_settings(settings, provider) -> None:
-    """Everything that used to live only in the sidebar - which the phone app
-    can't open. Connections, data status, and her plan numbers, in the main
-    screen where they always work."""
+    """The one home for connections, data status, and her plan numbers.
+
+    These used to render here AND in a sidebar, so on a computer she saw two of
+    every form at once - two "Connect your Google Sheet" boxes, each with its own
+    half-filled text box. The sidebar is gone; this tab is the only copy.
+    """
     theme.section("Your connections and your plan - all in one place", "Settings")
     _data_mode_note(provider)
 
@@ -2540,40 +2544,23 @@ def _tab_settings(settings, provider) -> None:
     from src.logging_tools import webhook_logger
     if not webhook_logger.is_configured():
         st.warning("Trades are saving **only on this device** right now - they won't reach "
-                   "your Google Sheet or follow you between phone and computer until the "
-                   "sheet is connected below.")
-    _connect_sheet_ui(key_prefix="main")
+                   "your Google Sheet until it is connected below.")
+    _connect_sheet_ui()
 
     st.markdown("#### 📡 Data sources")
-    _connect_earnings_ui(key_prefix="main")
-    _connect_schwab_ui(provider, key_prefix="main")
+    _connect_earnings_ui()
+    _connect_schwab_ui(provider)
 
     st.divider()
     st.markdown("#### 🎯 Your plan")
-    _plan_metrics(settings, per_row=4)
+    _plan_metrics(settings)
     theme.note("These numbers come from `config/settings.yaml` - your capital, income goals, "
                "and the monthly buying-power limit every checklist enforces.")
     st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
     theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
 
 
-def _sidebar(settings, provider) -> None:
-    with st.sidebar:
-        st.markdown("### Trading Assistant")
-        _data_mode_note(provider)
-        st.divider()
-        st.markdown("**Your plan**")
-        _plan_metrics(settings, per_row=2)
-        st.divider()
-        _connect_schwab_ui(provider, key_prefix="sb")
-        _connect_earnings_ui(key_prefix="sb")
-        _connect_sheet_ui(key_prefix="sb")
-        st.divider()
-        st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
-        theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
-
-
-def _connect_schwab_ui(provider, key_prefix: str = "main") -> None:
+def _connect_schwab_ui(provider) -> None:
     live = provider.mode == "schwab"
     label = "⚡ Schwab: connected ✅" if live else "⚡ Connect Schwab (real-time)"
     with st.expander(label, expanded=False):
@@ -2595,7 +2582,7 @@ def _connect_schwab_ui(provider, key_prefix: str = "main") -> None:
         theme.note("Your keys stay on your PC. Full details are in the README.")
 
 
-def _connect_earnings_ui(key_prefix: str = "main") -> None:
+def _connect_earnings_ui() -> None:
     """Paste a free Alpha Vantage key to pull years of earnings history (works on
     the hosted app, where Yahoo's earnings endpoint is blocked)."""
     from src.data import alphavantage_client as av
@@ -2605,9 +2592,9 @@ def _connect_earnings_ui(key_prefix: str = "main") -> None:
         theme.note("Gets years of expected-vs-delivered EPS for the Analyze tab. Yahoo blocks "
                    "this on the hosted app, so a free Alpha Vantage key fills it in.")
         current = av.get_key() or ""
-        key = st.text_input("Alpha Vantage key", value=current, key=f"{key_prefix}_av_key",
+        key = st.text_input("Alpha Vantage key", value=current, key="av_key",
                             type="password", placeholder="paste your key")
-        if st.button("Save key", key=f"{key_prefix}_save_av"):
+        if st.button("Save key", key="save_av"):
             if key.strip():
                 av.set_key(key.strip())
                 st.success("Saved. The earnings chart will now show years of history.")
@@ -2617,7 +2604,7 @@ def _connect_earnings_ui(key_prefix: str = "main") -> None:
                    "it under **Settings → Secrets** as:  alphavantage_key = \"YOUR_KEY\"")
 
 
-def _connect_sheet_ui(key_prefix: str = "main") -> None:
+def _connect_sheet_ui() -> None:
     from src.logging_tools import webhook_logger
     connected = webhook_logger.is_configured()
     label = "🔗 Google Sheet: connected ✅" if connected else "🔗 Connect Google Sheet"
@@ -2635,16 +2622,16 @@ def _connect_sheet_ui(key_prefix: str = "main") -> None:
                        "one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
                        "version → Deploy**. Your link stays the same.")
         current = webhook_logger.get_url() or ""
-        url = st.text_input("Web app link", value=current, key=f"{key_prefix}_webhook_url",
+        url = st.text_input("Web app link", value=current, key="webhook_url",
                             placeholder="https://script.google.com/macros/s/.../exec")
         c1, c2 = st.columns(2)
-        if c1.button("Save link", key=f"{key_prefix}_save_webhook"):
+        if c1.button("Save link", key="save_webhook"):
             if url.strip().startswith("https://"):
                 webhook_logger.set_url(url.strip())
                 st.success("Saved. Your trades will now log to your Google Sheet.")
             else:
                 st.error("That does not look like a link. It should start with https://")
-        if connected and c2.button("Test it", key=f"{key_prefix}_test_webhook"):
+        if connected and c2.button("Test it", key="test_webhook"):
             _test_sheet_connection()
         theme.note("On the **hosted** app the link comes from **Settings → Secrets** "
                    "(share.streamlit.io → your app → ⋮ → Settings → Secrets) as:  "
