@@ -86,3 +86,57 @@ def test_period_change_reports_a_fall_as_negative():
     diff, pct = period_change(pd.DataFrame({"Close": [200.0, 150.0]}))
     assert diff == -50.0
     assert pct == -25.0
+
+
+# ---------- the setup picker ----------
+def _cand(underlying, dte, credit, fits=True):
+    from src.engine.models import Action, Candidate, Leg, OptionType, Trade
+    trade = Trade(
+        strategy_key="put_credit_spread", underlying=underlying, contracts=1,
+        underlying_price=7400.0,
+        legs=[
+            Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=7200, delta=-0.24, premium=8.0, dte=dte),
+            Leg(role="long_put", action=Action.BUY, option_type=OptionType.PUT,
+                strike=7175, delta=-0.18, premium=4.0, dte=dte),
+        ])
+    return Candidate(trade=trade, credit=credit, max_loss=2100, buying_power=2100,
+                     return_on_risk=credit / 2100, short_delta=0.24, dte=dte,
+                     fits_sop=fits, note="" if fits else "Delta is a touch above.")
+
+
+def test_candidate_labels_carry_enough_to_choose_on():
+    from ui.components import candidate_labels
+
+    labels = candidate_labels([_cand("SPX", 41, 400)])
+    assert labels[0].startswith("#1"), "the number must match the table's # column"
+    assert "SPX 7200/7175" in labels[0]
+    assert "41 days" in labels[0]
+    assert "$400 credit" in labels[0]
+
+
+def test_candidate_labels_mark_the_best_timed_one_per_underlying():
+    from ui.components import candidate_labels
+
+    # Sorted the way the scanner hands them over: best fit first, per underlying.
+    labels = candidate_labels([_cand("SPX", 41, 400), _cand("SPX", 23, 415),
+                               _cand("NDX", 38, 900), _cand("NDX", 24, 950)])
+    assert "⭐ best timed" in labels[0]
+    assert "⭐ best timed" not in labels[1]
+    assert "⭐ best timed" in labels[2], "each underlying gets its own best"
+    assert "⭐ best timed" not in labels[3]
+
+
+def test_candidate_labels_flag_a_delta_near_miss():
+    from ui.components import candidate_labels
+
+    labels = candidate_labels([_cand("SPX", 41, 400), _cand("SPX", 35, 420, fits=False)])
+    assert "⚠️ delta over" not in labels[0]
+    assert "⚠️ delta over" in labels[1]
+
+
+def test_candidate_labels_are_unique_so_the_picker_cannot_confuse_two():
+    from ui.components import candidate_labels
+
+    labels = candidate_labels([_cand("SPX", 41, 400), _cand("SPX", 41, 400)])
+    assert len(set(labels)) == len(labels)

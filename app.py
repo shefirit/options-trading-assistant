@@ -1514,6 +1514,9 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
         found = scanner.sort_by_dte_fit(found, strat)
         st.session_state["build_candidates"] = found
         st.session_state.pop("build_chosen", None)
+        # A fresh scan is a fresh list, so drop the old selection - otherwise
+        # the picker holds an index into results that no longer exist.
+        st.session_state.pop("build_pick", None)
 
     candidates = st.session_state.get("build_candidates", [])
     if not candidates:
@@ -1562,9 +1565,10 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                    f"{best.trade.underlying}) is the best-timed one. Anything near the bottom "
                    f"of your window leaves almost no room before the 21-day time exit.")
 
-    pick = st.number_input("Look at trade #", min_value=1, max_value=len(candidates),
-                           value=1, step=1)
-    chosen = candidates[int(pick) - 1]
+    labels = components.candidate_labels(candidates)
+    pick = st.selectbox("Look at one setup", range(len(candidates)),
+                        format_func=lambda i: labels[i], key="build_pick")
+    chosen = candidates[int(pick)]
     with st.container(border=True):
         if not chosen.fits_sop:
             st.warning(f"⚠️ {chosen.note}")

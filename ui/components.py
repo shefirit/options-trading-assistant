@@ -790,6 +790,37 @@ def candidates_column_config():
     }
 
 
+def candidate_labels(candidates: list[Candidate]) -> list[str]:
+    """One readable line per setup, for the picker under the table.
+
+    This used to be a number box: read a row number off the table, then type it
+    into a separate widget. Every other "show me one of these" control in the
+    app is a dropdown you read and click, so this is too - which means the label
+    has to carry enough to choose on without looking back up at the table.
+
+    The leading #N still matches the table's own # column, so the two line up.
+    """
+    # The list arrives sorted by how well each expiration fits the SOP target,
+    # grouped by underlying - so the first row of each underlying is its
+    # best-timed setup. Say which, rather than making her infer it.
+    best_seen: set[str] = set()
+    out = []
+    for i, c in enumerate(candidates):
+        u = c.trade.underlying
+        strikes = "/".join(f"{leg.strike:g}" for leg in c.trade.legs)
+        bits = [f"#{i + 1}", f"{u} {strikes}"]
+        if c.dte is not None:
+            bits.append(f"{c.dte} days")
+        bits.append(f"${c.credit:,.0f} credit")
+        if u not in best_seen:
+            best_seen.add(u)
+            bits.append("⭐ best timed")
+        if not c.fits_sop:
+            bits.append("⚠️ delta over")
+        out.append("  ·  ".join(bits))
+    return out
+
+
 def candidate_leg_detail(candidate: Candidate) -> pd.DataFrame:
     """Leg-by-leg breakdown, worded the thinkorswim way (+ buy / - sell)."""
     rows = []
