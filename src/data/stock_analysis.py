@@ -29,7 +29,13 @@ class StockAnalysis(BaseModel):
     technicals: list[Metric] = Field(default_factory=list)
     liquid: bool = True
     suitable: bool = True            # decent candidate for selling options?
-    grade: str = "C"                 # A-F report-card grade from the metrics
+    # A-F report card - for a COMPANY. None on a fund, which has no company to
+    # grade: SPY is 500 of them, so profit margin and revenue growth are not
+    # missing data, they are the wrong question. premium_finder already took
+    # this line ("ETFs count as solid - they are baskets, not one company") and
+    # graded funds as "ETF"; this used to score SPY a D off the blanks.
+    grade: Optional[str] = "C"
+    is_fund: bool = False
     summary: str = ""
 
 
@@ -166,12 +172,35 @@ def _liquidity_metric(avg_vol: Optional[float]) -> Metric:
     return Metric(label="Avg daily volume", value=f"{avg_vol/1e6:.1f}M shares", read=read, status=status)
 
 
+_FUND_TYPES = {"etf", "mutualfund", "index", "fund"}
+
+
+def _is_fund(info: dict[str, Any]) -> bool:
+    """Is this a basket rather than a company?
+
+    Yahoo's quoteType says so directly. When it is missing, a name with no
+    sector AND no company economics behind it (no profit margin, no revenue
+    growth) is a fund for our purposes - a real company that is simply missing
+    one field still has the others.
+    """
+    qt = str(info.get("quoteType") or info.get("typeDisp") or "").strip().lower()
+    if qt:
+        return qt in _FUND_TYPES
+    has_company_numbers = any(info.get(k) is not None
+                              for k in ("profitMargins", "revenueGrowth",
+                                        "returnOnEquity", "sector"))
+    return not has_company_numbers
+
+
 def analyze(symbol: str, info: dict[str, Any], closes: list[float],
             avg_volume: Optional[float] = None) -> StockAnalysis:
     price = (info.get("currentPrice") or info.get("regularMarketPrice")
              or (closes[-1] if closes else None))
 
-    fundamentals = [
+    is_fund = _is_fund(info)
+    # A fund is judged on how it trades, not on company accounts it does not
+    # have. Scoring it against blank fundamentals is what made SPY a "D".
+    fundamentals = [] if is_fund else [
         _market_cap_metric(info.get("marketCap")),
         _pe_metric(info.get("trailingPE")),
         _margin_metric(info.get("profitMargins")),
@@ -193,15 +222,25 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
     liquid = any(m.label == "Avg daily volume" and m.status in ("good", "ok") for m in technicals)
     watches = sum(1 for m in fundamentals + technicals if m.status == "watch")
     goods = sum(1 for m in fundamentals + technicals if m.status == "good")
-    suitable = liquid and watches <= 1 and goods >= 3
+    # A fund only has to be liquid and not falling apart; there are no company
+    # fundamentals for it to score three greens on.
+    suitable = liquid and watches <= 1 and (is_fund or goods >= 3)
 
     # Report-card grade: 2 points per green, 1 per neutral, 0 per caution.
+    # Funds get no letter at all - see StockAnalysis.grade.
     all_metrics = fundamentals + technicals
-    score = (2 * goods + sum(1 for m in all_metrics if m.status == "ok")) / (2 * len(all_metrics))
-    grade = "A" if score >= 0.85 else "B" if score >= 0.70 else \
-            "C" if score >= 0.55 else "D" if score >= 0.40 else "F"
+    grade = None
+    if not is_fund and all_metrics:
+        score = ((2 * goods + sum(1 for m in all_metrics if m.status == "ok"))
+                 / (2 * len(all_metrics)))
+        grade = "A" if score >= 0.85 else "B" if score >= 0.70 else \
+                "C" if score >= 0.55 else "D" if score >= 0.40 else "F"
 
-    if suitable:
+    if is_fund and liquid:
+        summary = (f"{symbol} is a fund - a basket of many holdings, not one company - so "
+                   "there is no company quality to grade. What matters for selling options "
+                   "on it is that it trades heavily and moves steadily, and it does.")
+    elif suitable:
         summary = (f"{symbol} looks like a solid, liquid company - a reasonable candidate for "
                    "selling options like cash secured puts or covered calls.")
     elif not liquid:
@@ -221,5 +260,6 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
         liquid=liquid,
         suitable=suitable,
         grade=grade,
+        is_fund=is_fund,
         summary=summary,
     )

@@ -1673,12 +1673,16 @@ def _price_positions(open_pos, provider, strategies) -> tuple[list, str]:
     bar = st.progress(0.0, text="Pricing your open trades...")
     for i, p in enumerate(open_pos):
         live = provider.price_position(p)
+        cfg = _exit_cfg_for(p, strategies)
         s = exit_rules.evaluate(
-            p, _exit_cfg_for(p, strategies),
+            p, cfg,
             current_cost=live.get("cost_to_close"),
             underlying_price=live.get("underlying_price"),
             short_delta=live.get("short_delta"))
-        items.append({"position": p, "live": live, "signal": s})
+        # Carried so the table can date the time exit from THIS strategy's rule
+        # rather than assuming 21 for everything.
+        items.append({"position": p, "live": live, "signal": s,
+                      "time_exit_dte": int(cfg.get("time_exit_dte", 21) or 21)})
         bar.progress((i + 1) / len(open_pos),
                      text=f"Priced {p.underlying} ({i + 1}/{len(open_pos)})")
     bar.empty()
@@ -2449,12 +2453,23 @@ def _results_section(all_pos, settings, bp_used: float) -> None:
     monthly_goal = float(settings["targets"]["monthly"])
     bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
 
+    # The banner at the top of the tab already shows this month and all time, so
+    # repeating them here is the duplication she called out. Any OTHER month
+    # shows in full, because the banner says nothing about it.
+    import datetime as _dt
+    covered_by_banner = pick == ALL_TIME or pick == f"{_dt.date.today():%B %Y}"
+    if covered_by_banner:
+        theme.note("Your headline numbers are at the top of this tab - here is what sits "
+                   "underneath them.")
+
     if pick == ALL_TIME:
         perf = pos_mod.performance(all_pos)
-        components.render_results_dashboard(perf, settings["targets"], bp_used, bp_limit)
+        components.render_results_dashboard(perf, settings["targets"], bp_used, bp_limit,
+                                            compact=covered_by_banner)
     else:
         entry = next(m for m in summaries if m["label"] == pick)
-        components.render_month_summary(entry, monthly_goal, bp_limit)
+        components.render_month_summary(entry, monthly_goal, bp_limit,
+                                        compact=covered_by_banner)
         if entry["rows"]:
             st.dataframe(components.month_trades_dataframe(entry["rows"]),
                          width="stretch", hide_index=True,

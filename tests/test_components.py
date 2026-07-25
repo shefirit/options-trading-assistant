@@ -240,3 +240,71 @@ def test_risk_card_hides_the_cash_tile_when_it_repeats_the_buying_power():
             "buying_power": 0.0}
     assert abs(spread["capital"] - spread["buying_power"]) <= 0.5
     assert abs(pmcc["capital"] - pmcc["buying_power"]) > 0.5
+
+
+# ---------- funds are not graded like companies ----------
+def test_an_etf_gets_no_letter_grade():
+    """SPY was scored a D off blank company fundamentals. It is 500 companies -
+    profit margin is not missing data, it is the wrong question. premium_finder
+    already treated funds this way; the Analyze grader did not."""
+    from src.data.stock_analysis import analyze
+
+    closes = [400.0 + i * 0.4 for i in range(260)]
+    spy = analyze("SPY", {"quoteType": "ETF", "shortName": "SPDR S&P 500",
+                          "regularMarketPrice": 500.0}, closes, avg_volume=70_000_000)
+    assert spy.is_fund
+    assert spy.grade is None
+    assert spy.fundamentals == [], "a fund has no company metrics to show"
+    assert "basket" in spy.summary
+    assert spy.suitable, "a big liquid fund is a fine thing to sell options on"
+
+
+def test_a_real_company_still_gets_graded():
+    from src.data.stock_analysis import analyze
+
+    closes = [100.0 + i * 0.2 for i in range(260)]
+    aapl = analyze("AAPL", {"quoteType": "EQUITY", "sector": "Technology",
+                            "marketCap": 3.5e12, "trailingPE": 30.0,
+                            "profitMargins": 0.25, "revenueGrowth": 0.10,
+                            "regularMarketPrice": 150.0}, closes,
+                   avg_volume=50_000_000)
+    assert not aapl.is_fund
+    assert aapl.grade in list("ABCDF")
+    assert aapl.fundamentals
+
+
+def test_a_fund_is_detected_without_quotetype():
+    # Some feeds omit quoteType; no sector and no company economics is the tell.
+    from src.data.stock_analysis import analyze
+
+    closes = [50.0 + i * 0.05 for i in range(260)]
+    fund = analyze("GLD", {"shortName": "Gold Trust", "regularMarketPrice": 60.0},
+                   closes, avg_volume=8_000_000)
+    assert fund.is_fund and fund.grade is None
+
+
+# ---------- the decision date ----------
+def test_decide_by_dates_the_time_exit_instead_of_counting_down():
+    import datetime as dt
+
+    from ui.components import _decide_by
+
+    class P:
+        def __init__(self, d): self._d = d
+        def dte_left(self): return self._d
+
+    assert _decide_by(P(34), 21) == f"{dt.date.today() + dt.timedelta(days=13):%a %b %d}"
+    assert _decide_by(P(21), 21) == "today"
+    assert _decide_by(P(13), 21) == "overdue"
+    assert _decide_by(P(None), 21) == "-"
+
+
+def test_decide_by_follows_the_strategy_own_time_exit():
+    from ui.components import _decide_by
+
+    class P:
+        def dte_left(self): return 30
+
+    # A strategy exiting at 30 is due today; one exiting at 21 has nine days.
+    assert _decide_by(P(), 30) == "today"
+    assert _decide_by(P(), 21) != "today"

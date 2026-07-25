@@ -171,7 +171,10 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
     """The 'Quality score' box - stats strip with the grade badge, like the
     EarningsHub score card. Pure HTML so dollar signs render safely.
     """
-    gcolor = _GRADE_COLOR.get(analysis.grade, "#B45309")
+    # A fund gets the "ETF" badge premium_finder already uses, not a letter
+    # from company metrics it does not have.
+    badge = analysis.grade or ("ETF" if analysis.is_fund else "-")
+    gcolor = _GRADE_COLOR.get(analysis.grade, "#3730A3" if analysis.is_fund else "#B45309")
     pe = info.get("trailingPE")
     fpe = info.get("forwardPE")
     ps = info.get("priceToSalesTrailing12Months")
@@ -200,13 +203,16 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
         f"padding:12px 16px;display:flex;justify-content:space-between;align-items:center;"
         f"gap:12px;margin:4px 0 10px;'>"
         f"<div style='line-height:2;'>"
-        f"<div style='font-weight:700;margin-bottom:2px;'>Quality score "
+        f"<div style='font-weight:700;margin-bottom:2px;'>"
+        f"{'What it is' if analysis.is_fund else 'Quality score'} "
         f"<span style='color:#35463D;font-weight:500;font-size:0.85rem;'>"
-        f"(from the checks below)</span></div>"
+        f"{'a basket of holdings, not one company'if analysis.is_fund else '(from the checks below)'}"
+        f"</span></div>"
         f"<div>{row1}</div><div>{row2}</div></div>"
         f"<div style='background:{gcolor};color:#fff;border-radius:12px;min-width:52px;"
         f"height:52px;display:flex;align-items:center;justify-content:center;"
-        f"font-size:1.5rem;font-weight:800;'>{analysis.grade}</div></div>"
+        f"font-size:{'1.05rem' if analysis.is_fund else '1.5rem'};font-weight:800;'>"
+        f"{badge}</div></div>"
     )
 
 
@@ -1072,6 +1078,26 @@ def position_labels(items: list[dict]) -> list[str]:
     return out
 
 
+def _decide_by(pos, time_exit_dte: int = 21) -> str:
+    """The DATE her 21-day time exit falls on, not a countdown.
+
+    The app dates this precisely before she enters ("close by Monday, July 27")
+    and then, once the trade is open, only ever says "34 days left" - leaving
+    her to subtract 21 herself for every position, every time she plans a week.
+    """
+    import datetime as _dt
+
+    dte = pos.dte_left()
+    if dte is None:
+        return "-"
+    days_to_go = int(dte) - int(time_exit_dte or 21)
+    if days_to_go < 0:
+        return "overdue"
+    if days_to_go == 0:
+        return "today"
+    return f"{_dt.date.today() + _dt.timedelta(days=days_to_go):%a %b %d}"
+
+
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
     """items: [{"position": Position, "live": dict, "signal": ExitSignal}]"""
     from src.engine.positions import strike_cushion
@@ -1101,6 +1127,7 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Room to it": (cushion["room_pct"] * 100) if cushion else None,
             "Strategy": short_strategy(pos.strategy_name),
             "Days left": pos.dte_left(),
+            "Decide by": _decide_by(pos, it.get("time_exit_dte", 21)),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
             "P&L $": pl,
@@ -1135,6 +1162,10 @@ def positions_column_config():
         "Days left": st.column_config.NumberColumn(format="%d", width=75,
             help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
                  "for a net credit. Never hold past it without deciding."),
+        "Decide by": st.column_config.TextColumn(width=95,
+            help="The date your 21-day time exit lands on. Before this day you are "
+                 "just holding; on it you decide - close, or roll for a credit. "
+                 "\"Today\" or \"overdue\" means that day has arrived."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f", width=80,
             help="Cash you collected for the short leg when you opened it. On a "
                  "PMCC or covered call that is the short call only - the LEAPS "
@@ -1358,28 +1389,43 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
 
 
 def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
-                             bp_limit: float) -> None:
+                             bp_limit: float, compact: bool = False) -> None:
     """Am I on pace? Realized results vs her weekly/monthly goals, win rate,
-    which strategies earn, and how much buying power is tied up right now."""
+    which strategies earn, and how much buying power is tied up right now.
+
+    compact drops the goal bars, the all-time total and the win rate, because
+    the headline banner at the top of the tab shows all three. What is left is
+    what the banner does not carry: how big the average win and loss are.
+    """
     weekly_goal = float(targets.get("weekly", 0) or 0)
     monthly_goal = float(targets.get("monthly", 0) or 0)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        wk = perf["week_pl"]
-        st.markdown(_esc(f"**This week:** ${wk:,.0f} of your ${weekly_goal:,.0f} goal"))
-        st.progress(min(max(wk / weekly_goal, 0.0), 1.0) if weekly_goal else 0.0)
-    with c2:
-        mo = perf["month_pl"]
-        st.markdown(_esc(f"**This month:** ${mo:,.0f} of your ${monthly_goal:,.0f} goal"))
-        st.progress(min(max(mo / monthly_goal, 0.0), 1.0) if monthly_goal else 0.0)
+    if not compact:
+        c1, c2 = st.columns(2)
+        with c1:
+            wk = perf["week_pl"]
+            st.markdown(_esc(f"**This week:** ${wk:,.0f} of your ${weekly_goal:,.0f} goal"))
+            st.progress(min(max(wk / weekly_goal, 0.0), 1.0) if weekly_goal else 0.0)
+        with c2:
+            mo = perf["month_pl"]
+            st.markdown(_esc(f"**This month:** ${mo:,.0f} of your ${monthly_goal:,.0f} goal"))
+            st.progress(min(max(mo / monthly_goal, 0.0), 1.0) if monthly_goal else 0.0)
 
-    m = st.columns(5)
-    m[0].metric("Closed trades", perf["closed_count"])
-    m[1].metric("All-time result", f"${perf['total_pl']:,.0f}")
-    m[2].metric("Win rate", f"{perf['win_rate'] * 100:.0f}%" if perf["win_rate"] is not None else "-")
-    m[3].metric("Average winner", f"${perf['avg_win']:,.0f}" if perf["avg_win"] is not None else "-")
-    m[4].metric("Average loser", f"${perf['avg_loss']:,.0f}" if perf["avg_loss"] is not None else "-")
+    labels = ["Average winner", "Average loser"] if compact else [
+        "Closed trades", "All-time result", "Win rate", "Average winner", "Average loser"]
+    m = st.columns(len(labels))
+    values = {
+        "Closed trades": perf["closed_count"],
+        "All-time result": f"${perf['total_pl']:,.0f}",
+        "Win rate": (f"{perf['win_rate'] * 100:.0f}%"
+                     if perf["win_rate"] is not None else "-"),
+        "Average winner": (f"${perf['avg_win']:,.0f}"
+                           if perf["avg_win"] is not None else "-"),
+        "Average loser": (f"${perf['avg_loss']:,.0f}"
+                          if perf["avg_loss"] is not None else "-"),
+    }
+    for col, label in zip(m, labels):
+        col.metric(label, values[label])
 
     # Buying power committed by every trade OPENED this month, closed ones
     # included - her limit is cumulative deployment through the month, not a
@@ -1514,23 +1560,31 @@ def month_trades_column_config():
     }
 
 
-def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float) -> None:
+def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float,
+                         compact: bool = False) -> None:
     """One month's report card: the profit number vs her goal, the counts,
-    the discipline score, and what she wrote down as lessons."""
+    the discipline score, and what she wrote down as lessons.
+
+    compact drops the profit, win rate and discipline score - the numbers the
+    headline banner at the top of the tab already shows for the CURRENT month.
+    Any other month still shows everything, because the banner does not cover it.
+    """
     realized = float(entry["realized_pl"])
     goal = float(monthly_goal or 0)
-    st.markdown(_esc(f"**{entry['label']}: ${realized:,.0f}** of your "
-                     f"${goal:,.0f} goal"))
-    st.progress(min(max(realized / goal, 0.0), 1.0) if goal else 0.0)
+    if not compact:
+        st.markdown(_esc(f"**{entry['label']}: ${realized:,.0f}** of your "
+                         f"${goal:,.0f} goal"))
+        st.progress(min(max(realized / goal, 0.0), 1.0) if goal else 0.0)
 
-    m = st.columns(4)
-    m[0].metric("Closed trades", entry["closed_count"])
-    m[1].metric("Win rate",
-                f"{entry['win_rate'] * 100:.0f}%" if entry["win_rate"] is not None
-                else "-")
-    m[2].metric("Opened", entry["opened_count"],
+    m = st.columns(2 if compact else 4)
+    if not compact:
+        m[0].metric("Closed trades", entry["closed_count"])
+        m[1].metric("Win rate",
+                    f"{entry['win_rate'] * 100:.0f}%" if entry["win_rate"] is not None
+                    else "-")
+    m[0 if compact else 2].metric("Opened", entry["opened_count"],
                 help="Trades opened during this month, whatever happened later.")
-    m[3].metric("BP used", _dollars(entry["bp_opened"]),
+    m[1 if compact else 3].metric("BP used", _dollars(entry["bp_opened"]),
                 help=f"Buying power committed by every trade opened this month, "
                      f"including ones already closed - your SOP's "
                      f"{_dollars(bp_limit)} is a cumulative monthly budget, so "
@@ -1545,7 +1599,7 @@ def render_month_summary(entry: dict, monthly_goal: float, bp_limit: float) -> N
             "rolled, even on a trade that is still open - it is money you have "
             "already collected.")
 
-    if entry["closed_count"]:
+    if entry["closed_count"] and not compact:
         n, total = entry["rules_followed"], entry["closed_count"]
         tone = "green" if n == total else "amber"
         st.markdown(theme.chip(
