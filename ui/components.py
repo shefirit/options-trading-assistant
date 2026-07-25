@@ -215,6 +215,27 @@ PRICE_RANGES = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "YTD": "ytd",
                 "1Y": "1y", "2Y": "2y", "Max": "max"}
 
 
+def period_change(frame) -> tuple[float, float] | None:
+    """Dollar and percent change across a price frame, or None if it cannot be
+    computed honestly.
+
+    The price frames come back with NaN closes at the edges often enough to
+    matter - a holiday on the boundary, a row with no print. Taking .iloc[0]
+    blindly gave NaN, and NaN formats as text: the header read "$nan (+nan%)"
+    with a red down arrow, because NaN >= 0 is False. Better to show nothing
+    than a number that is not one.
+    """
+    if frame is None or "Close" not in getattr(frame, "columns", []):
+        return None
+    closes = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+    if len(closes) < 2:
+        return None
+    first, last = float(closes.iloc[0]), float(closes.iloc[-1])
+    if first <= 0:
+        return None
+    return last - first, (last - first) / first * 100
+
+
 def render_price_chart(frame, earnings_dates: list | None = None) -> None:
     """A modern stock chart: thin line + soft gradient, y-axis zoomed to the
     data (not from zero), hover crosshair with price tooltip, and dashed 'E'
@@ -222,7 +243,10 @@ def render_price_chart(frame, earnings_dates: list | None = None) -> None:
     """
     df = frame.reset_index()
     df.columns = ["Date", "Close"]
-    rising = float(df["Close"].iloc[-1]) >= float(df["Close"].iloc[0])
+    # Same NaN trap as the header above: a NaN at either end made every
+    # comparison False, so a stock that had risen all year drew in red.
+    change = period_change(frame)
+    rising = change is None or change[0] >= 0
     color = "#0B7A54" if rising else "#DC2626"
     rgba = "5,150,105" if rising else "220,38,38"
 
@@ -319,10 +343,9 @@ def render_stock_overview(
     with pr_col:
         if analysis.price:
             change_html = ""
-            if frame is not None and len(frame) > 1:
-                first = float(frame["Close"].iloc[0])
-                last = float(frame["Close"].iloc[-1])
-                diff, pct = last - first, (last - first) / first * 100
+            change = period_change(frame)
+            if change is not None:
+                diff, pct = change
                 ccolor = "#0B7A54" if diff >= 0 else "#DC2626"
                 arrow = "▲" if diff >= 0 else "▼"
                 change_html = (f"<span style='color:{ccolor};font-weight:700;'>"
