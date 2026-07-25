@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field
 
 from src.data.chain import OptionChain, OptionContract
 from src.engine.models import OptionType
+from src.research import fundamentals as _fundamentals
 
 # How much each pillar counts toward the final score. They must sum to 1.0.
 DEFAULT_WEIGHTS: dict[str, float] = {
@@ -320,41 +321,9 @@ def vol_percentile(closes: list[float], current_iv_pct: float,
     return round(100.0 * below / len(samples), 1)
 
 
-def _pos_float(value) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
-
-
-def dividend_yield_pct(info: dict, price: Optional[float] = None) -> float:
-    """The annual dividend yield as a percent (2.58 means 2.58%).
-
-    Prefers the dollar rate divided by the share price, because dollars per
-    share carry no unit ambiguity. Yahoo's own yield field has shipped both as
-    a fraction (0.0053) and as an already-percent number (0.53) depending on
-    the yfinance version, and no threshold can separate the two cleanly: a
-    genuine 0.2%-yielder in percent form is indistinguishable from a 20%
-    yielder in fraction form. Falling back to the rate avoids the guess for
-    every stock that reports one.
-    """
-    info = info or {}
-    rate = _pos_float(info.get("trailingAnnualDividendRate")) or _pos_float(
-        info.get("dividendRate"))
-    if rate is not None and price and price > 0:
-        return rate / price * 100.0
-
-    raw = _pos_float(info.get("dividendYield")) or _pos_float(
-        info.get("trailingAnnualDividendYield"))
-    if raw is None:
-        return 0.0
-    # No rate to check against, so fall back to the units heuristic the rest of
-    # the app uses (see recommender._normalize_yield_pct): under 0.12 reads as
-    # a fraction, 0.12-25 as a percent, anything above that is junk.
-    if raw < 0.12:
-        return raw * 100.0
-    return raw if raw <= 25 else 0.0
+# Re-exported so callers and tests can keep reaching for it here; the units
+# logic itself lives in fundamentals.py, shared with the Instant Analyzer.
+dividend_yield_pct = _fundamentals.dividend_yield_pct
 
 
 def _percentile(values: list[float], pct: float) -> Optional[float]:
@@ -781,11 +750,13 @@ def score_quality(info: dict, market_cap: Optional[float] = None) -> Pillar:
                             "reasonable returns on capital." if pct >= 8 else
                             "weak returns on capital."))
 
-    debt = info.get("debtToEquity")      # Yahoo ships this as a percent (150 = 1.5x)
-    if debt is not None:
-        ratio = float(debt) / 100.0 if float(debt) > 5 else float(debt)
+    ratio = _fundamentals.debt_to_equity_ratio(info)
+    if ratio is not None:
         points += 20 if ratio <= 0.5 else 14 if ratio <= 1.0 else 7 if ratio <= 2.0 else 0
-        p.factors.append(f"Debt to equity {ratio:.1f}x - "
+        # Below 0.1x a single decimal collapses everything to "0.0x", which
+        # hides the difference between almost no debt and none at all.
+        shown = f"{ratio:.2f}x" if ratio < 0.1 else f"{ratio:.1f}x"
+        p.factors.append(f"Debt to equity {shown} - "
                          + ("very little debt." if ratio <= 0.5 else
                             "manageable debt." if ratio <= 1.0 else
                             "carrying real debt - watch it if rates or sales turn."))

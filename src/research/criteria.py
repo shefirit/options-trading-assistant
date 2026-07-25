@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from src.research import fundamentals
+
 # Every field the rules can test, with how to read it out of Yahoo's `info`
 # and how to display it. `scale` converts the raw value into the unit shown.
 FIELDS: dict[str, dict[str, Any]] = {
@@ -188,18 +190,15 @@ def extract(info: dict, extras: Optional[dict] = None) -> dict[str, Optional[flo
         except (TypeError, ValueError):
             out[field] = None
 
-    # Yahoo has shipped dividendYield as both a fraction and a percent.
-    dy = out.get("dividend_yield")
-    if dy is not None and 0 < dy <= 0.25:
-        out["dividend_yield"] = dy * 100
-    # debtToEquity arrives as a percent (150 = 1.5x); undo the scale if it was small.
-    raw_de = info.get("debtToEquity")
-    if raw_de is not None:
-        try:
-            value = float(raw_de)
-            out["debt_to_equity"] = value / 100.0 if value > 5 else value
-        except (TypeError, ValueError):
-            pass
+    # Both of these fields need care with units - see fundamentals.py. The
+    # dividend yield prefers the dollar rate over Yahoo's ambiguous yield
+    # field, so it needs the price, which arrives through `extras` when the
+    # caller has it.
+    if "dividend_yield" not in extras:
+        yield_pct = fundamentals.dividend_yield_pct(info, extras.get("price"))
+        out["dividend_yield"] = yield_pct or None
+    if "debt_to_equity" not in extras:
+        out["debt_to_equity"] = fundamentals.debt_to_equity_ratio(info)
     return out
 
 

@@ -1173,6 +1173,9 @@ def _criteria_extras(sym, provider) -> dict:
         "pct_off_high": abs((price / high - 1) * 100) if high else None,
         "rsi": leaps.rsi(closes),
         "above_200dma": (1.0 if sma200 and price > sma200 else 0.0) if sma200 else None,
+        # Not a rule field - the dividend yield needs it to divide the dollar
+        # rate by, which beats guessing at Yahoo's yield units.
+        "price": price,
     }
     if len(closes) > leaps.TRADING_DAYS_YEAR:
         extras["year_return"] = (price / closes[-leaps.TRADING_DAYS_YEAR] - 1) * 100
