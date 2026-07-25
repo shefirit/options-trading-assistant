@@ -24,6 +24,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CAL_FILE = PROJECT_ROOT / "config" / "economic_calendar.yaml"
 
 
+# How hard an event actually hits. Macro releases land roughly weekly, so
+# "inside your trade window" is true for almost everything almost always - a
+# warning on every row is a warning on none. Only the events that genuinely
+# reprice the market get the red flag; the rest are worth knowing, not fearing.
+_IMPACT = {
+    "fomc": "high",       # rate decision - the biggest scheduled mover there is
+    "cpi": "high",        # headline inflation print
+    "jobs": "high",       # nonfarm payrolls
+    "earnings": "high",   # binary, single-stock, and it crushes premium after
+    "pce": "medium",      # the Fed's preferred gauge, but rarely a shock on its own
+    "gdp": "medium",      # backward-looking, usually pre-empted by other data
+    "dividend": "medium",  # matters for short calls specifically
+    "opex": "low",        # pinning and noise, not a repricing
+    "custom": "medium",   # you put it on the calendar, so treat it as worth seeing
+}
+
+
 class Event(BaseModel):
     date: dt.date
     days_away: int
@@ -37,6 +54,16 @@ class Event(BaseModel):
         return {"opex": "🗓️", "fomc": "🏦", "jobs": "💼", "cpi": "🌡️", "pce": "🌡️",
                 "gdp": "📈", "earnings": "📊", "dividend": "💵",
                 "custom": "📌"}.get(self.kind, "•")
+
+    @property
+    def impact(self) -> str:
+        """high | medium | low - how much this one really moves things."""
+        return _IMPACT.get(self.kind, "medium")
+
+    @property
+    def is_warning(self) -> bool:
+        """Worth a red flag: a genuine mover that lands inside your trade window."""
+        return self.in_window and self.impact == "high"
 
 
 # ---------- deterministic dates ----------

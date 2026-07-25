@@ -169,3 +169,70 @@ def test_all_eight_strategies_validate_without_error():
         report = validate_trade(trade)
         assert report.strategy_key == key
         assert len(report.results) > 0
+
+
+# ---------- room before the time exit ----------
+def _runway_check(report):
+    # "Room before your 21-day time exit" - not the plain "Time exit at 21 DTE"
+    # reminder, which every one of these strategies also carries.
+    return next((r for r in report.results if r.name.startswith("Room before")), None)
+
+
+def test_entry_near_the_time_exit_is_flagged():
+    # The trap: 23 DTE passes the 21-45 range check, and the 21-DTE time exit
+    # then says close it in two days. The range rule alone never says that.
+    report = validate_trade(put_credit_spread(underlying="SPX", dte=23))
+    check = _runway_check(report)
+    assert check is not None
+    assert check.status.value == "warn"
+    assert "2 days" in check.message
+    assert any("days to expiration" in r.name.lower() and r.status.value == "pass"
+               for r in report.results), "the range check should still pass"
+
+
+def test_entry_at_the_time_exit_is_flagged_but_never_blocks():
+    # Her SOP explicitly allows a European index at 21 DTE, so the app warns
+    # loudly and still lets the trade through - it does not overrule her rule.
+    report = validate_trade(put_credit_spread(underlying="SPX", dte=21))
+    check = _runway_check(report)
+    assert check is not None
+    assert check.status.value == "warn"
+    assert report.passed
+
+
+def test_a_45_day_entry_has_room_and_passes():
+    report = validate_trade(put_credit_spread(underlying="SPX", dte=45))
+    check = _runway_check(report)
+    assert check is not None
+    assert check.status.value == "pass"
+    assert "24 days" in check.message
+
+
+def test_covered_call_has_no_runway_check():
+    # A covered call's 21-day short call sits against shares you keep and roll,
+    # so "you would close it the day you open it" would be nonsense there.
+    trade = Trade(
+        strategy_key="covered_call_model_1",
+        underlying="SPY",
+        contracts=1,
+        legs=[
+            Leg(role="long_put_protection", action=Action.BUY, option_type=OptionType.PUT,
+                strike=500, delta=-0.5, premium=30.0, dte=500),
+            Leg(role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+                strike=520, delta=0.30, premium=6.0, dte=21),
+        ],
+    )
+    report = validate_trade(trade)
+    assert _runway_check(report) is None
+    assert report.passed
+
+
+def test_runway_warning_wording_scales_with_the_squeeze():
+    # 2 days really is "closing it as you open it"; 9 days is merely tight.
+    # Wording both the same way is how a warning stops meaning anything.
+    tight = _runway_check(validate_trade(put_credit_spread(underlying="SPX", dte=23)))
+    short = _runway_check(validate_trade(put_credit_spread(underlying="SPX", dte=30)))
+    assert tight.status.value == short.status.value == "warn"
+    assert "almost as soon as you open it" in tight.message
+    assert "almost as soon as you open it" not in short.message
+    assert "short runway" in short.message

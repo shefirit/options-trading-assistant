@@ -109,6 +109,44 @@ def is_european_style(underlying: str) -> bool:
     return underlying.upper() in {s.upper() for s in european}
 
 
+def entry_dte_window(strategy: dict[str, Any], underlying: str,
+                     dte_min: int = 21, dte_max: int = 44) -> tuple[int, int]:
+    """The days-to-expiration span this strategy may enter `underlying` at.
+
+    Credit spreads and cash secured puts carry their own dte_min/dte_max; covered
+    calls and PMCC only name a short-call target, so we take a band around it.
+    US-style names then override with their wider window (they avoid the ~21-DTE
+    early-assignment zone).
+    """
+    entry = strategy.get("entry", {})
+    if "dte_min" in entry and "dte_max" in entry:
+        lo, hi = int(entry["dte_min"]), int(entry["dte_max"])
+    elif "short_call_dte_target" in entry:
+        t = int(entry["short_call_dte_target"])
+        lo, hi = max(14, t - 7), t + 14
+    else:
+        lo, hi = dte_min, dte_max
+    if not is_european_style(underlying):
+        lo = max(lo, int(entry.get("dte_min_us_style", lo)))
+        hi = int(entry.get("dte_max_us_style", hi))
+    return lo, hi
+
+
+def preferred_entry_dte(strategy: dict[str, Any], underlying: str) -> int | None:
+    """The days-to-expiration the SOP actually wants at entry (45 on the credit
+    spreads), clamped into the window this underlying is allowed to use.
+
+    The window alone is not enough to rank setups by: 21 and 45 both sit inside
+    it, and only one of them leaves room before the 21-DTE time exit.
+    """
+    entry = strategy.get("entry", {})
+    target = entry.get("dte_target", entry.get("short_call_dte_target"))
+    if target is None:
+        return None
+    lo, hi = entry_dte_window(strategy, underlying)
+    return int(min(max(int(target), lo), hi))
+
+
 def clear_cache() -> None:
     """Call after editing a YAML file so the new values are picked up."""
     load_settings.cache_clear()

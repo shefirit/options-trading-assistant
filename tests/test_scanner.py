@@ -211,3 +211,50 @@ def test_pmcc_scan_pairs_leaps_with_short_call():
 
 def test_pmcc_scan_empty_without_leaps():
     assert scanner.scan_setups("poor_mans_covered_call", _stock_call_chain()) == []
+
+
+def test_scan_setups_puts_the_best_timed_expiration_first(chain):
+    # Sorting by raw DTE used to put the shortest-dated setup at #1 - the one
+    # furthest from the 45-day target and closest to the 21-day time exit.
+    from src.engine.config_loader import get_strategy
+
+    strat = get_strategy("put_credit_spread")
+    found = scanner.scan_setups("put_credit_spread", chain, width=25, max_setups=10)
+    assert len(found) > 1, "need several expirations to prove the ordering"
+    ranked = scanner.sort_by_dte_fit(found, strat)
+
+    target = 45
+    gaps = [abs(c.dte - target) for c in ranked if c.dte is not None]
+    assert gaps == sorted(gaps), "closest to the 45-day target must come first"
+    assert ranked[0].dte >= min(c.dte for c in found)
+
+
+def test_sort_by_dte_fit_prefers_more_time_on_a_tie():
+    # 35 and 55 are both 10 days off a 45-day target; the later one is the safer
+    # side to be wrong on, so it wins.
+    from src.engine.config_loader import get_strategy
+    from src.engine.models import Candidate
+
+    strat = get_strategy("put_credit_spread")
+    cands = [
+        Candidate(trade=_spx_spread(dte=35), credit=100, max_loss=900, buying_power=900,
+                  return_on_risk=0.11, short_delta=0.2, dte=35),
+        Candidate(trade=_spx_spread(dte=55), credit=100, max_loss=900, buying_power=900,
+                  return_on_risk=0.11, short_delta=0.2, dte=55),
+    ]
+    ranked = scanner.sort_by_dte_fit(cands, strat)
+    assert ranked[0].dte == 55
+
+
+def _spx_spread(dte: int):
+    from src.engine.models import Action, Leg, OptionType, Trade
+    return Trade(
+        strategy_key="put_credit_spread", underlying="SPX", contracts=1,
+        underlying_price=5100.0,
+        legs=[
+            Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=5000, delta=-0.2, premium=8.0, dte=dte),
+            Leg(role="long_put", action=Action.BUY, option_type=OptionType.PUT,
+                strike=4975, delta=-0.1, premium=5.0, dte=dte),
+        ],
+    )

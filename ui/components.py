@@ -665,15 +665,20 @@ def render_events(events, empty_note: str = "No major events in the next few wee
         when = e.date.strftime("%a %b %d")
         days = "today" if e.days_away == 0 else f"in {e.days_away} day{'s' if e.days_away != 1 else ''}"
         label = f"{e.icon} <b>{_htmllib.escape(e.label)}</b> - {when} ({days})"
-        if e.in_window:
+        st.markdown(f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>",
+                    unsafe_allow_html=True)
+        if getattr(e, "is_warning", e.in_window):
+            # A real mover inside the trade window - this one earns the red flag.
             st.markdown(
-                f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>"
                 f"<div style='color:{_STATUS_TEXT['WARN']};font-weight:600;line-height:1.5;'>"
-                f"⚠️ lands inside your trade window - {_htmllib.escape(e.note)}</div>",
+                f"⚠️ big mover inside your trade window - {_htmllib.escape(e.note)}</div>",
                 unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>",
-                        unsafe_allow_html=True)
+        elif e.note:
+            # Everything else keeps its explanation but drops the alarm, so the
+            # flags above stay meaningful instead of firing on every row.
+            st.markdown(
+                f"<div style='color:#213229;line-height:1.5;'>{_htmllib.escape(e.note)}</div>",
+                unsafe_allow_html=True)
 
 
 def render_checklist(report: ValidationReport) -> None:
@@ -705,14 +710,61 @@ def candidates_dataframe(candidates: list[Candidate]) -> pd.DataFrame:
             "Fits my rules": "✅ yes" if c.fits_sop else "⚠️ delta a bit over",
             "Underlying": c.trade.underlying,
             "Legs (strikes)": strikes,
-            "Short Δ": round(c.short_delta, 3),
-            "DTE": c.dte,
+            "Short delta": round(c.short_delta, 3),
+            "Days left": c.dte,
             "Credit $": round(c.credit, 0),
             "Max loss $": round(c.max_loss, 0),
             "Buying power $": round(c.buying_power, 0),
             "Return/Risk": f"{c.return_on_risk * 100:.1f}%",
         })
     return pd.DataFrame(rows)
+
+
+def candidates_column_config():
+    """Hover help for the one table she actually picks a trade from. Every other
+    table in the app explains its columns; this one used to show a bare Greek
+    letter and expect her to know it."""
+    return {
+        "#": st.column_config.NumberColumn(
+            format="%d",
+            help="Type this number into 'Look at trade #' below to open the full "
+                 "detail, checklist and payoff for that setup."),
+        "Fits my rules": st.column_config.TextColumn(
+            help="Whether the setup obeys every SOP rule the scanner can check. "
+                 "'delta a bit over' means the closest available strike sits just "
+                 "past your delta limit - shown for context, not a green light."),
+        "Legs (strikes)": st.column_config.TextColumn(
+            help="The strike prices of the options in the trade, in the order the "
+                 "strategy lists them (the one you SELL first)."),
+        "Short delta": st.column_config.NumberColumn(
+            format="%.3f",
+            help="Delta on the option you SELL - roughly the chance it finishes in "
+                 "the money. 0.25 means about a 1-in-4 chance the market reaches "
+                 "your strike, so lower is safer and pays less."),
+        "Days left": st.column_config.NumberColumn(
+            format="%d",
+            help="Days from today until this expiration. Your SOP wants about 45 at "
+                 "entry, and closes at 21 no matter what - so a setup near 21 has "
+                 "almost no time to work."),
+        "Credit $": st.column_config.NumberColumn(
+            format="$%d",
+            help="Cash this setup pays you up front, for the number of contracts "
+                 "you set above. This is what your 50% profit target is measured "
+                 "against."),
+        "Max loss $": st.column_config.NumberColumn(
+            format="$%d",
+            help="The worst case if it goes completely against you. On a credit "
+                 "spread it is capped by the distance between your two strikes, "
+                 "minus the credit."),
+        "Buying power $": st.column_config.NumberColumn(
+            format="$%d",
+            help="Cash the broker sets aside while the trade is open. It counts "
+                 "against your $50,000 monthly limit."),
+        "Return/Risk": st.column_config.TextColumn(
+            help="Credit divided by max loss - what you earn per dollar at risk. "
+                 "Higher is richer premium, but it usually comes with a higher "
+                 "delta, so read the two together."),
+    }
 
 
 def candidate_leg_detail(candidate: Candidate) -> pd.DataFrame:

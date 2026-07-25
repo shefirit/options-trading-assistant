@@ -69,3 +69,31 @@ def test_economic_releases_loaded_and_flagged():
     assert cpi and cpi[0].in_window is True
     # Every release carries a plain-English note.
     assert all(e.note for e in events if e.kind in ("cpi", "pce", "gdp"))
+
+
+# ---------- which events actually earn a warning ----------
+def _ev(kind: str, days_away: int = 5, in_window: bool = True):
+    import datetime as dt
+
+    from src.data.market_events import Event
+    return Event(date=dt.date(2026, 8, 1), days_away=days_away, label=kind.upper(),
+                 kind=kind, in_window=in_window)
+
+
+def test_only_the_real_movers_warn_inside_the_window():
+    # Macro events land roughly weekly, so "inside your trade window" was true
+    # for every row - a warning on everything is a warning on nothing.
+    for kind in ("fomc", "cpi", "jobs", "earnings"):
+        assert _ev(kind).is_warning, f"{kind} should warn inside the window"
+    for kind in ("opex", "pce", "gdp", "dividend"):
+        assert not _ev(kind).is_warning, f"{kind} should not shout"
+
+
+def test_a_big_mover_outside_the_window_does_not_warn():
+    assert not _ev("fomc", days_away=60, in_window=False).is_warning
+
+
+def test_every_event_kind_has_an_impact_level():
+    for kind in ("opex", "fomc", "jobs", "cpi", "pce", "gdp", "earnings",
+                 "dividend", "custom"):
+        assert _ev(kind).impact in ("high", "medium", "low")

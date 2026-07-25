@@ -292,31 +292,39 @@ def _target_short_delta(strategy: dict) -> float:
     return 0.30
 
 
-def _setup_dte_window(strategy: dict, dte_min: int, dte_max: int) -> tuple[int, int]:
-    """The days-to-expiration span to sample. Credit spreads / CSP use their
-    21-44 window; covered calls / PMCC use a band around the short-call target."""
-    entry = strategy.get("entry", {})
-    if "dte_min" in entry and "dte_max" in entry:
-        return int(entry["dte_min"]), int(entry["dte_max"])
-    if "short_call_dte_target" in entry:
-        t = int(entry["short_call_dte_target"])
-        return max(14, t - 7), t + 14
-    return dte_min, dte_max
-
-
 def strategy_dte_window(strategy: dict, underlying: str,
                         dte_min: int = 21, dte_max: int = 44) -> tuple[int, int]:
     """The real days-to-expiration span this strategy needs for `underlying`
     (accounts for the US-style early-assignment adjustment). Used to fetch
     only the option-chain data actually needed - fewer requests to Yahoo,
     faster scans, and less chance of tripping their rate limit."""
-    from src.engine.config_loader import is_european_style
-    lo, hi = _setup_dte_window(strategy, dte_min, dte_max)
-    entry = strategy.get("entry", {})
-    if not is_european_style(underlying):
-        lo = max(lo, int(entry.get("dte_min_us_style", lo)))
-        hi = int(entry.get("dte_max_us_style", hi))
-    return lo, hi
+    from src.engine.config_loader import entry_dte_window
+    return entry_dte_window(strategy, underlying, dte_min, dte_max)
+
+
+def sort_by_dte_fit(candidates: list[Candidate], strategy: dict) -> list[Candidate]:
+    """Best expiration first, within each underlying.
+
+    Sorting by raw DTE put the SHORTEST-dated setup at the top, which is the one
+    furthest from the SOP's 45-day target and the one whose 21-DTE time exit
+    lands within days of entry. Closest to the target goes first instead; when
+    two are equally far off (40 and 50), the later one wins - more time is the
+    safer side to be wrong on.
+    """
+    from src.engine.config_loader import preferred_entry_dte
+
+    targets: dict[str, Optional[int]] = {}
+
+    def key(c: Candidate):
+        u = c.trade.underlying
+        if u not in targets:
+            targets[u] = preferred_entry_dte(strategy, u)
+        target, dte = targets[u], c.dte
+        if target is None or dte is None:
+            return (u, 0, dte if dte is not None else 0)
+        return (u, abs(dte - target), -dte)
+
+    return sorted(candidates, key=key)
 
 
 # How far around the SOP delta the scanner will look for a short strike. Options

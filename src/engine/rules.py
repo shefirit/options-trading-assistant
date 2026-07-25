@@ -22,6 +22,13 @@ from src.engine.models import (
 DELTA_TOLERANCE = 0.05      # e.g. target 0.30 is fine between 0.25 and 0.35
 DTE_TOLERANCE = 7           # days
 
+# The entry window (21-45) and the 21-DTE time exit overlap, so a trade entered
+# at the very bottom of the window passes the range check and still has to be
+# closed within days. Below this much room the trade is over almost as soon as
+# it starts: no time for the 50% profit target, and all the cost of entering.
+MIN_TIME_EXIT_RUNWAY = 10   # days between entry and the time exit
+VERY_SHORT_RUNWAY = 4       # at or under this, the trade is over before it starts
+
 
 def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
     ok = trade.underlying in allowed
@@ -156,6 +163,63 @@ def check_dte_target(trade: Trade, target: int) -> CheckResult:
         ),
         expected=f"~{target} days",
         actual=f"{dte} days",
+    )
+
+
+def check_time_exit_runway(trade: Trade, time_exit_dte: int,
+                           dte_target: Optional[int] = None) -> Optional[CheckResult]:
+    """How many days you actually get between entering and your time exit.
+
+    The DTE range check can pass on a trade that is already finished: enter at
+    23 days with a 21-day time exit and the plan says close it in two days. The
+    range rule says nothing about that, so this check says it out loud.
+    """
+    dte = trade.dte
+    if dte is None:
+        return None
+    runway = dte - time_exit_dte
+    name = f"Room before your {time_exit_dte}-day time exit"
+    target_hint = (f" Your SOP prefers about {dte_target} days at entry - "
+                   f"a later expiration gives the trade room to work." if dte_target else "")
+    # Never a FAIL: her SOP explicitly allows entering a European index at 21 DTE,
+    # and a rule the app invented must not overrule one she bought and wrote down.
+    # It also must not silently vanish setups from the scan - the scanner drops
+    # anything that FAILS, so she would never learn why they disappeared.
+    if runway <= 0:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.WARN,
+            message=(f"This trade has {dte} days to expiration, which is already at or past "
+                     f"your {time_exit_dte}-day time exit - by your own rule you would be "
+                     f"closing it the day you open it.{target_hint}"),
+            expected=f"more than {time_exit_dte} days to expiration",
+            actual=f"{dte} days",
+        )
+    days = f"{runway} day" + ("" if runway == 1 else "s")
+    if runway < MIN_TIME_EXIT_RUNWAY:
+        # Scale the wording to the actual squeeze: 2 days really is "closing it
+        # as you open it", 9 days is merely tight, and calling both the same
+        # thing is how a warning stops meaning anything.
+        squeeze = ("You would be closing this trade almost as soon as you open it, with "
+                   "little chance for the 50% profit target to be reached."
+                   if runway <= VERY_SHORT_RUNWAY else
+                   "That is a short runway for the 50% profit target to be reached before "
+                   "the time exit forces you out.")
+        return CheckResult(
+            name=name,
+            status=CheckStatus.WARN,
+            message=f"Only {days} between entering and your {time_exit_dte}-day time exit. "
+                    f"{squeeze}{target_hint}",
+            expected=f"at least {MIN_TIME_EXIT_RUNWAY} days of room",
+            actual=days,
+        )
+    return CheckResult(
+        name=name,
+        status=CheckStatus.PASS,
+        message=(f"{days} between entering and your {time_exit_dte}-day time exit - "
+                 f"room for the trade to work."),
+        expected=f"at least {MIN_TIME_EXIT_RUNWAY} days of room",
+        actual=days,
     )
 
 

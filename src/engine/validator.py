@@ -13,6 +13,7 @@ from src.engine.config_loader import (
     get_strategy,
     is_european_style,
     load_settings,
+    preferred_entry_dte,
 )
 from src.engine.models import (
     CheckResult,
@@ -71,6 +72,21 @@ def validate_trade(
         results.append(rules.check_dte_target(trade, int(entry["short_call_dte_target"])))
     elif "dte_target" in entry:
         results.append(rules.check_dte_target(trade, int(entry["dte_target"])))
+
+    # 3b. The range check above passes on a trade that is already out of time -
+    # the entry window and the time exit overlap. Say so explicitly.
+    #
+    # Only for strategies you open and close as one trade (credit spreads, iron
+    # condor, cash secured put - the ones with a real dte_min/dte_max window).
+    # Covered calls and PMCC target a 21-day short call against a position you
+    # keep and roll, so "you would close it immediately" would be nonsense there.
+    time_exit = exit_rules.get("time_exit_dte")
+    if time_exit and "dte_min" in entry and "dte_max" in entry:
+        runway = rules.check_time_exit_runway(
+            trade, int(time_exit),
+            dte_target=preferred_entry_dte(strategy, trade.underlying))
+        if runway:
+            results.append(runway)
 
     # 4. Credit strategies must actually pay you.
     if strategy.get("family") in ("credit_spread", "single_leg"):

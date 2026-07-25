@@ -299,7 +299,10 @@ def _market_radar_section(events) -> None:
     an expander) so the calendar is the first thing she sees."""
     st.markdown("### 🗓️ What's coming (events and data that move volatility)")
     theme.note("Selling premium right into a big event is risky - a surprise can blow "
-               "through your strikes. Anything inside your trade window is flagged.")
+               "through your strikes. The **big movers** landing inside your trade window "
+               "get a red flag (rate decisions, inflation and jobs reports, earnings); "
+               "the rest are listed for awareness, because something is on the calendar "
+               "most weeks and flagging all of it would tell you nothing.")
     if events:
         components.render_events(events)
     else:
@@ -1482,7 +1485,10 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                 f"⏳ A data source was briefly rate-limited for: **{', '.join(rate_limited)}**. "
                 "This usually clears in a minute or two - wait a moment and scan again. "
                 "(The app normally uses CBOE's free option data, which rarely does this.)")
-        found.sort(key=lambda c: (c.trade.underlying, c.dte if c.dte is not None else 0))
+        # Closest to the SOP's preferred days-to-expiration first, so trade #1
+        # (what the picker below opens on) is the best-timed setup, not the
+        # shortest-dated one that has to be closed two days after entry.
+        found = scanner.sort_by_dte_fit(found, strat)
         st.session_state["build_candidates"] = found
         st.session_state.pop("build_chosen", None)
 
@@ -1520,7 +1526,18 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                 "or **RUT** (fine 1-5 point strikes); NDX strikes get coarse far from the price."
                 .format(width))
 
-    st.dataframe(components.candidates_dataframe(candidates), width="stretch", hide_index=True)
+    st.dataframe(components.candidates_dataframe(candidates), width="stretch",
+                 hide_index=True, column_config=components.candidates_column_config())
+
+    # Why #1 is #1 - the list is no longer in date order, so say what it is in.
+    from src.engine.config_loader import preferred_entry_dte
+    best = candidates[0]
+    target = preferred_entry_dte(strat, best.trade.underlying)
+    if target and best.dte is not None:
+        theme.note(f"Sorted by **how close each expiration is to your {target}-day target**, "
+                   f"not by date - so **trade #1** ({best.dte} days on "
+                   f"{best.trade.underlying}) is the best-timed one. Anything near the bottom "
+                   f"of your window leaves almost no room before the 21-day time exit.")
 
     pick = st.number_input("Look at trade #", min_value=1, max_value=len(candidates),
                            value=1, step=1)
