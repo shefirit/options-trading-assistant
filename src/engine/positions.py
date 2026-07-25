@@ -73,6 +73,9 @@ class Position(BaseModel):
     shares_cost: float = 0.0
     max_loss: float = 0.0
     buying_power: float = 0.0
+    # The BP Effect copied straight off thinkorswim, when she typed it in.
+    # None means "nobody told us", and bp_effect falls back to a derived value.
+    bp_override: Optional[float] = None
     short_delta: float = 0.0
     passed_sop: str = ""
     note: str = ""
@@ -118,6 +121,34 @@ class Position(BaseModel):
     def capital_at_risk(self) -> float:
         """The dollars actually tied up - what a return % should divide by."""
         return abs(self.open_cash) if self.is_debit else self.buying_power
+
+    @property
+    def bp_effect(self) -> float:
+        """What the BROKER holds against this position - thinkorswim's "BP
+        Effect" column, which is what her monthly limit is measured in.
+
+        Rita's ruling (2026-07-25): where the app and TOS disagree, TOS is
+        right. Checked against her real account, the two cases split cleanly on
+        whether real SHARES are involved:
+
+        - A long option bought outright (the PMCC's LEAPS) is paid for in cash
+          and the broker holds nothing against it. TOS reads 0.00 for her DIA
+          and QQQ PMCCs, where the app was logging the full LEAPS cost.
+        - Shares bought for a covered call ARE margined. TOS reads 18,312.75
+          against her IWM shares, not zero, so "she paid for it" is not the
+          test - "is it an option or is it stock" is.
+
+        Broker house margin on stock is not the Reg-T textbook (TOS held 60% of
+        her share cost, not 50%), so the app does not invent a rate: it keeps
+        the full share cost, which errs high on a guardrail, until she types the
+        real BP Effect. Derived rather than trusted from the stored column, so
+        rows logged under the old meaning correct themselves.
+        """
+        if self.bp_override is not None:
+            return self.bp_override        # a real BP Effect she read off TOS
+        if self.is_debit and self.shares_cost <= 0:
+            return 0.0
+        return self.buying_power
 
     @property
     def roll_income(self) -> float:
@@ -381,6 +412,9 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             shares_cost=_to_float(data.get("shares_cost")) or 0.0,
             max_loss=_to_float(_get(row, idx, "Max Loss $", 8)) or 0.0,
             buying_power=_to_float(_get(row, idx, "Buying Power $", 9)) or 0.0,
+            # Stored in Details JSON so honouring TOS needed no new sheet column
+            # (a schema change means she has to redeploy the Apps Script).
+            bp_override=_to_float(data.get("bp_effect")),
             short_delta=_to_float(_get(row, idx, "Short Delta", 4)) or 0.0,
             passed_sop=str(_get(row, idx, "Passed SOP", 10) or ""),
             note=str(_get(row, idx, "Notes", 11) or ""),
@@ -445,7 +479,7 @@ def bp_committed_this_month(positions: list[Position], today: date | None = None
     """
     ref = today or date.today()
     return sum(
-        p.buying_power for p in positions
+        p.bp_effect for p in positions
         if p.opened is not None
         and p.opened.year == ref.year and p.opened.month == ref.month
     )
@@ -827,7 +861,7 @@ def monthly_summary(positions: list[Position],
         if p.opened is not None:
             e = entry(p.opened)
             e["opened_count"] += 1
-            e["bp_opened"] += p.buying_power
+            e["bp_opened"] += p.bp_effect
             if p.status == "open":
                 e["still_open"] += 1
             tag = "both" if (closed_key is not None and closed_key == opened_key) \

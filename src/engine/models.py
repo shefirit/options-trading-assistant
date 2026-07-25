@@ -168,7 +168,9 @@ class Candidate(BaseModel):
     trade: Trade
     credit: float                 # net credit for the whole position (dollars)
     max_loss: float               # worst-case dollars at risk
-    buying_power: float           # buying power the position ties up
+    buying_power: float           # what the BROKER holds (TOS's BP Effect); 0 on a
+                                  # position bought outright, which costs cash not margin
+    capital: float = 0.0          # cash actually deployed - what a return is earned on
     return_on_risk: float         # credit / max_loss (higher is richer premium)
     short_delta: float            # abs delta of the short leg(s), for a quick read
     dte: Optional[int] = None

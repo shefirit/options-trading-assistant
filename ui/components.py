@@ -861,6 +861,12 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
     credit = float(size.get("credit", 0.0))
     max_loss = float(size.get("max_loss", 0.0))
     bp = float(size.get("buying_power", 0.0))
+    capital = float(size.get("capital", bp))
+    # Cash out of the account and buying power held are different things, and
+    # showing only one of them hid the other. On a PMCC the LEAPS is all cash
+    # and no buying power; on a credit spread they are the same number.
+    cash_label = "CASH OUT TODAY" if capital > 0 and bp == 0 else "CAPITAL AT WORK"
+    cash_out = capital
     contracts = max(int(trade.contracts), 1)
     exit_cfg = strategy.get("exit", {})
 
@@ -886,6 +892,8 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
                  <div style="font-size:1.5rem;font-weight:800;color:{theme.GREEN};">{_dollars(max_profit)}</div></div>
             <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BREAKEVEN PRICE</div>
                  <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{be_txt}</div></div>
+            <div><div style="color:#213229;font-weight:600;font-size:.85rem;">{cash_label}</div>
+                 <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{_dollars(cash_out)}</div></div>
             <div><div style="color:#213229;font-weight:600;font-size:.85rem;">BUYING POWER USED</div>
                  <div style="font-size:1.5rem;font-weight:800;color:{theme.INK};">{_dollars(bp)}
                  <span style="font-size:.9rem;font-weight:600;"> ({pct_of_limit:.0f}% of your monthly limit)</span></div></div>
@@ -893,6 +901,14 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
         </div>
         """,
         unsafe_allow_html=True)
+    if capital > 0 and bp == 0:
+        # A PMCC's LEAPS is paid for in cash, so thinkorswim holds no buying
+        # power against it and the tile above reads $0. That is right, and on
+        # its own it would look like the trade costs nothing.
+        theme.note(f"Your broker holds no buying power against this one - you pay for the "
+                   f"long side in cash, so **\\${capital:,.0f} leaves your account** instead. "
+                   f"It does not count against your \\${bp_limit:,.0f} monthly buying-power "
+                   f"budget, but it is real money out.")
 
     # The three exits, translated into numbers she can type into TOS alerts.
     lines = []
@@ -1329,9 +1345,10 @@ def render_results_dashboard(perf: dict, targets: dict, bp_used: float,
         f"{_dollars(left)} left.</div>"
         f"<div style='font-size:.85rem;font-weight:500;color:{theme.SECONDARY};'>"
         f"Counts every trade you opened this month, closed ones included: closing "
-        f"early frees the risk, not the month's budget. A gross sum of each trade's "
-        f"max loss, not your broker's buying power, which nets positions and shows "
-        f"less used.</div>",
+        f"early frees the risk, not the month's budget. Measured the way thinkorswim's "
+        f"BP Effect column does, so a LEAPS you bought outright counts as cash spent "
+        f"rather than buying power held. Where the app can only estimate, type the "
+        f"real BP Effect when you log the trade and it uses that instead.</div>",
         unsafe_allow_html=True)
     st.progress(min(used_pct, 1.0))
 

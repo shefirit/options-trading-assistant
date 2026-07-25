@@ -69,6 +69,12 @@ def _details_json(trade: Trade, sizing: Optional[dict[str, float]] = None) -> st
         data["open_cash"] = round(float(sizing["open_cash"]), 2)
     if sizing.get("shares_cost"):
         data["shares_cost"] = round(float(sizing["shares_cost"]), 2)
+    # The BP Effect read off thinkorswim, when she supplied it. Absent means
+    # "not told", which is different from a real zero - so only write it when a
+    # number was actually given. It lives here rather than in a new column
+    # because adding a column means she has to redeploy the Apps Script.
+    if sizing.get("bp_effect") is not None:
+        data["bp_effect"] = round(float(sizing["bp_effect"]), 2)
     return json.dumps(data, separators=(",", ":"))
 
 

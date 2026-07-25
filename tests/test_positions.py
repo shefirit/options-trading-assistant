@@ -400,3 +400,60 @@ def test_credit_roll_at_21_dte_counts_as_rules_followed():
     assert july["closed_count"] == 2
     assert july["rules_followed"] == 1
     assert july["lessons"] == ["took the credit"]
+
+
+# ---------- buying power the way thinkorswim counts it ----------
+def test_bp_effect_is_zero_on_a_position_bought_outright():
+    """Rita's ruling: TOS is always right. A PMCC's LEAPS is paid for in cash,
+    so the broker holds nothing against it - TOS shows BP Effect 0.00 where the
+    app used to log the whole LEAPS cost."""
+    from src.engine.positions import Position
+
+    pmcc = Position(underlying="QQQ", open_cash=-17092.0, buying_power=17092.0)
+    assert pmcc.is_debit
+    assert pmcc.bp_effect == 0.0
+    # The cash is still real and still tracked, just not as buying power.
+    assert pmcc.capital_at_risk == 17092.0
+
+    spread = Position(underlying="SPX", open_cash=415.0, buying_power=2085.0)
+    assert spread.bp_effect == 2085.0
+
+
+def test_a_bp_effect_typed_from_tos_beats_the_estimate():
+    from src.engine.positions import Position
+
+    csp = Position(underlying="PLTR", open_cash=575.0, buying_power=12225.0,
+                   bp_override=3482.70)
+    assert csp.bp_effect == 3482.70
+
+
+def test_monthly_budget_ignores_cash_bought_positions():
+    """The app read $44,892 committed where her broker read $14,830, because
+    three PMCCs were counted at their full LEAPS cost."""
+    from src.engine.positions import Position, bp_committed_this_month
+
+    today = date(2026, 7, 18)
+    positions = [
+        Position(underlying="QQQ", opened=date(2026, 7, 16),
+                 open_cash=-17092.0, buying_power=17092.0),
+        Position(underlying="SPX", opened=date(2026, 7, 2),
+                 open_cash=415.0, buying_power=2085.0),
+    ]
+    # Only the spread reserves buying power.
+    assert bp_committed_this_month(positions, today=today) == 2085.0
+
+
+def test_shares_are_margined_even_though_she_paid_for_them():
+    """The split is options vs stock, not paid vs collected. TOS holds 0.00
+    against her PMCC LEAPS and 18,312.75 against her IWM shares."""
+    from src.engine.positions import Position
+
+    pmcc = Position(underlying="DIA", open_cash=-14360.0, buying_power=14360.0,
+                    shares_cost=0.0)
+    covered = Position(underlying="IWM", open_cash=-30601.0, buying_power=30601.0,
+                       shares_cost=30048.0)
+    assert pmcc.bp_effect == 0.0
+    assert covered.bp_effect > 0, "stock bought on margin does hold buying power"
+    # And her real TOS number still overrides the conservative estimate.
+    covered.bp_override = 18312.75
+    assert covered.bp_effect == 18312.75

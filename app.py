@@ -1944,6 +1944,9 @@ def _quick_log_form(settings, strategies, provider) -> None:
                            "here so the next one starts cleaner.")
             for n in draft["notes"]:
                 theme.note(n)
+            # She is logging a trade that is already on her TOS screen, so the
+            # real BP Effect is right there to copy.
+            _bp_effect_input(draft["sizing"], "ql")
             c1, c2 = st.columns([1, 1])
             if c1.button("✅ Save to my log", type="primary", key="ql_save"):
                 from src.logging_tools.trade_logger import log_trade
@@ -2505,8 +2508,9 @@ def _tab_trades(settings, strategies, provider) -> None:
                        f"**\\${max(limit - bp_used, 0):,.0f}** for the rest of the month. "
                        f"This counts every trade you OPENED this month, including ones you "
                        f"have already closed - closing early frees the risk, not the "
-                       f"month's budget. It is a worst-case sum of each trade's max loss, "
-                       f"not your broker's buying power, so your platform will show less.")
+                       f"month's budget. It follows thinkorswim's **BP Effect**, so a "
+                       f"LEAPS you bought outright counts as cash spent rather than "
+                       f"buying power held.")
 
 
 # ------------------------------------------------------------------ shared pieces
@@ -2572,7 +2576,29 @@ def _risk_and_payoff(trade, strat, size, settings) -> None:
         components.render_payoff_chart(prof, current_price=trade.underlying_price)
 
 
+def _bp_effect_input(size, key: str) -> None:
+    """Let the real thinkorswim BP Effect override the app's estimate.
+
+    Her ruling: TOS is always right. The app cannot see her broker's margin
+    rules - house requirements are not the Reg-T textbook - so where it can only
+    guess, the number she can read off the screen wins.
+    """
+    est = float(size.get("buying_power", 0.0))
+    typed = st.number_input(
+        "Buying power effect from thinkorswim ($, optional)",
+        min_value=0.0, value=0.0, step=25.0, key=f"bpeff_{key}",
+        help=f"The **BP Effect** column on the position row in TOS. The app "
+             f"estimates ${est:,.0f}, and your broker's own number beats that "
+             f"estimate every time - type it here and the monthly budget uses "
+             f"it. Leave at 0 to keep the estimate.")
+    if typed > 0:
+        size["bp_effect"] = float(typed)
+        theme.note(f"Using **\\${typed:,.0f}** from thinkorswim instead of the app's "
+                   f"**\\${est:,.0f}** estimate.")
+
+
 def _log_button(trade, strategy_name, size, passed, key: str) -> None:
+    _bp_effect_input(size, key)
     note = st.text_input("Note (optional)", key=f"note_{key}",
                          placeholder="e.g. VIX low, following the SOP")
     if st.button("Log this trade", key=f"log_{key}"):

@@ -101,6 +101,7 @@ def _make_candidate(
         credit=size["credit"],
         max_loss=size["max_loss"],
         buying_power=size["buying_power"],
+        capital=size.get("capital", size["buying_power"]),
         return_on_risk=size["return_on_risk"],
         short_delta=round(short_delta, 3),
         dte=trade.dte,

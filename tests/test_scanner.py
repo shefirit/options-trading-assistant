@@ -206,7 +206,10 @@ def test_pmcc_scan_pairs_leaps_with_short_call():
     for c in setups:
         assert len(c.trade.legs) == 2                     # LEAPS + short call
         assert c.credit > 0                               # short-call income
-        assert c.buying_power == pytest.approx(5600, abs=300)   # LEAPS cost ~ $5,600
+        # The LEAPS is bought outright: cash deployed, no buying power held.
+        # thinkorswim shows BP Effect 0.00 on exactly this shape.
+        assert c.capital == pytest.approx(5600, abs=300)        # LEAPS cost ~ $5,600
+        assert c.buying_power == 0.0
 
 
 def test_pmcc_scan_empty_without_leaps():
