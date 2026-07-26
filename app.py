@@ -418,6 +418,7 @@ def _picks_scan(settings, strategies, provider) -> None:
     if report.funnel_note:
         theme.note("🔬 " + report.funnel_note)
 
+    _stale_quotes_note()
     _picks_best_ideas(report, strategies)
 
     # ---------- Section A: index plays ----------
@@ -793,6 +794,28 @@ def _best_idea_card(icon: str, kind: str, headline: str, why: str,
         _to_build(strategy_key, symbol, key, f"Set this up on {symbol} ▸")
 
 
+def _stale_quotes_note() -> None:
+    """Say so when the liquidity read cannot be trusted.
+
+    The app happily prints "hard to trade" and "thin premium" off a closed
+    market's last prints. Rita pointed this out on a Sunday: KO showed a 43%
+    bid-ask spread and AAPL an open interest of 2, which is Friday's stale quote
+    rather than an untradable option. Prices and yields survive the weekend;
+    spreads do not.
+    """
+    from src.data import market_calendar
+
+    why = market_calendar.quotes_are_stale()
+    if not why:
+        return
+    st.warning(
+        f"◷ **The market is closed ({why})** - these are the last prints from when it "
+        "was open. Bid-ask spreads go wide once trading stops, so **“hard to trade” "
+        "and “thin premium” verdicts are unreliable right now**, and names may be "
+        "left out that would pass on a trading day. Prices, credits and yields are fine; "
+        "the liquidity read is not. Re-run it when the market is open before acting on it.")
+
+
 def _picks_best_ideas(report, strategies) -> None:
     """The one-screen answer to "just tell me the good ones".
 
@@ -1045,6 +1068,8 @@ def _premium_compare(settings, provider) -> None:
     if not provider.is_real:
         st.info("Comparing premium needs real market data - connect to the internet first.")
         return
+
+    _stale_quotes_note()
 
     etfs = settings["underlyings"]["us_style"]
     options = list(dict.fromkeys(etfs + stock_universe.FEATURED + stock_universe.all_stocks()))

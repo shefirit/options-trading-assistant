@@ -138,3 +138,41 @@ def adjust_back_if_closed(d: dt.date) -> dt.date:
             return nd
         nd = nd - dt.timedelta(days=1)
     return d
+
+
+def _now_eastern() -> dt.datetime:
+    """Now, in market time. Rita's machine runs on Israel time, so the local
+    clock says nothing about whether New York is open. Falls back to local time
+    if the tz database is missing rather than failing the whole scan."""
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        return dt.datetime.now()
+
+
+# Regular US equity/option session, Eastern time.
+_OPEN_MIN, _CLOSE_MIN = 9 * 60 + 30, 16 * 60
+
+
+def quotes_are_stale(now: Optional[dt.datetime] = None) -> Optional[str]:
+    """Why the option quotes on screen are not live, or None when they are.
+
+    Bid-ask spreads only mean anything while the market is trading. On a closed
+    market the delayed feed still hands back Friday's last prints, and those
+    quotes are wide - Rita's Sunday scan showed KO at a 43% spread and AAPL with
+    an open interest of 2, which is stale data rather than an untradable option.
+    The app was reporting "hard to trade" and "thin premium" off exactly that.
+
+    Returns a short reason so the caller can say which kind of closed it is.
+    """
+    now = now or _now_eastern()
+    today = now.date()
+    if not is_market_open(today):
+        return closed_reason(today) or "a non-trading day"
+    minutes = now.hour * 60 + now.minute
+    if minutes < _OPEN_MIN:
+        return "before the opening bell"
+    if minutes >= _CLOSE_MIN:
+        return "after the closing bell"
+    return None

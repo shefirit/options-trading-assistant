@@ -49,3 +49,41 @@ def test_jobs_report_shifts_off_holiday():
     events = me.upcoming_events(from_date=dt.date(2026, 7, 1), horizon_days=20)
     jobs = [e for e in events if e.kind == "jobs"]
     assert jobs and jobs[0].date == dt.date(2026, 7, 2)
+
+
+# ---------- when the quotes on screen are not live ----------
+def test_quotes_are_stale_on_a_weekend():
+    """Rita's point: a Sunday scan reads Friday's last prints, and those spreads
+    are wide - KO showed 43% and AAPL an open interest of 2. That is stale data,
+    not an untradable option, and the app was calling it "hard to trade"."""
+    import datetime as dt
+
+    from src.data.market_calendar import quotes_are_stale
+
+    assert quotes_are_stale(dt.datetime(2026, 7, 25, 12, 0)) == "the weekend"   # Sat
+    assert quotes_are_stale(dt.datetime(2026, 7, 26, 12, 0)) == "the weekend"   # Sun
+
+
+def test_quotes_are_live_only_inside_the_session():
+    import datetime as dt
+
+    from src.data.market_calendar import quotes_are_stale
+
+    monday = dt.date(2026, 7, 27)
+    assert quotes_are_stale(dt.datetime.combine(monday, dt.time(10, 0))) is None
+    assert quotes_are_stale(dt.datetime.combine(monday, dt.time(9, 30))) is None
+    assert quotes_are_stale(dt.datetime.combine(monday, dt.time(15, 59))) is None
+    # Either side of the bell the book is not being made.
+    assert quotes_are_stale(dt.datetime.combine(monday, dt.time(9, 29))) == \
+        "before the opening bell"
+    assert quotes_are_stale(dt.datetime.combine(monday, dt.time(16, 0))) == \
+        "after the closing bell"
+
+
+def test_a_holiday_says_which_holiday():
+    import datetime as dt
+
+    from src.data.market_calendar import quotes_are_stale
+
+    why = quotes_are_stale(dt.datetime(2026, 12, 25, 12, 0))   # Christmas, a Friday
+    assert why and "christmas" in why.lower()
