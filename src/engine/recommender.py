@@ -110,6 +110,7 @@ class CoveredCallPick(BaseModel):
     shares_cost: Optional[float] = None       # 100 shares
     call_strike: Optional[float] = None
     call_credit: Optional[float] = None       # dollars for 1 contract
+    call_delta: Optional[float] = None        # ~0.30, her SOP's covered-call strike
     dte: Optional[int] = None
     monthly_yield_pct: Optional[float] = None      # credit / shares, this expiry
     annualized_yield_pct: Optional[float] = None   # same rate repeated for a year
@@ -497,6 +498,11 @@ CC_MIN_UPSIDE_PCT = 1.0         # % room to the strike - less and it is called a
 # about 15% a year at her ~30-day expiries, which is a genuinely strong covered
 # call on a quality large-cap - most sit nearer 1%.
 CC_STRONG_MONTHLY_YIELD = 1.25
+# Rita's call (2026-07-26): covered-call candidates want 30-45 days, not the
+# nearest monthly. Right now the monthlies sit at 26 and 54 days out, so
+# neither lands in that window - the scan has to look at real expirations
+# rather than only the third Friday, and 37 is the middle of her range.
+CC_DTE_MIN, CC_DTE_TARGET, CC_DTE_MAX = 30, 37, 45
 
 
 def covered_call_model(trend: str, vix: Optional[float]) -> str:
@@ -541,6 +547,7 @@ def build_covered_call_pick(snap: PremiumSnapshot, kind: str, info: dict,
     pick = CoveredCallPick(
         symbol=snap.symbol, kind=kind, price=price or None, shares_cost=shares,
         call_strike=snap.call_strike, call_credit=credit, dte=dte,
+        call_delta=snap.call_delta,
         monthly_yield_pct=monthly_yield, annualized_yield_pct=ann_yield,
         upside_pct=upside, total_if_called_pct=total_if_called,
         downside_cushion_pct=cushion,
@@ -622,6 +629,12 @@ def _explain_cc(pick: CoveredCallPick, snap: PremiumSnapshot) -> None:
         p.warnings.append(
             "You own the shares, so you collect the dividend - but a short call can be "
             "assigned early right before the ex-dividend date if it is in the money.")
+    if p.dte is not None and not (CC_DTE_MIN <= p.dte <= CC_DTE_MAX):
+        p.warnings.append(
+            f"This is {p.dte} days out, outside your {CC_DTE_MIN}-{CC_DTE_MAX} day window. "
+            "Nothing inside that window trades well enough on this name today - the "
+            "expirations in there are weeklies with almost no open interest, where the "
+            "bid-ask gap costs more than the extra days of premium are worth.")
     p.warnings.append(
         "A covered call needs 100 real shares per contract. Buying them is the bulk of the "
         "money here, and the shares can fall further than the premium you collected.")

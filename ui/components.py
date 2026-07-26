@@ -1751,13 +1751,10 @@ def covered_call_dataframe(picks: list) -> pd.DataFrame:
             "Verdict": _CC_VERDICT.get(p.verdict, p.verdict),
             "Symbol": p.symbol,
             "Price": p.price,
-            "100 shares": p.shares_cost,
-            "Sell call at": p.call_strike,
+            "Delta": p.call_delta,
             "Credit $": p.call_credit,
             "Yield/mo %": p.monthly_yield_pct,
             "Yield/yr %": p.annualized_yield_pct,
-            "Room to strike %": p.upside_pct,
-            "Max if called %": p.total_if_called_pct,
             "Quality": p.grade or "ETF",
             "Trend": p.trend.title(),
             "Days": p.dte,
@@ -1772,11 +1769,9 @@ def covered_call_column_config():
                  "shares tie up, is it tradable, and is it a name worth owning."),
         "Price": st.column_config.NumberColumn(format="$%.2f", width=80,
             help="What one share costs right now."),
-        "100 shares": st.column_config.NumberColumn(format="$%d", width=95,
-            help="What the shares cost you - a covered call needs 100 real shares per "
-                 "contract, and this is the money at work."),
-        "Sell call at": st.column_config.NumberColumn(format="%.0f", width=95,
-            help="The strike to sell, about 0.30 delta - your SOP's covered-call strike."),
+        "Delta": st.column_config.NumberColumn(format="%.2f", width=70,
+            help="The delta of the call being sold - your SOP's covered-call strike is "
+                 "about 0.30, roughly a 30% chance the shares get called away."),
         "Credit $": st.column_config.NumberColumn(format="$%d", width=85,
             help="Cash the call pays you today, for one contract."),
         "Yield/mo %": st.column_config.NumberColumn(format="%.2f%%", width=95,
@@ -1786,11 +1781,6 @@ def covered_call_column_config():
             help="That same rate repeated for a year. Simple, not compounded, and it "
                  "assumes you keep finding the same trade every month - treat it as a "
                  "way to compare names, not a forecast."),
-        "Room to strike %": st.column_config.NumberColumn(format="%.1f%%", width=125,
-            help="How far the shares can rise before they are called away from you."),
-        "Max if called %": st.column_config.NumberColumn(format="%.2f%%", width=120,
-            help="Your best case for the month: the premium plus the rise up to the "
-                 "strike. A covered call caps your upside here."),
         "Quality": st.column_config.TextColumn(width=75,
             help="Company grade A-F. ETFs are baskets, so shown as ETF. It matters "
                  "because you own the shares."),

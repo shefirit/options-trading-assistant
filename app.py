@@ -550,6 +550,38 @@ def _picks_scan(settings, strategies, provider) -> None:
             "fits your own rules today, with the reasons, and you decide."))
 
 
+def _covered_call_snapshot(provider, sym, monthly, monthly_bp):
+    """The best TRADABLE expiration for a covered call on this name.
+
+    Her window is 30-45 days, but a window is only useful if something inside it
+    can actually be traded. Right now the monthlies sit at 26 and 54 days, so
+    everything between them is a weekly - and on single stocks those barely
+    trade: at 40 days KO quoted a 43% bid-ask spread and AAPL had an open
+    interest of 2. Paying a spread like that costs more than the extra fortnight
+    of premium is worth.
+
+    So it widens the search rather than insisting or giving up: her window
+    first, nearest her 37-day target, then the liquid monthlies either side.
+    First one that is genuinely tradable wins, and the pick itself says so when
+    the answer landed outside 30-45. The full chain is cached from the put-side
+    snapshot, so each attempt is a slice rather than a fetch.
+    """
+    from src.engine import recommender
+
+    inside = [recommender.CC_DTE_TARGET, recommender.CC_DTE_MIN, recommender.CC_DTE_MAX]
+    outside = [monthly.dte, monthly.dte + 28]      # this monthly, then the next
+    best = None
+    for target in list(dict.fromkeys(inside + outside)):
+        snap = provider.get_premium_snapshot(sym, target_dte=target,
+                                             monthly_bp=monthly_bp)
+        if snap.error or not snap.call_credit_dollars:
+            continue
+        best = best or snap                        # something beats nothing
+        if snap.liquidity != "Thin":
+            return snap
+    return best
+
+
 def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     """Stage 1 (screen the market) + stage 2 (option-chain read on the survivors)."""
     import datetime as dt
@@ -662,10 +694,18 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
             # used to be unreachable: the only path to a covered call ran
             # through a downtrend, and the put-side verdict deleted every
             # downtrending name before it could be shown.
+            #
+            # Its own expiration, too: the put side follows the monthly, and the
+            # monthlies are 26 and 54 days out right now, so neither sits in the
+            # 30-45 days she wants for a covered call. This asks for the nearest
+            # tradable expiration to 37 instead. The full chain is still cached
+            # from the snapshot above, so it costs a slice, not a fetch.
             if not snap.error:
-                report.covered_call_picks.append(
-                    recommender.build_covered_call_pick(
-                        snap, kind, provider.get_raw_info(sym), monthly, vix=vix))
+                cc_snap = _covered_call_snapshot(provider, sym, monthly, monthly_bp)
+                if cc_snap is not None:
+                    report.covered_call_picks.append(
+                        recommender.build_covered_call_pick(
+                            cc_snap, kind, provider.get_raw_info(sym), monthly, vix=vix))
         except Exception as e:
             report.skipped.append(f"{sym} - {str(e)[:80]}")
         finally:

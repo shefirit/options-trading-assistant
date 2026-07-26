@@ -45,6 +45,7 @@ class PremiumSnapshot(BaseModel):
     call_strike: Optional[float] = None
     call_credit_dollars: Optional[float] = None
     call_yield_pct: Optional[float] = None
+    call_delta: Optional[float] = None        # ~0.30, the strike the SOP sells
     # the odds and the safety margin
     pop: Optional[float] = None               # est. probability of profit, %
     breakeven: Optional[float] = None         # strike - credit
@@ -271,6 +272,7 @@ def snapshot(
         snap.call_strike = call.strike
         snap.call_credit_dollars = round(call.mid * 100, 0)
         snap.call_yield_pct = round(call.mid / price * 100, 2)
+        snap.call_delta = round(abs(call.delta), 2) if call.delta is not None else None
 
     _plan(snap, trend, monthly_bp)
     if earnings_in:

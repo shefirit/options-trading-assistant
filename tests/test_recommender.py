@@ -436,3 +436,81 @@ def test_covered_calls_rank_by_verdict_then_yield():
                                 "stock", {}, _monthly(), vix=15)
     ranked = rank_covered_call_picks([a, b])
     assert [p.symbol for p in ranked] == ["B", "A"]
+
+
+def test_covered_calls_aim_at_the_30_to_45_day_window():
+    """Her call: 30-45 days, not the nearest monthly. Today the monthlies are 26
+    and 54 days out, so neither lands in that window - the target has to be a
+    real expiration near the middle of it, not the third Friday."""
+    from src.engine import recommender as R
+
+    assert (R.CC_DTE_MIN, R.CC_DTE_MAX) == (30, 45)
+    assert R.CC_DTE_MIN <= R.CC_DTE_TARGET <= R.CC_DTE_MAX
+
+
+def test_an_expiration_outside_the_window_is_called_out():
+    from src.engine.recommender import build_covered_call_pick
+
+    inside = build_covered_call_pick(_cc_snap(dte=35), "stock", {}, _monthly(), vix=15)
+    assert not any("outside your" in w for w in inside.warnings)
+
+    outside = build_covered_call_pick(_cc_snap(dte=54), "stock", {}, _monthly(), vix=15)
+    assert any("54 days out, outside your 30-45 day window" in w for w in outside.warnings)
+
+
+def test_the_call_delta_is_carried_for_the_table():
+    from src.engine.recommender import build_covered_call_pick
+
+    p = build_covered_call_pick(_cc_snap(call_delta=0.31), "stock", {}, _monthly(), vix=15)
+    assert p.call_delta == 0.31
+
+
+def test_the_covered_call_table_shows_what_she_asked_for():
+    from src.engine.recommender import build_covered_call_pick
+    from ui.components import covered_call_dataframe
+
+    p = build_covered_call_pick(_cc_snap(call_delta=0.30), "stock", {}, _monthly(), vix=15)
+    cols = list(covered_call_dataframe([p]).columns)
+    for wanted in ("Delta", "Yield/mo %", "Yield/yr %", "Credit $"):
+        assert wanted in cols
+    for dropped in ("100 shares", "Sell call at", "Room to strike %", "Max if called %"):
+        assert dropped not in cols
+
+
+def test_covered_call_snapshot_prefers_her_window_then_widens():
+    """30-45 first, but only if it can be traded. Outside the monthlies the
+    expirations in that window are weeklies that barely trade on single stocks,
+    so it widens to the liquid monthly rather than insisting or giving up."""
+    import app
+    from src.data.premium_finder import PremiumSnapshot
+    from src.engine.recommender import monthly_target
+
+    m = monthly_target()
+
+    class FakeProvider:
+        def __init__(self, liquidity_by_dte):
+            self.by_dte = liquidity_by_dte
+            self.asked = []
+
+        def get_premium_snapshot(self, sym, target_dte=30, monthly_bp=0):
+            self.asked.append(target_dte)
+            liq = self.by_dte.get(target_dte, "Thin")
+            return PremiumSnapshot(symbol=sym, dte=target_dte, price=100.0,
+                                   call_credit_dollars=150.0, liquidity=liq)
+
+    # Everything tradable: it takes the in-window target first and stops there.
+    good = FakeProvider({37: "Good"})
+    snap = app._covered_call_snapshot(good, "QQQ", m, 50_000)
+    assert snap.dte == 37
+    assert good.asked == [37], "a tradable window hit should not keep searching"
+
+    # Window is thin, the monthly is not: it widens and lands on the monthly.
+    thin = FakeProvider({m.dte: "Good"})
+    snap2 = app._covered_call_snapshot(thin, "KO", m, 50_000)
+    assert snap2.dte == m.dte
+    assert thin.asked[0] == 37, "her window still gets asked first"
+
+    # Nothing tradable anywhere: return the best it saw rather than nothing.
+    none_ok = FakeProvider({})
+    snap3 = app._covered_call_snapshot(none_ok, "XYZ", m, 50_000)
+    assert snap3 is not None and snap3.liquidity == "Thin"
