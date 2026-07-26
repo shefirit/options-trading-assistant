@@ -480,6 +480,34 @@ def _picks_scan(settings, strategies, provider) -> None:
                    "trade, trending down, weak, or paying thin premium (see 'left out' below). "
                    "On a quiet day that can happen; try the Full market sweep for more names.")
 
+    # ---------- Section C: covered calls (own the shares, sell the call) ----------
+    st.divider()
+    st.markdown("### 🛡️ Covered call candidates - you own the shares, the call pays you")
+    theme.note("A covered call means buying (or already owning) **100 real shares** and "
+               "selling a call against them. These are ranked on what the call pays "
+               "against what the shares cost - the monthly yield and that same rate over "
+               "a year - and they are judged on their own, on any trend. Your buying-power "
+               "budget is deliberately not applied here: size it yourself.")
+    if report.covered_call_picks:
+        st.dataframe(components.covered_call_dataframe(report.covered_call_picks),
+                     width="stretch", hide_index=True,
+                     column_config=components.covered_call_column_config())
+        chosen3 = st.selectbox("See the full plan for one name",
+                               [p.symbol for p in report.covered_call_picks],
+                               key="picks_cc_detail")
+        pick3 = next(p for p in report.covered_call_picks if p.symbol == chosen3)
+        with st.container(border=True):
+            components.render_covered_call_detail(pick3)
+            fit = ("the protective collar, for high fear and a falling market"
+                   if pick3.strategy_key == "covered_call_model_1"
+                   else "the classic neutral model")
+            theme.note(f"Your SOP fits this one to **{pick3.strategy_name}** - {fit}.")
+            _strategy_about(strategies[pick3.strategy_key])
+    else:
+        theme.note("Nothing clears the covered-call bar this scan - either the calls pay "
+                   "too little for the money the shares would tie up, or there is no room "
+                   "to the strike before the shares get called away.")
+
     if report.left_out:
         with st.expander(f"Left out - not among the best right now ({len(report.left_out)})"):
             theme.note("These were scanned but didn't make the cut - shown here so nothing is "
@@ -630,6 +658,14 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
                 report.income_picks.append(recommender.build_income_pick(
                     snap, kind, info, monthly, monthly_bp=monthly_bp,
                     bp_limit=monthly_bp, vix=vix))
+            # The covered-call side is judged separately and on ANY trend. It
+            # used to be unreachable: the only path to a covered call ran
+            # through a downtrend, and the put-side verdict deleted every
+            # downtrending name before it could be shown.
+            if not snap.error:
+                report.covered_call_picks.append(
+                    recommender.build_covered_call_pick(
+                        snap, kind, provider.get_raw_info(sym), monthly, vix=vix))
         except Exception as e:
             report.skipped.append(f"{sym} - {str(e)[:80]}")
         finally:
@@ -642,6 +678,9 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     ranked_ix = recommender.rank_index_picks(report.index_picks)
     ranked_bear = recommender.rank_index_picks(report.bearish_picks)
     ranked_inc = recommender.rank_income_picks(report.income_picks)
+    report.covered_call_picks = [
+        p for p in recommender.rank_covered_call_picks(report.covered_call_picks)
+        if p.verdict != "skip"]
     # Show only the best - drop the "skip" verdicts (hard to trade, downtrend,
     # weak, thin premium) into a transparent "left out" list.
     (report.index_picks, report.income_picks, report.bearish_picks,

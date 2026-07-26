@@ -93,6 +93,43 @@ class IncomePick(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class CoveredCallPick(BaseModel):
+    """One covered-call candidate: buy (or already own) 100 shares, sell a call.
+
+    Kept separate from IncomePick because it answers a different question. The
+    income picks are led by the PUT you would sell, and a downtrending name is
+    a hard skip there - which is exactly why covered calls never appeared:
+    fitting_strategy_key only ever reached for one on a downtrend, and the put
+    verdict had already deleted those names. This side is judged on its own
+    merits, on any trend, and only on what the call pays.
+    """
+
+    symbol: str
+    kind: str = "stock"                       # "etf" | "stock"
+    price: Optional[float] = None
+    shares_cost: Optional[float] = None       # 100 shares
+    call_strike: Optional[float] = None
+    call_credit: Optional[float] = None       # dollars for 1 contract
+    dte: Optional[int] = None
+    monthly_yield_pct: Optional[float] = None      # credit / shares, this expiry
+    annualized_yield_pct: Optional[float] = None   # same rate repeated for a year
+    upside_pct: Optional[float] = None        # room to the strike before called away
+    total_if_called_pct: Optional[float] = None    # credit + that upside
+    downside_cushion_pct: Optional[float] = None   # how far it can fall before a loss
+    strategy_key: str = "covered_call_model_2"
+    strategy_name: str = ""
+    grade: Optional[str] = None
+    trend: str = "unknown"
+    liquidity: str = "n/a"
+    richness: str = "n/a"
+    dividend: DividendView = Field(default_factory=DividendView)
+    events: list[Event] = Field(default_factory=list)
+    why: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    verdict: str = "okay"                     # "sell" | "okay" | "skip"
+    verdict_reason: str = ""
+
+
 class PicksReport(BaseModel):
     """Everything the Picks tab renders, built in one scan."""
 
@@ -104,6 +141,7 @@ class PicksReport(BaseModel):
     index_picks: list[IndexPick] = Field(default_factory=list)
     bearish_picks: list[IndexPick] = Field(default_factory=list)   # bear call spreads on strong fallers
     income_picks: list[IncomePick] = Field(default_factory=list)
+    covered_call_picks: list[CoveredCallPick] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)     # no data / errored
     left_out: list[str] = Field(default_factory=list)     # dropped for quality (with reason)
 
@@ -446,6 +484,154 @@ def rank_index_picks(picks: list[IndexPick]) -> list[IndexPick]:
         ror = p.candidate.return_on_risk if has else 0.0
         return (has, fits, ror)
     return sorted(picks, key=key, reverse=True)
+
+
+# ------------------------------------------------------- covered call picks
+# A covered call is judged on what the CALL pays against the cost of the
+# shares, so it needs its own bar. Rita's ruling: ignore the monthly buying
+# power budget here and assume she can buy the 100 shares - she wants the
+# candidates on their merits, with the yields, and will size it herself.
+CC_MIN_MONTHLY_YIELD = 0.8      # % of the share cost - below this it is not worth the capital
+CC_MIN_UPSIDE_PCT = 1.0         # % room to the strike - less and it is called away at once
+# The bar for "good" rather than merely "okay". 1.25% a month on the shares is
+# about 15% a year at her ~30-day expiries, which is a genuinely strong covered
+# call on a quality large-cap - most sit nearer 1%.
+CC_STRONG_MONTHLY_YIELD = 1.25
+
+
+def covered_call_model(trend: str, vix: Optional[float]) -> str:
+    """Which of her three covered-call models fits.
+
+    Her SOP: Model 1 (the collar) is the high-fear / bearish one, Model 2 (the
+    classic put spread + short call) is the neutral default. Model 3 is the
+    advanced zero-cost ratio and is never auto-suggested - losses accelerate
+    below the short puts, so she picks that one deliberately or not at all.
+    """
+    if trend == "down":
+        return "covered_call_model_1" if (vix is not None and vix >= 22) else "covered_call_model_2"
+    return "covered_call_model_2"
+
+
+def build_covered_call_pick(snap: PremiumSnapshot, kind: str, info: dict,
+                            monthly: MonthlyTarget, vix: Optional[float] = None,
+                            today: Optional[dt.date] = None) -> CoveredCallPick:
+    """Score one name as a covered call, on the call side only."""
+    today = today or dt.date.today()
+    price = snap.price or 0.0
+    shares = round(price * 100, 0) if price else None
+    credit = snap.call_credit_dollars
+    dte = snap.dte or monthly.dte or 30
+
+    monthly_yield = ann_yield = upside = total_if_called = cushion = None
+    if shares and credit:
+        monthly_yield = round(credit / shares * 100, 2)
+        # The same rate repeated to a year - simple, not compounded, because she
+        # would have to keep finding the same trade every month to earn it.
+        ann_yield = round(monthly_yield * 365 / max(dte, 1), 1)
+    if price and snap.call_strike:
+        upside = round((snap.call_strike - price) / price * 100, 2)
+        if monthly_yield is not None:
+            total_if_called = round(monthly_yield + max(upside, 0.0), 2)
+    if price and credit:
+        # Selling the call pays for this much of a fall before the shares lose.
+        cushion = round(credit / 100 / price * 100, 2)
+
+    key = covered_call_model(snap.trend, vix)
+    strategy = get_strategy(key)
+    pick = CoveredCallPick(
+        symbol=snap.symbol, kind=kind, price=price or None, shares_cost=shares,
+        call_strike=snap.call_strike, call_credit=credit, dte=dte,
+        monthly_yield_pct=monthly_yield, annualized_yield_pct=ann_yield,
+        upside_pct=upside, total_if_called_pct=total_if_called,
+        downside_cushion_pct=cushion,
+        strategy_key=key, strategy_name=strategy.get("name", key),
+        grade=snap.grade, trend=snap.trend, liquidity=snap.liquidity,
+        richness=snap.richness, dividend=dividend_view(info, price or None),
+        events=[],
+    )
+    _set_cc_verdict(pick, snap)
+    _explain_cc(pick, snap)
+    return pick
+
+
+def _set_cc_verdict(pick: CoveredCallPick, snap: PremiumSnapshot) -> None:
+    """Good, okay, or not worth it - judged only on the covered call."""
+    if not pick.call_credit or pick.monthly_yield_pct is None:
+        pick.verdict, pick.verdict_reason = "skip", (
+            "No call price came back for this one, so there is nothing to judge.")
+        return
+    if pick.liquidity == "Thin":
+        pick.verdict, pick.verdict_reason = "skip", (
+            "Hard to trade - the gap between the buy and sell price would eat the premium.")
+        return
+    if pick.grade in ("D", "F"):
+        pick.verdict, pick.verdict_reason = "skip", (
+            f"Weak company (grade {pick.grade}). A covered call means OWNING the shares, "
+            "so the quality of the business matters more than the premium.")
+        return
+    if pick.monthly_yield_pct < CC_MIN_MONTHLY_YIELD:
+        pick.verdict, pick.verdict_reason = "skip", (
+            f"The call only pays {pick.monthly_yield_pct:.2f}% of the share cost for the "
+            "month - too little for the money you would tie up in the shares.")
+        return
+    if pick.upside_pct is not None and pick.upside_pct < CC_MIN_UPSIDE_PCT:
+        pick.verdict, pick.verdict_reason = "skip", (
+            f"Only {pick.upside_pct:.1f}% of room to the strike - the shares would very "
+            "likely be called away straight away.")
+        return
+    if snap.earnings_before_expiry:
+        pick.verdict, pick.verdict_reason = "okay", (
+            "The premium is worth having, but earnings land before this expires - a "
+            "coin-flip event while you hold the shares. Pick an earlier expiration or wait.")
+        return
+    if pick.trend == "down":
+        pick.verdict, pick.verdict_reason = "okay", (
+            "The call pays well, but the shares are in a downtrend - the premium cushions "
+            "a fall, it does not stop one. This is what the protective models are for.")
+        return
+    if (pick.monthly_yield_pct >= CC_STRONG_MONTHLY_YIELD
+            and pick.grade in ("A", "B", None)):
+        pick.verdict, pick.verdict_reason = "sell", (
+            "Strong name, easy to trade, and the call pays properly for the month.")
+        return
+    pick.verdict, pick.verdict_reason = "okay", (
+        "A reasonable covered call - decent premium on a name worth owning.")
+
+
+def _explain_cc(pick: CoveredCallPick, snap: PremiumSnapshot) -> None:
+    p = pick
+    if p.call_strike and p.price and p.call_credit:
+        p.why.append(
+            f"Buy 100 shares at about ${p.price:,.2f} (${p.shares_cost:,.0f}) and sell the "
+            f"${p.call_strike:g} call {p.dte} days out for ${p.call_credit:,.0f}.")
+    if p.monthly_yield_pct is not None:
+        p.why.append(
+            f"That is {p.monthly_yield_pct:.2f}% of the share cost for the month, or about "
+            f"{p.annualized_yield_pct:.0f}% a year if you kept repeating it.")
+    if p.total_if_called_pct is not None and p.upside_pct is not None:
+        p.why.append(
+            f"If it rises past ${p.call_strike:g} the shares are called away and you keep "
+            f"{p.total_if_called_pct:.2f}% - the {p.monthly_yield_pct:.2f}% premium plus "
+            f"{p.upside_pct:.2f}% of price rise. That is your cap for the month.")
+    if p.downside_cushion_pct is not None:
+        p.why.append(
+            f"The premium covers the first {p.downside_cushion_pct:.2f}% of any fall. "
+            "Below that the shares lose money like any other shares.")
+    if p.dividend.pays and p.dividend.note:
+        p.why.append(p.dividend.note)
+        p.warnings.append(
+            "You own the shares, so you collect the dividend - but a short call can be "
+            "assigned early right before the ex-dividend date if it is in the money.")
+    p.warnings.append(
+        "A covered call needs 100 real shares per contract. Buying them is the bulk of the "
+        "money here, and the shares can fall further than the premium you collected.")
+
+
+def rank_covered_call_picks(picks: list[CoveredCallPick]) -> list[CoveredCallPick]:
+    """Best verdict first, then the fattest monthly yield."""
+    return sorted(picks,
+                  key=lambda p: (premium_finder._VERDICT_RANK.get(p.verdict, 0),
+                                 p.monthly_yield_pct or 0.0), reverse=True)
 
 
 def rank_income_picks(picks: list[IncomePick]) -> list[IncomePick]:

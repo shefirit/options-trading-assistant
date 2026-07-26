@@ -343,3 +343,96 @@ def test_rank_index_fitting_setups_first_errors_last():
     assert ranked[1] is fit
     assert ranked[2] is near_miss
     assert ranked[3] is broken
+
+
+# ---------- covered call candidates ----------
+def _cc_snap(**kw):
+    from src.data.premium_finder import PremiumSnapshot
+    base = dict(symbol="KO", price=60.0, dte=30, call_strike=63.0,
+                call_credit_dollars=90.0, liquidity="Good", richness="Fair",
+                grade="A", trend="up", action="Sell puts")
+    base.update(kw)
+    return PremiumSnapshot(**base)
+
+
+def _monthly():
+    from src.engine.recommender import monthly_target
+    return monthly_target()
+
+
+def test_covered_call_yields_are_the_credit_against_the_share_cost():
+    from src.engine.recommender import build_covered_call_pick
+
+    p = build_covered_call_pick(_cc_snap(), "stock", {}, _monthly(), vix=15)
+    assert p.shares_cost == 6000            # 100 shares at $60
+    assert p.monthly_yield_pct == 1.5       # $90 of $6,000
+    # 1.5% every 30 days, repeated across 365 days.
+    assert p.annualized_yield_pct == pytest.approx(18.25, abs=0.1)
+
+
+def test_covered_call_reports_the_upside_cap_and_the_cushion():
+    from src.engine.recommender import build_covered_call_pick
+
+    p = build_covered_call_pick(_cc_snap(), "stock", {}, _monthly(), vix=15)
+    assert p.upside_pct == 5.0              # $60 -> $63
+    assert p.total_if_called_pct == 6.5     # 1.5% premium + 5% rise
+    assert p.downside_cushion_pct == 1.5    # the premium covers a 1.5% fall
+
+
+def test_a_covered_call_is_offered_on_any_trend():
+    """The whole reason covered calls never appeared: the only route to one ran
+    through a downtrend, and the put-side verdict deleted every downtrending
+    name first."""
+    from src.engine.recommender import build_covered_call_pick
+
+    for trend in ("up", "sideways", "down"):
+        p = build_covered_call_pick(_cc_snap(trend=trend), "stock", {}, _monthly(), vix=15)
+        assert p.verdict != "skip", f"{trend} should still be a candidate"
+    up = build_covered_call_pick(_cc_snap(trend="up"), "stock", {}, _monthly(), vix=15)
+    assert up.verdict == "sell"
+    down = build_covered_call_pick(_cc_snap(trend="down"), "stock", {}, _monthly(), vix=15)
+    assert down.verdict == "okay" and "downtrend" in down.verdict_reason
+
+
+def test_the_model_follows_her_sop_on_fear_and_trend():
+    from src.engine.recommender import covered_call_model
+
+    assert covered_call_model("down", 26) == "covered_call_model_1"   # collar, high fear
+    assert covered_call_model("down", 15) == "covered_call_model_2"
+    assert covered_call_model("up", 15) == "covered_call_model_2"
+    # Model 3 is the advanced ratio - never suggested automatically.
+    assert "model_3" not in covered_call_model("up", 30)
+
+
+def test_a_thin_paying_call_is_not_worth_the_shares():
+    from src.engine.recommender import build_covered_call_pick
+
+    thin = build_covered_call_pick(_cc_snap(call_credit_dollars=20.0), "stock", {},
+                                   _monthly(), vix=15)
+    assert thin.verdict == "skip" and "too little" in thin.verdict_reason
+
+
+def test_no_room_to_the_strike_is_skipped():
+    from src.engine.recommender import build_covered_call_pick
+
+    tight = build_covered_call_pick(_cc_snap(call_strike=60.2), "stock", {},
+                                    _monthly(), vix=15)
+    assert tight.verdict == "skip" and "called away" in tight.verdict_reason
+
+
+def test_a_weak_company_is_skipped_because_you_would_own_it():
+    from src.engine.recommender import build_covered_call_pick
+
+    weak = build_covered_call_pick(_cc_snap(grade="F"), "stock", {}, _monthly(), vix=15)
+    assert weak.verdict == "skip" and "OWNING" in weak.verdict_reason
+
+
+def test_covered_calls_rank_by_verdict_then_yield():
+    from src.engine.recommender import build_covered_call_pick, rank_covered_call_picks
+
+    a = build_covered_call_pick(_cc_snap(symbol="A", call_credit_dollars=90.0),
+                                "stock", {}, _monthly(), vix=15)
+    b = build_covered_call_pick(_cc_snap(symbol="B", call_credit_dollars=150.0),
+                                "stock", {}, _monthly(), vix=15)
+    ranked = rank_covered_call_picks([a, b])
+    assert [p.symbol for p in ranked] == ["B", "A"]

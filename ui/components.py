@@ -1733,3 +1733,90 @@ def picks_income_column_config():
              "A nice extra if you ever end up owning the shares - it is NOT part of the "
              "option premium. Blank = pays none.")
     return cfg
+
+
+# ================================================= covered call candidates
+_CC_VERDICT = {"sell": "✅ good", "okay": "➖ okay", "skip": "❌ skip"}
+
+
+def covered_call_dataframe(picks: list) -> pd.DataFrame:
+    """The covered-call table: what it pays, and what it pays in a year.
+
+    Yield is the point here - the credit against the cost of the 100 shares -
+    so both the monthly and the annualised rate are columns, not footnotes.
+    """
+    rows = []
+    for p in picks:
+        rows.append({
+            "Verdict": _CC_VERDICT.get(p.verdict, p.verdict),
+            "Symbol": p.symbol,
+            "Price": p.price,
+            "100 shares": p.shares_cost,
+            "Sell call at": p.call_strike,
+            "Credit $": p.call_credit,
+            "Yield/mo %": p.monthly_yield_pct,
+            "Yield/yr %": p.annualized_yield_pct,
+            "Room to strike %": p.upside_pct,
+            "Max if called %": p.total_if_called_pct,
+            "Quality": p.grade or "ETF",
+            "Trend": p.trend.title(),
+            "Days": p.dte,
+        })
+    return pd.DataFrame(rows)
+
+
+def covered_call_column_config():
+    return {
+        "Verdict": st.column_config.TextColumn(width=80,
+            help="Judged only on the covered call: is the premium worth the money the "
+                 "shares tie up, is it tradable, and is it a name worth owning."),
+        "Price": st.column_config.NumberColumn(format="$%.2f", width=80,
+            help="What one share costs right now."),
+        "100 shares": st.column_config.NumberColumn(format="$%d", width=95,
+            help="What the shares cost you - a covered call needs 100 real shares per "
+                 "contract, and this is the money at work."),
+        "Sell call at": st.column_config.NumberColumn(format="%.0f", width=95,
+            help="The strike to sell, about 0.30 delta - your SOP's covered-call strike."),
+        "Credit $": st.column_config.NumberColumn(format="$%d", width=85,
+            help="Cash the call pays you today, for one contract."),
+        "Yield/mo %": st.column_config.NumberColumn(format="%.2f%%", width=95,
+            help="The credit as a percentage of what the shares cost - what this month's "
+                 "call earns on the money tied up."),
+        "Yield/yr %": st.column_config.NumberColumn(format="%.0f%%", width=95,
+            help="That same rate repeated for a year. Simple, not compounded, and it "
+                 "assumes you keep finding the same trade every month - treat it as a "
+                 "way to compare names, not a forecast."),
+        "Room to strike %": st.column_config.NumberColumn(format="%.1f%%", width=125,
+            help="How far the shares can rise before they are called away from you."),
+        "Max if called %": st.column_config.NumberColumn(format="%.2f%%", width=120,
+            help="Your best case for the month: the premium plus the rise up to the "
+                 "strike. A covered call caps your upside here."),
+        "Quality": st.column_config.TextColumn(width=75,
+            help="Company grade A-F. ETFs are baskets, so shown as ETF. It matters "
+                 "because you own the shares."),
+        "Trend": st.column_config.TextColumn(width=80,
+            help="Covered calls work on any trend - but a downtrend means the premium "
+                 "is cushioning a fall, not adding to a rise."),
+        "Days": st.column_config.NumberColumn(format="%d", width=65,
+            help="Days until the call expires."),
+    }
+
+
+def render_covered_call_detail(pick) -> None:
+    """One covered call in full: the plan, the yields, and the honest caveats."""
+    st.markdown(_esc(
+        f"**{pick.symbol}** · ${pick.price:,.2f} · trend {pick.trend} · "
+        f"quality {pick.grade or 'ETF'}"))
+    m = st.columns(4)
+    m[0].metric("Yield this month", f"{pick.monthly_yield_pct:.2f}%"
+                if pick.monthly_yield_pct is not None else "-",
+                help="The call credit as a percentage of what the 100 shares cost.")
+    m[1].metric("Annualised", f"{pick.annualized_yield_pct:.0f}%"
+                if pick.annualized_yield_pct is not None else "-",
+                help="The same rate repeated for a year - simple, not compounded.")
+    m[2].metric("Credit", _dollars(pick.call_credit or 0))
+    m[3].metric("Shares cost", _dollars(pick.shares_cost or 0))
+    for line in pick.why:
+        theme.note("• " + line)
+    for w in pick.warnings:
+        st.warning(_esc(w))
