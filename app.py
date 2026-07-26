@@ -559,7 +559,7 @@ def _picks_scan(settings, strategies, provider) -> None:
             "fits your own rules today, with the reasons, and you decide."))
 
 
-def _covered_call_snapshot(provider, sym, monthly, monthly_bp):
+def _covered_call_snapshot(provider, sym, monthly, monthly_bp, put_snap=None):
     """The best TRADABLE expiration for a covered call on this name.
 
     Her window is 30-45 days, but a window is only useful if something inside it
@@ -578,18 +578,29 @@ def _covered_call_snapshot(provider, sym, monthly, monthly_bp):
     from src.engine import recommender
 
     lo, target, hi = recommender.cc_dte_window()
-    inside = [target, lo, hi]
-    outside = [monthly.dte, monthly.dte + 28]      # this monthly, then the next
-    best = None
-    for target in list(dict.fromkeys(inside + outside)):
-        snap = provider.get_premium_snapshot(sym, target_dte=target,
-                                             monthly_bp=monthly_bp)
-        if snap.error or not snap.call_credit_dollars:
-            continue
-        best = best or snap                        # something beats nothing
-        if snap.liquidity != "Thin":
-            return snap
-    return best
+    quote = provider.call_quote(sym, lo, target, hi)
+    if quote is None:
+        return None
+    if put_snap is None or put_snap.error:
+        # No put snapshot to borrow the context from (the Compare screen calls
+        # it this way) - pay for one, once, at the expiration just chosen.
+        put_snap = provider.get_premium_snapshot(sym, target_dte=quote["dte"],
+                                                 monthly_bp=monthly_bp)
+        if put_snap.error:
+            return None
+    # Copy the put-side snapshot and swap in the call. Everything the covered
+    # call pick needs beyond the call itself - quality, trend, richness,
+    # earnings - was computed a moment ago for the put, so fetching a second
+    # snapshot at the new expiration meant redoing all of it to reach five
+    # numbers. That was half a second a name, twenty seconds of a scan.
+    return put_snap.model_copy(update={
+        "dte": quote["dte"],
+        "call_strike": quote["strike"],
+        "call_delta": quote["delta"],
+        "call_credit_dollars": quote["credit"],
+        "liquidity": quote["liquidity"],
+        "price": quote["price"] or put_snap.price,
+    })
 
 
 def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
@@ -711,7 +722,8 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
             # tradable expiration to 37 instead. The full chain is still cached
             # from the snapshot above, so it costs a slice, not a fetch.
             if not snap.error:
-                cc_snap = _covered_call_snapshot(provider, sym, monthly, monthly_bp)
+                cc_snap = _covered_call_snapshot(provider, sym, monthly,
+                                                 monthly_bp, put_snap=snap)
                 if cc_snap is not None:
                     report.covered_call_picks.append(
                         recommender.build_covered_call_pick(

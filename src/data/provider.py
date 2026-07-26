@@ -564,6 +564,93 @@ class DataProvider:
         return result
 
     # ---------- premium finder ----------
+    def call_quote(self, symbol: str, lo: int, target: int, hi: int) -> Optional[dict]:
+        """The call she would sell, read straight from the cached chain.
+
+        A covered call needs five numbers - the expiration, the ~0.30 delta
+        strike, its delta, what it pays, and whether it can be traded. Getting
+        them via a second premium snapshot meant recomputing the whole put-side
+        analysis (realized vol, implied vol, the plan, the verdict) and throwing
+        all of it away: about half a second per name, which is twenty seconds of
+        a scan. Everything else the pick needs - quality, trend, richness,
+        earnings - is already on the put snapshot the scan just built.
+        """
+        dte = self.best_call_expiration(symbol, lo, target, hi)
+        full = self._cboe_full(symbol.upper()) if self.is_real else None
+        if dte is None or full is None:
+            return None
+        calls = [c for c in full.contracts
+                 if c.dte == dte and c.option_type == OptionType.CALL and c.abs_delta > 0]
+        if not calls:
+            return None
+        call = min(calls, key=lambda c: abs(c.abs_delta - 0.30))
+        mid = call.mid
+        if not mid or mid <= 0:
+            return None
+        spread_pct = None
+        if call.bid > 0 and call.ask > 0:
+            m = (call.bid + call.ask) / 2
+            spread_pct = ((call.ask - call.bid) / m * 100) if m > 0 else None
+        oi = call.open_interest or 0
+        if spread_pct is None:
+            liquidity = "n/a"
+        elif spread_pct <= 6 and oi >= 250:
+            liquidity = "Good"
+        elif spread_pct <= 15:
+            liquidity = "OK"
+        else:
+            liquidity = "Thin"
+        return {"dte": dte, "strike": call.strike, "delta": round(call.abs_delta, 2),
+                "credit": round(mid * 100, 0), "liquidity": liquidity,
+                "price": full.underlying_price}
+
+    def best_call_expiration(self, symbol: str, lo: int, target: int, hi: int,
+                             ) -> Optional[int]:
+        """The days-to-expiration of the best CALL to sell on this name.
+
+        Answered from the one cached full chain, in a single pass, rather than
+        by asking for a snapshot at five different targets and seeing which came
+        back tradable. Each of those snapshots re-fetched six months of history,
+        the earnings calendar and the fundamentals over the network, so the
+        covered-call search was costing four extra round trips per name and
+        adding about a minute to a Quick look.
+
+        Prefers her window (lo..hi), nearest `target`, keeping only expirations
+        whose ~0.30 delta call is actually tradable. Falls back to the most
+        tradable expiration outside the window, then to None so the caller can
+        use its own default.
+        """
+        symbol = symbol.upper()
+        full = self._cboe_full(symbol) if self.is_real else None
+        if full is None or not full.contracts:
+            return None
+        price = full.underlying_price or 0.0
+
+        def sellable(dte: int) -> bool:
+            calls = [c for c in full.contracts
+                     if c.dte == dte and c.option_type == OptionType.CALL]
+            if len(calls) < MIN_PUTS or not any(c.abs_delta > 0 for c in calls):
+                return False
+            # The strike she would actually sell, and whether its quote is one a
+            # seller can live with - a 40% bid-ask gap eats the premium whole.
+            target_call = min((c for c in calls if c.abs_delta > 0),
+                              key=lambda c: abs(c.abs_delta - 0.30))
+            if not (target_call.bid > 0 and target_call.ask > 0):
+                return False
+            mid = (target_call.bid + target_call.ask) / 2
+            if mid <= 0:
+                return False
+            return ((target_call.ask - target_call.bid) / mid * 100) <= 15
+
+        dtes = sorted({c.dte for c in full.contracts if c.dte > 0})
+        inside = [d for d in dtes if lo <= d <= hi and sellable(d)]
+        if inside:
+            return min(inside, key=lambda d: abs(d - target))
+        outside = [d for d in dtes if sellable(d)]
+        if outside:
+            return min(outside, key=lambda d: abs(d - target))
+        return None
+
     def get_premium_snapshot(self, symbol: str, target_dte: int = 30, monthly_bp: float = 50_000):
         """Premium + a clear plan (sell puts/calls, strategy, risk) - real data only."""
         symbol = symbol.upper()
