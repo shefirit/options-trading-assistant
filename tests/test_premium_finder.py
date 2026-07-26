@@ -155,3 +155,57 @@ def test_downtrend_plan_is_sell_calls():
     assert s.action == "Sell calls"
     assert "Covered Call" in s.strategy
     assert "risky" in s.risk_note.lower() or "wait" in s.risk_note.lower()
+
+
+# ---------- one NaN close used to empty the whole Picks scan ----------
+def test_annualized_vol_ignores_a_nan_close():
+    """The bug Rita hit: Yahoo returns the odd NaN close, the standard deviation
+    came out NaN, the IV/HV ratio came out NaN, every name was then graded
+    "Thin" premium, and the stock and ETF half of Picks came back empty."""
+    from src.data.premium_finder import annualized_vol
+
+    clean = [100.0 + (i % 5) for i in range(60)]
+    dirty = list(clean)
+    dirty[7] = float("nan")
+    dirty[42] = float("nan")
+
+    good = annualized_vol(clean)
+    assert good is not None and good == good          # not NaN
+    poisoned = annualized_vol(dirty)
+    assert poisoned is not None and poisoned == poisoned, "a NaN close must not poison it"
+
+
+def test_annualized_vol_returns_none_when_there_is_not_enough_real_data():
+    from src.data.premium_finder import annualized_vol
+
+    assert annualized_vol([float("nan")] * 60) is None
+    assert annualized_vol([]) is None
+    assert annualized_vol([100.0] * 5) is None
+
+
+def test_richness_says_unknown_rather_than_thin_when_it_cannot_measure():
+    """NaN failed both comparisons and fell through to "Thin" - which reads as a
+    real judgement and is a hard skip, when the truth was "could not measure"."""
+    from src.data.premium_finder import _richness
+
+    assert _richness(float("nan"), None) == "n/a"
+    assert _richness(None, float("nan")) == "n/a"
+    assert _richness(None, None) == "n/a"
+    # Real ratios still grade normally.
+    assert _richness(1.30, 0.3) == "Rich"
+    assert _richness(0.95, 0.3) == "Fair"
+    assert _richness(0.50, 0.3) == "Thin"
+
+
+def test_a_thin_verdict_is_only_reached_on_real_thin_premium():
+    from src.data.premium_finder import PremiumSnapshot, _set_verdict
+
+    unknown = PremiumSnapshot(symbol="SPY", action="Sell puts", liquidity="Good",
+                              richness="n/a", grade=None)
+    _set_verdict(unknown)
+    assert unknown.verdict != "skip", "unmeasurable premium must not be a hard skip"
+
+    genuinely_thin = PremiumSnapshot(symbol="XYZ", action="Sell puts",
+                                     liquidity="Good", richness="Thin", grade="B")
+    _set_verdict(genuinely_thin)
+    assert genuinely_thin.verdict == "skip"

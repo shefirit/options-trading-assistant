@@ -191,10 +191,18 @@ def get_vix() -> Optional[float]:
 
 
 def get_history_closes(underlying: str, period: str = "1y") -> list[float]:
-    """Daily closing prices, oldest first - used to read the trend."""
+    """Daily closing prices, oldest first - used to read the trend.
+
+    Non-finite rows are dropped here, at the source, rather than by each caller.
+    Yahoo returns the odd NaN close (a holiday boundary, a row with no print),
+    and a single one of them silently poisoned everything downstream: the
+    realized-volatility calculation came out NaN, every name was then graded
+    "Thin" premium, and the whole stock and ETF half of the Picks scan came back
+    empty. Note the volume fetcher below already guarded itself this way.
+    """
     try:
         hist = _ticker(underlying).history(period=period)
-        return [float(x) for x in hist["Close"].tolist()]
+        return [float(x) for x in hist["Close"].tolist() if x == x and x > 0]
     except Exception:
         return []
 

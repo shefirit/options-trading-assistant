@@ -77,10 +77,19 @@ class PremiumSnapshot(BaseModel):
 
 
 def annualized_vol(closes: list[float], lookback: int = 30) -> Optional[float]:
-    """Realized (historical) volatility from recent daily closes."""
-    if len(closes) < lookback + 1:
+    """Realized (historical) volatility from recent daily closes.
+
+    Drops non-finite closes first. The price history arrives with the odd NaN in
+    it (a holiday boundary, a row with no print), and one of those poisoned the
+    whole calculation: the standard deviation came out NaN, the IV/HV ratio came
+    out NaN, and every name in the Picks scan was then graded "Thin" premium and
+    silently dropped from her results.
+    """
+    clean = [c for c in closes
+             if isinstance(c, (int, float)) and math.isfinite(c) and c > 0]
+    if len(clean) < lookback + 1:
         return None
-    window = closes[-(lookback + 1):]
+    window = clean[-(lookback + 1):]
     rets = [math.log(window[i] / window[i - 1]) for i in range(1, len(window))
             if window[i - 1] > 0]
     if len(rets) < 2:
@@ -157,14 +166,18 @@ def _richness(iv_hv: Optional[float], atm_iv: Optional[float]) -> str:
     # "Fair" is the normal middle; "Rich" means clearly paid extra for the risk;
     # "Thin" is reserved for genuinely poor premium (IV well below the stock's
     # own movement).
-    if iv_hv is not None:
+    # isfinite, not "is not None": a NaN ratio failed BOTH comparisons below and
+    # fell through to "Thin", which reads as a real judgement ("poor premium")
+    # when the truth is that we could not measure it. "Thin" is a hard skip in
+    # _set_verdict, so one NaN emptied the whole stock and ETF section.
+    if iv_hv is not None and math.isfinite(iv_hv):
         if iv_hv >= 1.15:
             return "Rich"
         if iv_hv >= 0.80:
             return "Fair"
         return "Thin"
     # No realized-vol comparison - fall back to the raw IV level.
-    if atm_iv is None:
+    if atm_iv is None or not math.isfinite(atm_iv):
         return "n/a"
     if atm_iv >= 0.35:
         return "Rich"
