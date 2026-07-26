@@ -444,8 +444,14 @@ def test_covered_calls_aim_at_the_30_to_45_day_window():
     real expiration near the middle of it, not the third Friday."""
     from src.engine import recommender as R
 
-    assert (R.CC_DTE_MIN, R.CC_DTE_MAX) == (30, 45)
-    assert R.CC_DTE_MIN <= R.CC_DTE_TARGET <= R.CC_DTE_MAX
+    lo, target, hi = R.cc_dte_window()
+    assert (lo, hi) == (30, 45)
+    assert lo <= target <= hi
+    # And it comes from HER config, not from a number pinned in the code.
+    from src.engine.config_loader import get_strategy
+    entry = get_strategy("covered_call_model_2")["entry"]
+    assert (entry["short_call_dte_min"], entry["short_call_dte_target"],
+            entry["short_call_dte_max"]) == (lo, target, hi)
 
 
 def test_an_expiration_outside_the_window_is_called_out():

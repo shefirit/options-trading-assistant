@@ -498,11 +498,22 @@ CC_MIN_UPSIDE_PCT = 1.0         # % room to the strike - less and it is called a
 # about 15% a year at her ~30-day expiries, which is a genuinely strong covered
 # call on a quality large-cap - most sit nearer 1%.
 CC_STRONG_MONTHLY_YIELD = 1.25
-# Rita's call (2026-07-26): covered-call candidates want 30-45 days, not the
-# nearest monthly. Right now the monthlies sit at 26 and 54 days out, so
-# neither lands in that window - the scan has to look at real expirations
-# rather than only the third Friday, and 37 is the middle of her range.
-CC_DTE_MIN, CC_DTE_TARGET, CC_DTE_MAX = 30, 37, 45
+def cc_dte_window() -> tuple[int, int, int]:
+    """(min, target, max) days for a covered call's short call, from config.
+
+    Rita's call (2026-07-26): 30-45 days, not the nearest monthly - the
+    monthlies sit at 26 and 54 right now, so neither lands in her window.
+
+    Read from strategies.yaml rather than pinned here. This started life as
+    three module constants, which quietly broke the rule the whole app is built
+    on: her numbers live in config and the code follows. Change the rule there
+    and the Picks candidates, the Find a trade scan and this all move together.
+    """
+    entry = get_strategy("covered_call_model_2").get("entry", {})
+    target = int(entry.get("short_call_dte_target", 37))
+    lo = int(entry.get("short_call_dte_min", max(target - 7, 14)))
+    hi = int(entry.get("short_call_dte_max", target + 8))
+    return lo, target, hi
 
 
 def covered_call_model(trend: str, vix: Optional[float]) -> str:
@@ -629,9 +640,10 @@ def _explain_cc(pick: CoveredCallPick, snap: PremiumSnapshot) -> None:
         p.warnings.append(
             "You own the shares, so you collect the dividend - but a short call can be "
             "assigned early right before the ex-dividend date if it is in the money.")
-    if p.dte is not None and not (CC_DTE_MIN <= p.dte <= CC_DTE_MAX):
+    lo, _target, hi = cc_dte_window()
+    if p.dte is not None and not (lo <= p.dte <= hi):
         p.warnings.append(
-            f"This is {p.dte} days out, outside your {CC_DTE_MIN}-{CC_DTE_MAX} day window. "
+            f"This is {p.dte} days out, outside your {lo}-{hi} day window. "
             "Nothing inside that window trades well enough on this name today - the "
             "expirations in there are weeklies with almost no open interest, where the "
             "bid-ask gap costs more than the extra days of premium are worth.")

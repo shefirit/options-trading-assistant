@@ -458,12 +458,16 @@ def _picks_scan(settings, strategies, provider) -> None:
 
     # ---------- Section B: stock & ETF income plays ----------
     st.divider()
-    st.markdown("### 💰 Stock and ETF plays - puts and covered calls for income")
-    theme.note("Only the names actually worth selling are shown - anything hard to trade, in a "
-               "downtrend, weak, or paying thin premium is left out (listed at the bottom). "
-               "For each: the one-month put you'd sell (~0.30 delta), the strategy it points "
-               "to, and the dividend as a bonus. Ranked by verdict, then income; a dividend "
-               "only breaks near-ties.")
+    # Named for the put, because that is what it ranks. It used to say "puts and
+    # covered calls" while showing no covered calls at all - they now have their
+    # own section below, judged on the call rather than as an afterthought here.
+    st.markdown("### 💰 Stock and ETF plays - puts you'd sell for income")
+    theme.note("The put side: for each name, the one-month put you'd sell (~0.30 delta), the "
+               "strategy it points to - a cash secured put, or a PMCC when the shares are too "
+               "pricey - and the dividend as a bonus. Only names actually worth selling are "
+               "shown; anything hard to trade, in a downtrend, weak, or paying thin premium "
+               "is left out (listed at the bottom). Ranked by verdict, then income. "
+               "**Covered calls have their own section below.**")
     valid_income = [p for p in report.income_picks if not p.snapshot.error]
     if valid_income:
         st.dataframe(components.picks_income_dataframe(report.income_picks),
@@ -568,7 +572,8 @@ def _covered_call_snapshot(provider, sym, monthly, monthly_bp):
     """
     from src.engine import recommender
 
-    inside = [recommender.CC_DTE_TARGET, recommender.CC_DTE_MIN, recommender.CC_DTE_MAX]
+    lo, target, hi = recommender.cc_dte_window()
+    inside = [target, lo, hi]
     outside = [monthly.dte, monthly.dte + 28]      # this monthly, then the next
     best = None
     for target in list(dict.fromkeys(inside + outside)):

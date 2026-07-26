@@ -190,7 +190,13 @@ strategies:
         option_type: call
     entry:
       short_call_delta: 0.30
-      short_call_dte_target: 21
+      # Rita's call (2026-07-26): sell the covered call 30-45 days out, not 21.
+      # A 21-day call is the same day as the time exit below, so it would be
+      # written and immediately due. The target is the middle of her window;
+      # min/max bound both the Picks candidates and the Find a trade scan.
+      short_call_dte_target: 37
+      short_call_dte_min: 30
+      short_call_dte_max: 45
       protection: "Buy a 2-year ATM put (~$3,000). Sell it after 1 year (~$1,200-$1,700 left) and buy a fresh 2-year put. Net cost ~$1,500/year."
     exit:
       profit_target_pct: 50       # for the short call
@@ -220,7 +226,13 @@ strategies:
         option_type: call
     entry:
       short_call_delta: 0.30
-      short_call_dte_target: 21
+      # Rita's call (2026-07-26): sell the covered call 30-45 days out, not 21.
+      # A 21-day call is the same day as the time exit below, so it would be
+      # written and immediately due. The target is the middle of her window;
+      # min/max bound both the Picks candidates and the Find a trade scan.
+      short_call_dte_target: 37
+      short_call_dte_min: 30
+      short_call_dte_max: 45
     exit:
       profit_target_pct: 50
       time_exit_dte: 21
@@ -251,7 +263,13 @@ strategies:
         option_type: call
     entry:
       short_call_delta: 0.30
-      short_call_dte_target: 21
+      # Rita's call (2026-07-26): sell the covered call 30-45 days out, not 21.
+      # A 21-day call is the same day as the time exit below, so it would be
+      # written and immediately due. The target is the middle of her window;
+      # min/max bound both the Picks candidates and the Find a trade scan.
+      short_call_dte_target: 37
+      short_call_dte_min: 30
+      short_call_dte_max: 45
     exit:
       profit_target_pct: 50
       time_exit_dte: 21

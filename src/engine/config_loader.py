@@ -121,6 +121,11 @@ def entry_dte_window(strategy: dict[str, Any], underlying: str,
     entry = strategy.get("entry", {})
     if "dte_min" in entry and "dte_max" in entry:
         lo, hi = int(entry["dte_min"]), int(entry["dte_max"])
+    elif "short_call_dte_min" in entry and "short_call_dte_max" in entry:
+        # An explicit window beats one guessed around the target. The covered
+        # call models carry 30-45 now, and target +/- a guess would have made
+        # the scan reach out to 51.
+        lo, hi = int(entry["short_call_dte_min"]), int(entry["short_call_dte_max"])
     elif "short_call_dte_target" in entry:
         t = int(entry["short_call_dte_target"])
         lo, hi = max(14, t - 7), t + 14
