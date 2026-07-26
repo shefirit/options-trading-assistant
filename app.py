@@ -418,6 +418,8 @@ def _picks_scan(settings, strategies, provider) -> None:
     if report.funnel_note:
         theme.note("🔬 " + report.funnel_note)
 
+    _picks_best_ideas(report, strategies)
+
     # ---------- Section A: index plays ----------
     st.divider()
     st.markdown("### 🏛️ Index plays - credit spreads and iron condors")
@@ -752,6 +754,118 @@ def _liquidity_line(liquidity, spread_pct, open_interest) -> str:
         if open_interest:
             line += f", open interest {open_interest:,}"
     return line + "."
+
+
+def _to_build(strategy_key: str, symbol: str, key: str, label: str) -> None:
+    """A button that loads a pick straight into Find a trade."""
+    if st.button(label, key=key, type="primary"):
+        st.session_state["build_strategy"] = strategy_key
+        st.session_state["build_underlyings"] = [symbol]
+        st.session_state["_prev_build_strategy"] = strategy_key
+        st.success("Loaded into **🎯 Find a trade** - open that tab to scan and "
+                   "check it against your SOP.")
+
+
+def _best_idea_card(icon: str, kind: str, headline: str, why: str,
+                    strategy_key: str, symbol: str, key: str) -> None:
+    import html as _h
+
+    with st.container(border=True):
+        st.markdown(
+            f"<div style='font-size:.78rem;font-weight:700;color:{theme.SECONDARY};"
+            f"letter-spacing:.04em;'>{icon} {_h.escape(kind).upper()}</div>"
+            f"<div style='font-size:1.05rem;font-weight:800;color:{theme.INK};"
+            f"margin:2px 0 4px;'>{_h.escape(headline)}</div>"
+            f"<div style='color:{theme.CAPTION};line-height:1.55;'>{_h.escape(why)}</div>",
+            unsafe_allow_html=True)
+        _to_build(strategy_key, symbol, key, f"Set this up on {symbol} ▸")
+
+
+def _picks_best_ideas(report, strategies) -> None:
+    """The one-screen answer to "just tell me the good ones".
+
+    The scan already ranks everything, and then hands her four tables and four
+    dropdowns to read - which is still a lot of choosing for someone who asked
+    the app to choose. This is the top of each ranked list, one line each, with
+    the reason and a way straight into Find a trade. The detailed sections stay
+    below for when she wants to look properly.
+    """
+    best_index = report.index_picks[0] if report.index_picks else None
+    best_bear = report.bearish_picks[0] if report.bearish_picks else None
+    best_income = next((p for p in report.income_picks if not p.snapshot.error), None)
+    best_call = report.covered_call_picks[0] if report.covered_call_picks else None
+
+    if not any((best_index, best_bear, best_income, best_call)):
+        return
+
+    st.divider()
+    st.markdown("### ⭐ Today's best ideas")
+    theme.note("The top of each list below, in one place - so you do not have to read four "
+               "tables to find them. Every one is a candidate with a reason, never an "
+               "instruction: check it against your SOP in 🎯 Find a trade before "
+               "you place anything.")
+
+    cols = st.columns(2)
+    slot = 0
+
+    def place():
+        nonlocal slot
+        col = cols[slot % 2]
+        slot += 1
+        return col
+
+    if best_index is not None:
+        c = best_index.candidate
+        money_bit = (f"{money(c.credit)} credit against {money(c.max_loss)} of risk "
+                     f"({c.return_on_risk * 100:.0f}% return on risk)"
+                     if c is not None else "a setup at your SOP delta")
+        with place():
+            _best_idea_card(
+                "🏛️", "Best index play",
+                f"{best_index.symbol} · {best_index.strategy_name}",
+                f"{money_bit}. {best_index.why[0] if best_index.why else ''}",
+                best_index.strategy_key, best_index.symbol,
+                f"best_ix_{best_index.symbol}")
+
+    if best_income is not None:
+        s_ = best_income.snapshot
+        name = strategies.get(best_income.strategy_key, {}).get(
+            "name", best_income.strategy_key)
+        yield_bit = (f"{money(s_.credit_dollars)} a month"
+                     if s_.credit_dollars else "premium")
+        if s_.monthly_yield_pct:
+            yield_bit += f" ({s_.monthly_yield_pct:.2f}% of the cash set aside)"
+        with place():
+            _best_idea_card(
+                "💰", "Best put to sell",
+                f"{s_.symbol} · {components.short_strategy(name)}",
+                f"Sell the {s_.short_strike:g} put: {yield_bit}. "
+                f"Trend {s_.trend}, quality {s_.grade or 'ETF'}."
+                if s_.short_strike else yield_bit,
+                best_income.strategy_key, s_.symbol, f"best_inc_{s_.symbol}")
+
+    if best_call is not None:
+        with place():
+            _best_idea_card(
+                "🛡️", "Best covered call",
+                f"{best_call.symbol} · {components.short_strategy(best_call.strategy_name)}",
+                f"Sell the {best_call.call_strike:g} call {best_call.dte} days out for "
+                f"{money(best_call.call_credit or 0)} - {best_call.monthly_yield_pct:.2f}% "
+                f"for the month, about {best_call.annualized_yield_pct:.0f}% a year. "
+                f"You need 100 shares ({money(best_call.shares_cost or 0)}).",
+                best_call.strategy_key, best_call.symbol, f"best_cc_{best_call.symbol}")
+
+    if best_bear is not None:
+        cb = best_bear.candidate
+        bits = (f"{money(cb.credit)} credit against {money(cb.max_loss)} of risk"
+                if cb is not None else "a defined-risk bear call spread")
+        with place():
+            _best_idea_card(
+                "📉", "Best bearish play",
+                f"{best_bear.symbol} · {best_bear.strategy_name}",
+                f"{bits}. It is trending down, so selling puts would be the trap - "
+                "this wins if it does not rally back.",
+                best_bear.strategy_key, best_bear.symbol, f"best_bear_{best_bear.symbol}")
 
 
 def _picks_risk_block(max_loss, bp, settings, liquidity_line, settlement, events,
