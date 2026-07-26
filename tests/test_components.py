@@ -308,3 +308,55 @@ def test_decide_by_follows_the_strategy_own_time_exit():
     # A strategy exiting at 30 is due today; one exiting at 21 has nine days.
     assert _decide_by(P(), 30) == "today"
     assert _decide_by(P(), 21) != "today"
+
+
+# ---------- comparing premium on either side of the trade ----------
+def _snap(symbol="AAPL", **kw):
+    from src.data.premium_finder import PremiumSnapshot
+    base = dict(symbol=symbol, price=200.0, short_strike=190.0, short_delta=0.30,
+                credit_dollars=350.0, monthly_yield_pct=1.84,
+                annualized_yield_pct=22.0, richness="Fair", liquidity="Good",
+                grade="A", verdict="sell")
+    base.update(kw)
+    return PremiumSnapshot(**base)
+
+
+def test_the_put_comparison_shows_both_yields_and_the_strike():
+    """She compares names to find a good deal, so the yield has to be there in
+    the table - the annualised one too - not only in a detail panel."""
+    from ui.components import premium_dataframe
+
+    cols = list(premium_dataframe([_snap()]).columns)
+    for wanted in ("Verdict", "Quality", "Sell put at", "Delta",
+                   "Income $/mo", "Yield %/mo", "Yield %/yr", "Premium deal"):
+        assert wanted in cols, wanted
+
+
+def test_every_put_column_has_help_text():
+    from ui.components import premium_column_config, premium_dataframe
+
+    cfg = premium_column_config()
+    for col in premium_dataframe([_snap()]).columns:
+        if col in ("Symbol", "Watch out"):
+            continue
+        assert col in cfg, f"{col} has no tooltip"
+
+
+def test_the_two_sides_use_the_same_yield_wording():
+    """The call side reuses the covered-call table the scan uses, so the two
+    can never drift apart on what a yield means."""
+    from ui.components import covered_call_column_config, premium_column_config
+
+    puts, calls = premium_column_config(), covered_call_column_config()
+    # Streamlit column configs are plain dicts under the hood, so read the text
+    # out of the whole entry rather than a .help attribute that is not there.
+    assert "not compounded" in str(calls["Yield/yr %"])
+    assert "not compounded" in str(puts["Yield %/yr"])
+
+
+def test_an_errored_name_still_gets_a_row():
+    from ui.components import premium_dataframe
+
+    df = premium_dataframe([_snap(), _snap(symbol="ZZZZ", error="no chain")])
+    assert len(df) == 2
+    assert "no chain" in str(df.iloc[1]["Verdict"])

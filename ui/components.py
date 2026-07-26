@@ -616,8 +616,11 @@ def premium_dataframe(snapshots: list) -> "pd.DataFrame":
             "Symbol": s.symbol,
             "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
             "Quality": s.grade or "ETF",
+            "Sell put at": s.short_strike,
+            "Delta": s.short_delta,
             "Income $/mo": s.credit_dollars,
             "Yield %/mo": s.monthly_yield_pct,
+            "Yield %/yr": s.annualized_yield_pct,
             "Premium deal": s.richness,
             "Watch out": ("⚠ earnings first" if s.earnings_before_expiry
                           else "⚠ hard to trade" if s.liquidity == "Thin" else "—"),
@@ -635,8 +638,16 @@ def premium_column_config():
                  "a put can leave you owning the shares."),
         "Income $/mo": _st.column_config.NumberColumn(format="$%d",
             help="Cash you collect for one contract this month."),
+        "Sell put at": _st.column_config.NumberColumn(format="%.0f",
+            help="The strike to sell, about 0.30 delta - your SOP's cash-secured-put strike."),
+        "Delta": _st.column_config.NumberColumn(format="%.2f",
+            help="Roughly the chance the put finishes in the money and you are assigned the "
+                 "shares. Your SOP sells around 0.30."),
         "Yield %/mo": _st.column_config.NumberColumn(format="%.2f%%",
             help="That income as a % of the cash you set aside - the fair way to compare names."),
+        "Yield %/yr": _st.column_config.NumberColumn(format="%.0f%%",
+            help="The same rate repeated for a year. Simple, not compounded, and it assumes "
+                 "you keep finding the same trade - use it to compare names, not as a forecast."),
         "Premium deal": _st.column_config.TextColumn(
             help="Is the premium a good deal for the risk? Rich = you're paid MORE than this "
                  "stock's usual swings would justify (good for you). Thin = it swings a lot but "

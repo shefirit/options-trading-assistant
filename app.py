@@ -347,10 +347,13 @@ def _tab_picks(settings, strategies, provider) -> None:
     """
     theme.section("Who looks good to sell premium on right now?", "Today's picks")
 
+    # Named for what she came looking for. This was "Compare my own list", which
+    # contains neither "premium" nor "pays" - so the premium finder was sitting
+    # here in plain sight and still looked like it had been deleted.
     mode = st.radio(
         "How do you want to find a name?",
-        ["⚡ Scan everything - let the app search your whole universe and rank it",
-         "📝 Compare my own list - names I type in"],
+        ["⚡ Scan everything - let the app search my whole universe and rank it",
+         "📝 Compare premiums on names I choose - which pays the best deal"],
         key="picks_mode")
     st.write("")
     if mode.startswith("📝"):
@@ -881,12 +884,37 @@ def _income_pick_detail(pick, strategies, settings, provider) -> None:
 
 # ------------------------------------ Picks, mode 2: compare a list you type
 def _premium_compare(settings, provider) -> None:
-    """The old Premium finder, now the "bring your own names" half of Picks."""
-    from src.data import stock_universe
+    """Compare the premium on names SHE picks, on either side of the trade.
 
-    theme.note("For each name it prices the one-month put you'd sell (~0.30 delta) and lays out "
-               "the income, your odds, the safety cushion, how rich the premium really is, and "
-               "whether it's tradable. Sort the table by any column.")
+    This is the old Premium finder. It only ever priced the put, so "which of
+    these pays a good covered call" could not be answered from the table - the
+    call was buried in each name's detail panel. The side toggle fixes that, and
+    the call side reuses the covered-call pick used by the scan above so the two
+    can never disagree.
+    """
+    from src.data import stock_universe
+    from src.engine import recommender
+
+    side = st.radio(
+        "Compare the premium on:",
+        ["🔻 Puts - what I collect for agreeing to buy the shares (cash secured put)",
+         "🔺 Calls - what I collect for renting out shares I own (covered call)"],
+        key="premium_side")
+    calls = side.startswith("🔺")
+
+    if calls:
+        lo, _t, hi = recommender.cc_dte_window()
+        theme.note(f"For each name: the call your SOP would sell (~0.30 delta, {lo}-{hi} days "
+                   "out), what it pays, and that as a yield on the cost of the 100 shares - "
+                   "for the month and for a year. **Sort by any column to find the best deal**, "
+                   "and read the Verdict before the yield: the fattest premium is usually the "
+                   "one the market expects to move most.")
+    else:
+        theme.note("For each name: the put your SOP would sell (~0.30 delta, about a month "
+                   "out), what it pays, and that as a yield on the cash you set aside - for "
+                   "the month and for a year. **Sort by any column to find the best deal**, "
+                   "and read the Verdict before the yield: the fattest premium is usually the "
+                   "one the market expects to move most.")
 
     if not provider.is_real:
         st.info("Comparing premium needs real market data - connect to the internet first.")
@@ -901,43 +929,98 @@ def _premium_compare(settings, provider) -> None:
         help="Add as many as you like - the table compares them all at once.")
 
     monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
+    state_key = "premium_calls" if calls else "premium_snaps"
     if st.button("Compare", type="primary", key="premium_scan"):
         if not picks:
             st.warning("Pick at least one name.")
         else:
-            snaps = []
+            monthly = recommender.monthly_target()
+            out = []
             bar = st.progress(0.0, text="Reading option premiums...")
             for i, sym in enumerate(picks):
                 try:
-                    snaps.append(provider.get_premium_snapshot(sym, monthly_bp=monthly_bp))
+                    if calls:
+                        snap = _covered_call_snapshot(provider, sym, monthly, monthly_bp)
+                        if snap is not None:
+                            kind = "etf" if sym in etfs else "stock"
+                            out.append(recommender.build_covered_call_pick(
+                                snap, kind, provider.get_raw_info(sym), monthly,
+                                vix=None))
+                    else:
+                        out.append(provider.get_premium_snapshot(
+                            sym, monthly_bp=monthly_bp))
                 except Exception as e:
-                    from src.data.premium_finder import PremiumSnapshot
-                    snaps.append(PremiumSnapshot(symbol=sym, error=str(e)[:40]))
+                    if not calls:
+                        from src.data.premium_finder import PremiumSnapshot
+                        out.append(PremiumSnapshot(symbol=sym, error=str(e)[:40]))
                 bar.progress((i + 1) / len(picks), text=f"Checked {sym} ({i+1}/{len(picks)})")
             bar.empty()
-            from src.data import premium_finder
-            st.session_state["premium_snaps"] = premium_finder.rank(snaps)
+            if calls:
+                st.session_state[state_key] = recommender.rank_covered_call_picks(out)
+            else:
+                from src.data import premium_finder
+                st.session_state[state_key] = premium_finder.rank(out)
 
-    snaps = st.session_state.get("premium_snaps")
-    if not snaps:
+    rows = st.session_state.get(state_key)
+    if not rows:
         theme.note("Press **Compare** to build the table.")
         return
 
+    if calls:
+        _premium_calls_table(rows)
+    else:
+        _premium_puts_table(rows)
+
+
+def _premium_calls_table(picks) -> None:
+    """The covered-call comparison - the same table and numbers the scan uses."""
+    st.dataframe(components.covered_call_dataframe(picks), width="stretch",
+                 hide_index=True, column_config=components.covered_call_column_config())
+    with st.expander("🎓 How to read this and pick a good one"):
+        st.markdown(components._esc(
+            "- **Verdict** weighs everything else. Read it first: a big yield on a ❌ is "
+            "big for a reason.\n"
+            "- **Yield/mo %** is the honest way to compare names - the credit as a share of "
+            "what the 100 shares cost, so a $900 stock and a $60 stock line up fairly. "
+            "**Yield/yr %** is the same rate repeated for a year, for scale, not a promise.\n"
+            "- **Delta** is roughly the chance the shares get called away. Around 0.30 is "
+            "your SOP.\n"
+            "- **Quality** matters more here than anywhere: a covered call means you OWN "
+            "the shares, so you keep whatever the premium does not cover.\n"
+            "- **A good deal** is a decent yield on a name you would be happy holding - not "
+            "the biggest number in the column."))
+    st.divider()
+    chosen = st.selectbox("See the full plan for one name", [p.symbol for p in picks],
+                          key="premium_call_detail")
+    pick = next(p for p in picks if p.symbol == chosen)
+    with st.container(border=True):
+        components.render_covered_call_detail(pick)
+        if st.button(f"Analyze {chosen} in depth ▸", key="prem_call_to_analyze"):
+            st.session_state["analyze_sym"] = chosen
+            st.success(f"Loaded {chosen} into **🔬 Analyze** - open that tab for its "
+                       f"chart, fundamentals and every research tool.")
+
+
+def _premium_puts_table(snaps) -> None:
+    """The cash-secured-put comparison."""
     st.dataframe(components.premium_dataframe(snaps), width="stretch", hide_index=True,
                  column_config=components.premium_column_config())
-    with st.expander("🎓 What the columns mean"):
-        st.markdown(
-            "- **Verdict** - the bottom-line call: ✅ good to sell / ⚠️ okay / ❌ skip. It already "
-            "weighs everything below, so if you only read one column, read this.\n"
-            "- **Quality** - the company's A-F grade (ETFs are baskets, shown as ETF). It matters "
-            "because if the put assigns, you end up owning the shares.\n"
-            "- **Income $/mo** and **Yield %/mo** - the cash you collect, and that as a % of the "
-            "money you set aside (the fair way to compare names).\n"
-            "- **Premium deal** - is the premium a *good deal for the risk*? **Rich** = you're "
-            "paid more than this stock's usual swings would justify (good for you). **Thin** = it "
-            "moves a lot but pays little (bad). **Fair** = normal.\n"
-            "- **Watch out** - flags a landmine: an earnings report before expiry, or options "
-            "that are hard to trade.")
+    with st.expander("🎓 How to read this and pick a good one"):
+        st.markdown(components._esc(
+            "- **Verdict** is the bottom-line call: ✅ good to sell / ⚠️ okay / ❌ skip. It "
+            "already weighs everything below, so if you read one column, read this.\n"
+            "- **Quality** - the company's A-F grade (ETFs are baskets, shown as ETF). It "
+            "matters because if the put is assigned you end up owning the shares.\n"
+            "- **Income $/mo** and **Yield %/mo** - the cash you collect, and that as a % of "
+            "the money you set aside. The yield is the fair way to compare names of "
+            "different prices; **Yield %/yr** is the same rate over a year, for scale.\n"
+            "- **Premium deal** - is the premium a good deal for the RISK? **Rich** = you "
+            "are paid more than this stock's usual swings would justify (good for you). "
+            "**Thin** = it moves a lot but pays little (bad). **Fair** = normal.\n"
+            "- **Watch out** flags a landmine: earnings before expiry, or options that are "
+            "hard to trade.\n"
+            "- **A good deal** is a rich or fair premium on a name you would be happy to "
+            "own - not simply the highest yield on the list."))
 
     valid = [s for s in snaps if not s.error]
     if valid:
