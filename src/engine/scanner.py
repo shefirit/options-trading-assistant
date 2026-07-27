@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 from src.data.chain import OptionChain, OptionContract
-from src.engine import sizing
+from src.engine import rules, sizing
 from src.engine.config_loader import get_strategy
 from src.engine.models import Action, Candidate, CheckStatus, Leg, OptionType, Trade
 from src.engine.validator import validate_trade
@@ -81,17 +81,27 @@ def _make_candidate(
     short_delta = max((l.abs_delta for l in trade.short_legs), default=0.0)
 
     if report.passed:
-        fits_sop, note = True, ""
+        fits_sop, near_miss, note = True, "", ""
     else:
         fails = [r.name for r in report.results if r.status == CheckStatus.FAIL]
         only_delta_broken = fails and all("delta under" in n.lower() for n in fails)
         near = (delta_limit is not None
                 and short_delta <= delta_limit + DELTA_NEAR_MISS + 1e-9)
-        if not (only_delta_broken and near):
+        only_credit_broken = fails and all(
+            n.startswith(rules.MIN_CREDIT_CHECK_PREFIX) for n in fails)
+        if only_delta_broken and near:
+            fits_sop, near_miss = False, "delta"
+            note = (f"Delta {short_delta:.2f} is a touch above your {delta_limit:.2f} target - "
+                    "still a reasonable range, just slightly more risk. Fine if you're OK with it.")
+        elif only_credit_broken:
+            # Thin premium is worth SEEING, not hiding. Dropping these silently
+            # would leave an empty scan on a low-premium name with nothing said
+            # about why - and "no setups" reads as a data problem, not an answer.
+            fits_sop, near_miss = False, "credit"
+            note = next(r.message for r in report.results
+                        if r.status == CheckStatus.FAIL)
+        else:
             return None
-        fits_sop = False
-        note = (f"Delta {short_delta:.2f} is a touch above your {delta_limit:.2f} target - "
-                "still a reasonable range, just slightly more risk. Fine if you're OK with it.")
 
     size = sizing.estimate(trade, strategy)
     if size["max_loss"] <= 0:
@@ -106,6 +116,7 @@ def _make_candidate(
         short_delta=round(short_delta, 3),
         dte=trade.dte,
         fits_sop=fits_sop,
+        near_miss=near_miss,
         note=note,
     )
 

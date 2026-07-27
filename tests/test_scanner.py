@@ -73,10 +73,14 @@ def test_put_credit_spread_scan_respects_sop(chain):
             # Fully-fitting candidates obey the SOP put-spread delta (0.25) and pass.
             assert c.short_delta <= 0.25 + 1e-9
             assert validate_trade(c.trade).passed
-        else:
-            # Near-misses are only slightly over the limit, and say so.
+        elif c.near_miss == "delta":
+            # Delta near-misses are only slightly over the limit, and say so.
             assert 0.25 < c.short_delta <= 0.28 + 1e-9
             assert "above" in c.note.lower()
+        else:
+            # The only other reason to show a non-fitting setup is thin credit.
+            assert c.near_miss == "credit", f"unexplained near-miss: {c.near_miss!r}"
+            assert "floor is 6%" in c.note
 
 
 def test_call_credit_spread_scan(chain):
@@ -261,3 +265,40 @@ def _spx_spread(dte: int):
                 strike=4975, delta=-0.1, premium=5.0, dte=dte),
         ],
     )
+
+
+# ---------- thin-credit setups are shown, not silently dropped ----------
+
+def _put(strike, delta, mid, dte, iv=0.20):
+    return OptionContract(option_type=OptionType.PUT, strike=strike, expiration="2026-09-01",
+                          dte=dte, delta=delta, iv=iv, bid=mid - 0.1, ask=mid + 0.1,
+                          open_interest=800)
+
+
+def _thin_put_chain():
+    """An index chain where every spread is legal on delta and timing but barely
+    pays. Before the 6% credit floor existed these ranked as good trades; the
+    risk is that adding the floor makes them vanish with no reason given."""
+    contracts = [_put(strike, delta, mid, dte=45) for strike, delta, mid in
+                 [(5000, -0.22, 3.0), (4950, -0.16, 2.5),
+                  (4900, -0.11, 2.1), (4850, -0.07, 1.8)]]
+    return OptionChain(underlying="SPX", underlying_price=5100.0, contracts=contracts)
+
+
+def test_thin_credit_is_kept_as_a_flagged_near_miss():
+    """An empty scan reads as "the app is broken", not as an answer. A setup that
+    breaks ONLY the credit floor stays visible, flagged, with the number in it."""
+    cands = scanner.scan("put_credit_spread", _thin_put_chain(), width=50, max_candidates=10)
+    assert cands, "a thin-credit setup must still be shown, not dropped silently"
+    assert all(not c.fits_sop for c in cands)
+    assert all(c.near_miss == "credit" for c in cands)
+    assert all("floor is 6%" in c.note for c in cands), "the note must say what was missed"
+
+
+def test_thin_credit_near_misses_never_outrank_a_real_fit(chain):
+    """Flagged setups are context. They must never sit above a trade that
+    actually passes."""
+    cands = scanner.scan("put_credit_spread", chain, width=25, max_candidates=15)
+    flags = [c.fits_sop for c in cands]
+    if False in flags:
+        assert all(f is False for f in flags[flags.index(False):])

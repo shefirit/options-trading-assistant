@@ -92,6 +92,15 @@ def validate_trade(
     if strategy.get("family") in ("credit_spread", "single_leg"):
         results.append(rules.check_is_credit(trade))
 
+    # 4b. ...and pay ENOUGH for the width being risked. A credit is not the same
+    # as a credit worth taking. Gated on the config key so it only runs where the
+    # SOP sets a floor (the three credit-spread strategies).
+    if "min_credit_pct_of_width" in entry:
+        thin = rules.check_min_credit_pct_of_width(
+            trade, float(entry["min_credit_pct_of_width"]))
+        if thin:
+            results.append(thin)
+
     # 5. Money / risk sizing.
     size = sizing.estimate(trade, strategy)
     results.append(

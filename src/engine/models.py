@@ -120,6 +120,19 @@ class Trade(BaseModel):
         strikes = [leg.strike for leg in legs]
         return abs(max(strikes) - min(strikes))
 
+    @property
+    def spread_width(self) -> Optional[float]:
+        """One number for "how wide is this spread", or None if it has no width.
+
+        A single vertical only has one side, so that side is the answer. An iron
+        condor has two, and we take the WIDER one - the same side sizing.py uses
+        for max loss, because price can only breach one side at expiration, so
+        that is the side actually carrying the risk.
+        """
+        widths = [w for w in (self.vertical_width(OptionType.PUT),
+                              self.vertical_width(OptionType.CALL)) if w]
+        return max(widths) if widths else None
+
 
 class CheckResult(BaseModel):
     """One line in the SOP checklist the user sees (green / red / etc.)."""
@@ -177,4 +190,8 @@ class Candidate(BaseModel):
     # True = obeys every SOP rule. False = shown for context (e.g. delta is a
     # touch over your limit, like 0.12 when your rule says 0.10).
     fits_sop: bool = True
+    # Why it is a near-miss, when fits_sop is False: "delta" (the closest strike
+    # sits just past the delta limit) or "credit" (premium is under the SOP's
+    # floor). Drives the table's label; `note` carries the full explanation.
+    near_miss: str = ""
     note: str = ""

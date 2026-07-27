@@ -51,15 +51,24 @@ market_read:
   vix_stop: 28          # the day's verdict says "sit this one out" here
 
 # Underlyings the app is allowed to scan, grouped by option style.
-# European-style = cash settled, no early assignment (good for credit spreads).
+# European-style = cash settled, no early assignment.
 # US-style = you can be assigned early; you must own 100 real shares for covered calls.
+#
+# IMPORTANT - what the style split does and does NOT mean:
+#   Credit spreads and iron condors run on ANY liquid stock, ETF, or index. Your
+#   SOP's wording is "Any liquid stock, ETF, or index (e.g. SPX, QQQ, MSFT)".
+#   The European list is your PREFERRED pick (no early assignment, may enter at
+#   21 DTE), not a restriction. Stocks/ETFs are allowed - they just enter at
+#   30-49 DTE and use the $5-10 stock width. Liquidity is the gate, not style.
+#   The one real requirement: covered calls, CSP and PMCC need a name you can
+#   own shares of, so those are US-style only.
 underlyings:
-  european_style:               # for credit spreads / iron condors
+  european_style:               # cash-settled indexes - preferred for credit spreads, not required
     - SPX      # S&P 500 - your usual go-to (just an example, not the only choice)
     - NDX      # Nasdaq 100
     - RUT      # Russell 2000
     - XSP      # Mini S&P 500 (smaller version of SPX)
-  us_style:                     # ETFs for covered calls, PMCC, cash secured puts
+  us_style:                     # ETFs - required for covered calls/PMCC/CSP, also fine for credit spreads
     - SPY      # S&P 500
     - QQQ      # Nasdaq 100
     - IWM      # Russell 2000

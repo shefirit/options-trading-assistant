@@ -29,6 +29,11 @@ DTE_TOLERANCE = 7           # days
 MIN_TIME_EXIT_RUNWAY = 10   # days between entry and the time exit
 VERY_SHORT_RUNWAY = 4       # at or under this, the trade is over before it starts
 
+# The minimum-credit check's name starts with this. The scanner matches on it to
+# tell a thin-credit setup apart from other failures, so both sides must agree -
+# hence one constant rather than the string written out twice.
+MIN_CREDIT_CHECK_PREFIX = "Credit at least"
+
 
 def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
     ok = trade.underlying in allowed
@@ -239,6 +244,47 @@ def check_is_credit(trade: Trade) -> CheckResult:
             f"+${trade.net_credit_total:,.0f}" if ok
             else f"-${abs(trade.net_credit_total):,.0f}"
         ),
+    )
+
+
+def check_min_credit_pct_of_width(
+    trade: Trade, min_pct: float
+) -> Optional[CheckResult]:
+    """The credit has to be worth the width you are risking.
+
+    Her SOP floor is 6% of the spread width. It used to be a flat $3.00, which
+    only ever worked at SPX size: on a $5-wide stock spread $3.00 would be 60%
+    of the width, which does not exist at these deltas, so the flat rule
+    silently blocked every single-stock spread. A percentage scales to any
+    underlying and any width.
+
+    Returns None when there is no width to measure against (a cash secured put),
+    so the caller can append whatever comes back without checking first.
+    """
+    width = trade.spread_width
+    if width is None or width <= 0:
+        return None
+    credit = trade.net_credit_per_share
+    needed = round(width * min_pct, 2)
+    want_pct = min_pct * 100
+    got_pct = credit / width * 100
+    ok = credit >= needed - 1e-9
+    return CheckResult(
+        name=f"{MIN_CREDIT_CHECK_PREFIX} {want_pct:.0f}% of spread width",
+        status=CheckStatus.PASS if ok else CheckStatus.FAIL,
+        message=(
+            f"You collect ${credit:.2f} per share on a ${width:g} wide spread, "
+            f"which is {got_pct:.1f}% of the width. Your floor is {want_pct:.0f}% "
+            f"(${needed:.2f} here)."
+            if ok else
+            f"You only collect ${credit:.2f} per share on a ${width:g} wide spread, "
+            f"which is {got_pct:.1f}% of the width. Your SOP floor is {want_pct:.0f}%, "
+            f"so you need at least ${needed:.2f}. That is too little credit for the "
+            f"risk - widen the spread, move the short strike closer to the money, or "
+            f"wait for richer premium."
+        ),
+        expected=f"at least ${needed:.2f} per share ({want_pct:.0f}% of ${width:g})",
+        actual=f"${credit:.2f} per share ({got_pct:.1f}%)",
     )
 
 

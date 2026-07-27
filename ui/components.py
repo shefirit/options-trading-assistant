@@ -740,6 +740,13 @@ def render_checklist(report: ValidationReport) -> None:
             unsafe_allow_html=True)
 
 
+# Why a shown setup does not fully fit. Both are context, never a green light.
+_NEAR_MISS_LABEL = {
+    "delta": "⚠️ delta a bit over",
+    "credit": "⚠️ credit too thin",
+}
+
+
 def candidates_dataframe(candidates: list[Candidate]) -> pd.DataFrame:
     """Turn scanner candidates into a readable table."""
     rows = []
@@ -747,7 +754,8 @@ def candidates_dataframe(candidates: list[Candidate]) -> pd.DataFrame:
         strikes = " / ".join(f"{leg.strike:g}" for leg in c.trade.legs)
         rows.append({
             "#": i + 1,
-            "Fits my rules": "✅ yes" if c.fits_sop else "⚠️ delta a bit over",
+            "Fits my rules": "✅ yes" if c.fits_sop else _NEAR_MISS_LABEL.get(
+                c.near_miss, "⚠️ see the note"),
             "Underlying": c.trade.underlying,
             "Legs (strikes)": strikes,
             "Short delta": round(c.short_delta, 3),
@@ -772,7 +780,10 @@ def candidates_column_config():
         "Fits my rules": st.column_config.TextColumn(
             help="Whether the setup obeys every SOP rule the scanner can check. "
                  "'delta a bit over' means the closest available strike sits just "
-                 "past your delta limit - shown for context, not a green light."),
+                 "past your delta limit. 'credit too thin' means the premium is "
+                 "below your 6%-of-spread-width floor - the trade is legal in every "
+                 "other way, it just does not pay enough for the risk. Both are "
+                 "shown for context, not as a green light."),
         "Legs (strikes)": st.column_config.TextColumn(
             help="The strike prices of the options in the trade, in the order the "
                  "strategy lists them (the one you SELL first)."),

@@ -258,3 +258,88 @@ def test_profit_target_keep_handles_other_percentages():
     assert profit_target_keep(400.0, 50) == 200.0
     assert profit_target_keep(400.0, 25) == 100.0
     assert profit_target_keep(333.0, 75) == 249.75
+
+
+# ---------- minimum credit: 6% of the spread width ----------
+#
+# Her SOP used to say a flat "$3.00 per share" minimum credit. That was written
+# for a 50-wide SPX spread and quietly made every single-stock spread illegal:
+# $3.00 on a $5-wide stock spread is 60% of the width, which does not exist at
+# these deltas. Her ruling (2026-07-27) replaced it with 6% of the width, which
+# is the SAME number at SPX size ($3.00 / $50 = 6%) and scales everywhere else.
+
+def _credit_check(report):
+    from src.engine.rules import MIN_CREDIT_CHECK_PREFIX
+    return next((r for r in report.results
+                 if r.name.startswith(MIN_CREDIT_CHECK_PREFIX)), None)
+
+
+def test_flat_3_dollars_on_a_50_wide_is_exactly_the_6_percent_floor():
+    """The derivation guard. If someone later 'rounds' 6% to 5% or 10%, this
+    fails and says why: the percentage has to reproduce her original rule."""
+    trade = put_credit_spread(short_strike=5000, long_strike=4950,   # 50 wide
+                              short_premium=8.0, long_premium=5.0)   # $3.00 credit
+    check = _credit_check(validate_trade(trade))
+    assert check is not None
+    assert check.status.value == "pass", "her original $3.00-on-a-50-wide must still pass"
+
+
+def test_credit_below_6_percent_of_width_fails():
+    trade = put_credit_spread(short_strike=5000, long_strike=4950,   # 50 wide
+                              short_premium=7.0, long_premium=5.0)   # $2.00 = 4%
+    report = validate_trade(trade)
+    check = _credit_check(report)
+    assert check is not None and check.status.value == "fail"
+    assert "4.0%" in check.message and "$3.00" in check.message
+    assert not report.passed
+
+
+def test_the_floor_scales_down_to_a_stock_sized_spread():
+    """The whole point of the change: a $5-wide stock spread needs $0.30, not
+    the old $3.00 that no stock spread could ever pay."""
+    ok = put_credit_spread(underlying="MU", dte=35,
+                           short_strike=800, long_strike=795,        # $5 wide
+                           short_premium=1.30, long_premium=1.00)    # $0.30 = 6%
+    assert _credit_check(validate_trade(ok)).status.value == "pass"
+
+    thin = put_credit_spread(underlying="MU", dte=35,
+                             short_strike=800, long_strike=795,
+                             short_premium=1.20, long_premium=1.00)  # $0.20 = 4%
+    check = _credit_check(validate_trade(thin))
+    assert check.status.value == "fail"
+    assert "$0.30" in check.message, "should quote the stock-sized floor, not $3.00"
+
+
+def test_iron_condor_measures_against_the_wider_wing():
+    """Max loss comes from the wider side, because price can only breach one
+    side. The credit floor has to measure against that same side."""
+    trade = Trade(
+        strategy_key="iron_condor", underlying="SPX", contracts=1,
+        underlying_price=5100.0,
+        legs=[
+            Leg(role="long_put", action=Action.BUY, option_type=OptionType.PUT,
+                strike=4950, delta=-0.05, premium=1.0, dte=30),      # put wing 50 wide
+            Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=5000, delta=-0.14, premium=2.0, dte=30),
+            Leg(role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+                strike=5200, delta=-0.13, premium=2.2, dte=30),      # call wing 20 wide
+            Leg(role="long_call", action=Action.BUY, option_type=OptionType.CALL,
+                strike=5220, delta=0.05, premium=1.0, dte=30),
+        ])
+    assert trade.spread_width == 50.0, "must take the wider wing, not the narrower one"
+    check = _credit_check(validate_trade(trade))
+    # $2.20 credit is 11% of the 20-wide call wing but only 4.4% of the 50-wide
+    # put wing - and the put wing is the one carrying the risk.
+    assert check.status.value == "fail"
+    assert "4.4%" in check.message
+
+
+def test_cash_secured_put_has_no_width_so_no_credit_floor():
+    """A CSP is a single leg - there is no spread width to be a percentage of,
+    and the check must stay out of the way rather than invent one."""
+    trade = Trade(
+        strategy_key="cash_secured_put", underlying="SPY", contracts=1,
+        underlying_price=500.0,
+        legs=[Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                  strike=470, delta=-0.28, premium=3.0, dte=30)])
+    assert _credit_check(validate_trade(trade)) is None

@@ -38,6 +38,7 @@ strategies:
         option_type: put
     entry:
       short_leg_delta_max: 0.25   # SOP: short put delta 0.25 max (lower = safer)
+      min_credit_pct_of_width: 0.06   # SOP: credit must be >= 6% of the spread width
       dte_target: 45              # SOP: 45 DTE preferred
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
@@ -68,6 +69,7 @@ strategies:
         option_type: call
     entry:
       short_leg_delta_max: 0.10   # SOP: short call delta 0.10 and below (stricter than puts)
+      min_credit_pct_of_width: 0.06   # SOP: credit must be >= 6% of the spread width
       dte_target: 45              # SOP: ~45 DTE
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
@@ -104,6 +106,9 @@ strategies:
         option_type: call
     entry:
       short_leg_delta_max: 0.15   # SOP: 0.15 max PER LEG (total ~0.30 = 70% win)
+      # SOP: net credit must be >= 6% of ONE wing's width - the wider wing, which
+      # is the side that can actually lose (same side sizing.py uses for max loss).
+      min_credit_pct_of_width: 0.06
       dte_target: 45              # SOP: 45 DTE preferred
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
