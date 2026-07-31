@@ -299,8 +299,52 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-news-title:hover {{ text-decoration: underline; }}
 .ota-news-meta {{ font-size: 0.8rem; font-weight: 600; color: {SECONDARY}; margin-top: 2px; }}
 
+/* ---------------- the account switch: real money vs practice ----------------
+   Which book she is looking at governs every number on the My trades tab, so
+   it must never be something she has to look for. Streamlit turns a widget's
+   key into an "st-key-<key>" class on its container, which is what lets these
+   three switches be enlarged without touching any other radio in the app. */
+.st-key-trades_account, .st-key-acct_scan, .st-key-acct_ql {{
+    background: {TILE}; border: 2px solid {BORDER_STRONG}; border-radius: 14px;
+    padding: 14px 18px 10px; margin: 4px 0 12px;
+}}
+/* the question above the choices */
+.st-key-trades_account label[data-testid="stWidgetLabel"] p,
+.st-key-acct_scan label[data-testid="stWidgetLabel"] p,
+.st-key-acct_ql label[data-testid="stWidgetLabel"] p {{
+    font-size: 1.05rem !important; font-weight: 800 !important;
+    color: {INK} !important; letter-spacing: .01em;
+}}
+/* the two choices themselves - the words that must be unmissable */
+.st-key-trades_account [role="radiogroup"] label p,
+.st-key-acct_scan [role="radiogroup"] label p,
+.st-key-acct_ql [role="radiogroup"] label p {{
+    font-size: 1.45rem !important; font-weight: 800 !important;
+    color: {INK} !important; line-height: 1.3;
+}}
+.st-key-trades_account [role="radiogroup"],
+.st-key-acct_scan [role="radiogroup"],
+.st-key-acct_ql [role="radiogroup"] {{ gap: 26px; }}
+.st-key-trades_account [role="radiogroup"] label,
+.st-key-acct_scan [role="radiogroup"] label,
+.st-key-acct_ql [role="radiogroup"] label {{ align-items: center; }}
+/* a bigger dot, so the selected side is obvious at a glance and not only from
+   the text weight - colour is never the only signal */
+.st-key-trades_account [role="radiogroup"] label > div:first-child,
+.st-key-acct_scan [role="radiogroup"] label > div:first-child,
+.st-key-acct_ql [role="radiogroup"] label > div:first-child {{
+    transform: scale(1.4); margin-right: 6px;
+}}
+
 /* ---------------- phones (Rita uses the app mobile-first) ---------------- */
 @media (max-width: 640px) {{
+    /* stacked, and still large - this is the last thing to shrink */
+    .st-key-trades_account [role="radiogroup"],
+    .st-key-acct_scan [role="radiogroup"],
+    .st-key-acct_ql [role="radiogroup"] {{ gap: 10px; }}
+    .st-key-trades_account [role="radiogroup"] label p,
+    .st-key-acct_scan [role="radiogroup"] label p,
+    .st-key-acct_ql [role="radiogroup"] label p {{ font-size: 1.25rem !important; }}
     .block-container {{ padding-left: 0.9rem; padding-right: 0.9rem; padding-top: 0.5rem; }}
     .ota-hero-title {{ font-size: 1.4rem; }}
     .ota-hero-sub {{ font-size: 0.95rem; }}
