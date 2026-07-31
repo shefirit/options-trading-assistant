@@ -61,20 +61,36 @@ def _pct(x: Optional[float], nd: int = 0) -> str:
     return f"{x * 100:.{nd}f}%" if x is not None else "-"
 
 
-def _render(chart, height: int) -> None:
+# Roughly how wide one character of a 13px label is, and the slack on top.
+# Used to reserve real space for the y-axis labels rather than trusting Vega's
+# own estimate, which came up about a character short: "13/7 - 19/7" rendered
+# as "3/7 - 19/7" while the shorter labels beside it were fine.
+_CHAR_PX = 7.6
+_LABEL_SLACK_PX = 18
+
+
+def _label_pad(labels: list[str]) -> int:
+    """Room to reserve on the left for the longest axis label."""
+    longest = max((len(str(x)) for x in labels), default=0)
+    return int(longest * _CHAR_PX + _LABEL_SLACK_PX)
+
+
+def _render(chart, height: int, labels: Optional[list[str]] = None) -> None:
     """Draw a chart so nothing at its edges gets cut off.
 
     Vega sizes the plotting area first and lets axis labels and value text hang
-    outside it, so a long y-axis label lost its first characters ("/29 - 7/5")
-    and a bar's value label ran off the right ("$2,97"). autosize fit-x with
-    contains:padding makes the labels part of what has to fit.
+    outside it. autosize fit-x asks it to make them fit, but on a LAYERED chart
+    (bars plus a goal line) Vega-Lite does not honour fit against a container
+    width, so the longest label still lost its first character. Reserving the
+    space explicitly from the labels themselves is what actually holds.
     """
     st.altair_chart(
         chart.properties(
             height=height,
-            padding={"left": 6, "right": 46, "top": 6, "bottom": 6},
+            padding={"left": _label_pad(labels or []), "right": 46,
+                     "top": 6, "bottom": 6},
             # Set through properties, not configure_autosize: a layered chart
-            # (bars plus the goal line) has no configure_autosize at all.
+            # has no configure_autosize at all.
             autosize=alt.AutoSizeParams(type="fit-x", contains="padding"),
         ).configure_view(strokeWidth=0),
         width="stretch")
@@ -345,7 +361,8 @@ def render_weeks(report: dict, weekly_goal: float) -> None:
         return
     theme.section("Was it steady, or was it one good week?", "By week")
 
-    _render(weeks_chart(weeks, weekly_goal), height=max(160, 52 * len(weeks)))
+    _render(weeks_chart(weeks, weekly_goal), height=max(160, 52 * len(weeks)),
+            labels=[w["label"] for w in weeks])
 
     best = report["best_week"]
     if best and best["banked"] > 0:
@@ -484,7 +501,8 @@ def render_underlyings(report: dict) -> None:
     if not rows:
         return
     theme.section("Which names did the earning?", "Top producers")
-    _render(producers_chart(rows), height=max(140, 46 * len(rows)))
+    _render(producers_chart(rows), height=max(140, 46 * len(rows)),
+            labels=[r["name"] for r in rows])
 
 
 # ---------------------------------------------------------- trade management

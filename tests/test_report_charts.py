@@ -115,3 +115,19 @@ def test_week_labels_are_written_day_before_month():
                       mode="practice")
     # 29 June 2026 is a Monday, so the week runs 29/6 to 5/7.
     assert report["weeks"][0]["label"] == "29/6 - 5/7"
+
+
+# ------------------------------------------------- room reserved for labels
+def test_the_left_padding_grows_with_the_longest_label():
+    """The second round of this bug: autosize fit-x is not honoured on a
+    LAYERED chart against a container width, so "13/7 - 19/7" still lost its
+    first character. The space has to be reserved explicitly."""
+    short = ir._label_pad(["SMH", "SPX"])
+    long = ir._label_pad(["29/6 - 5/7", "13/7 - 19/7", "27/7 - 2/8"])
+    assert long > short
+    # Enough for eleven characters at 13px, with slack on top.
+    assert long >= 11 * 7 + 10
+
+
+def test_an_empty_chart_reserves_nothing_rather_than_crashing():
+    assert ir._label_pad([]) >= 0
