@@ -2896,8 +2896,7 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real") -> N
     components.render_month_bars(summaries, monthly_goal)
 
 
-def _open_section(items, strategies, provider, priced_at, settings,
-                  mode: str = "real") -> None:
+def _open_section(items, strategies, provider, priced_at) -> None:
     """Every open trade at a glance, then one of them in full detail."""
     from src.engine import positions as pos_mod
 
@@ -2906,16 +2905,6 @@ def _open_section(items, strategies, provider, priced_at, settings,
         st.success("No open trades right now. Record one with **Quick Log** in Records "
                    "below, or build one in 🎯 Find a trade.")
         return
-
-    # What they add up to, before the table that shows them one by one.
-    prices = {it["position"].underlying: it["live"].get("underlying_price")
-              for it in items if it["live"].get("underlying_price")}
-    components.render_total_at_risk(
-        pos_mod.total_at_risk([it["position"] for it in items], prices,
-                              float(settings["account"]["starting_capital"])),
-        float(settings["account"]["starting_capital"]),
-        float(settings["targets"]["monthly"]),
-        real_money=(mode == "real"))
 
     theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
                "few minutes, or press ↻ Refresh at the top.")
@@ -3164,7 +3153,7 @@ def _tab_trades(settings, strategies, provider) -> None:
         st.divider()
         _today_section(items, provider)
     st.divider()
-    _open_section(items, strategies, provider, priced_at, settings, mode)
+    _open_section(items, strategies, provider, priced_at)
     st.divider()
     _results_section(all_pos, settings, bp_used, mode)
     st.divider()
