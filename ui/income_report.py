@@ -47,6 +47,12 @@ def _d(x: float, decimals: int = 0) -> str:
     return f"&#36;{x:,.{decimals}f}"
 
 
+def _signed(x: float) -> str:
+    """Dollars with the minus in front of the sign, not after it - "-$4,826"
+    rather than "$-4,826", which reads as a typo."""
+    return f"-{_d(abs(x))}" if x < 0 else _d(x)
+
+
 def _esc(text: str) -> str:
     return _html.escape(str(text), quote=True)
 
@@ -113,17 +119,58 @@ def render_band(report: dict, goal: float) -> None:
 
 
 # ------------------------------------------------------------------ the tiles
-def _tile(label: str, value: str, sub: str, tone: str = theme.INK) -> str:
+def _tile(label: str, value: str, sub: str, tone: str = theme.INK,
+          icon: str = "") -> str:
+    head = (f"<span style='font-size:1.05rem;margin-right:6px;'>{icon}</span>"
+            if icon else "")
     return (
         f"<div style='flex:1 1 165px;min-width:165px;background:{theme.CARD};"
         f"border:1px solid {theme.BORDER_STRONG};border-radius:14px;"
         f"padding:14px 16px;'>"
         f"<div style='font-size:.76rem;font-weight:800;color:{theme.SECONDARY};"
-        f"letter-spacing:.05em;'>{label}</div>"
+        f"letter-spacing:.05em;'>{head}{label}</div>"
         f"<div style='font-size:1.7rem;font-weight:800;color:{tone};"
         f"line-height:1.2;margin:2px 0;'>{value}</div>"
         f"<div style='font-size:.85rem;font-weight:600;color:{theme.SECONDARY};"
         f"line-height:1.45;'>{sub}</div></div>")
+
+
+def render_goals(report: dict, settings: dict) -> None:
+    """Her plan on the page: the goal, the budget, and where this month sits
+    against both. The report is meaningless without the numbers it is being
+    measured against, and those numbers used to live only in a config file."""
+    goal = float(settings["targets"]["monthly"])
+    weekly_goal = float(settings["targets"]["weekly"])
+    capital = float(settings["account"]["starting_capital"])
+    bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
+
+    banked, bp = report["banked"], report["bp_opened"]
+    to_go = max(goal - banked, 0.0)
+    bp_share = (bp / bp_limit) if bp_limit else 0.0
+    bp_tone = (theme.RED if bp_share >= 1 else theme.AMBER
+               if bp_share >= 0.8 else theme.GREEN)
+    goal_tone = theme.GREEN if banked >= goal else theme.INK
+
+    tiles = [
+        _tile("CAPITAL", _d(capital), "what the account holds",
+              theme.INK, "🏦"),
+        _tile("MONTHLY GOAL", _d(goal),
+              (f"met - {_d(banked - goal)} past it" if banked >= goal
+               else f"{_d(to_go)} still to go"), goal_tone, "🎯"),
+        _tile("WEEKLY GOAL", _d(weekly_goal),
+              "the pace that gets you there", theme.INK, "📅"),
+        _tile("BUYING-POWER BUDGET", _d(bp_limit),
+              f"{_d(bp)} committed &middot; {_pct(bp_share)} used",
+              bp_tone, "🧮"),
+    ]
+    st.markdown(
+        f"<div style='display:flex;gap:12px;flex-wrap:wrap;'>{''.join(tiles)}</div>",
+        unsafe_allow_html=True)
+    st.write("")
+    st.progress(min(max(banked / goal, 0.0), 1.0) if goal else 0.0)
+    theme.note("Change any of these four in **⚙️ Settings → Your goals and budget**. "
+               "They drive this whole page, so the report follows the moment you "
+               "save.")
 
 
 def render_tiles(report: dict, goal: float, bp_limit: float) -> None:
@@ -142,18 +189,20 @@ def render_tiles(report: dict, goal: float, bp_limit: float) -> None:
     tiles = [
         _tile("COST TO CLOSE", _d(report["cost_to_close"]),
               "spent buying positions back - the gap between premium sold "
-              "and banked"),
+              "and banked", theme.INK, "💸"),
         _tile("PREMIUM CAPTURED", _pct(cap) if cap is not None else "-",
               (f"of the credit kept on {report['capture_trades']} credit "
                f"trades" if cap is not None else "no credit trades closed yet"),
-              cap_tone),
+              cap_tone, "🎯"),
         _tile("WIN RATE", _pct(win) if win is not None else "-",
-              f"{report['wins']} won &middot; {report['losses']} lost"),
+              f"{report['wins']} won &middot; {report['losses']} lost",
+              theme.INK, "🏅"),
         _tile("PER CLOSED TRADE", _d(per_close) if per_close is not None else "-",
-              "average result, wins and losses together"),
+              "average result, wins and losses together", theme.INK, "📊"),
         _tile("ACTIVE DAYS", str(report["active_days"]),
               (f"{_d(avg_day)} a day you traded"
-               if avg_day is not None else "days anything happened")),
+               if avg_day is not None else "days anything happened"),
+              theme.INK, "📆"),
     ]
     # Buying power is the one number here that is about RISK rather than
     # reward, so it gets a tile of its own and turns amber before the limit,
@@ -166,7 +215,7 @@ def render_tiles(report: dict, goal: float, bp_limit: float) -> None:
         tiles.append(_tile(
             "BUYING POWER USED", _d(bp),
             f"of your {_d(bp_limit)} monthly budget &middot; {_pct(bp_share)}",
-            bp_tone))
+            bp_tone, "🧮"))
     st.markdown(
         f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;'>"
         f"{''.join(tiles)}</div>", unsafe_allow_html=True)
@@ -303,6 +352,53 @@ def _breakdown_table(rows: list[dict], name_col: str) -> None:
     })
 
 
+def render_money_math(report: dict) -> None:
+    """Premium sold, minus what closing it cost, equals what was banked - laid
+    out as a small statement rather than hidden behind a link.
+
+    The gap between the big premium number and the money in the account is
+    where an income report can fool the person reading it, so the subtraction
+    is done in the open, on the page.
+    """
+    lines = [
+        ("Premium sold this month", report["premium_sold"], theme.GREEN),
+        ("Less what you paid to close positions", -report["cost_to_close"],
+         theme.RED),
+    ]
+    body = "".join(
+        f"<tr><td style='padding:7px 14px 7px 0;color:{theme.INK};"
+        f"font-size:1rem;'>{_esc(label)}</td>"
+        f"<td style='padding:7px 0;text-align:right;font-weight:800;"
+        f"color:{color};font-size:1.05rem;'>{_signed(value)}</td></tr>"
+        for label, value, color in lines)
+    st.markdown(
+        f"<div style='background:{theme.TILE};border:1px solid "
+        f"{theme.BORDER_STRONG};border-radius:14px;padding:16px 18px;'>"
+        f"<div style='font-size:.78rem;font-weight:800;color:{theme.SECONDARY};"
+        f"letter-spacing:.05em;margin-bottom:6px;'>HOW PREMIUM SOLD BECAME "
+        f"MONEY BANKED</div>"
+        f"<table style='width:100%;border-collapse:collapse;'>{body}"
+        f"<tr><td style='padding:10px 14px 0 0;border-top:2px solid "
+        f"{theme.BORDER_STRONG};font-weight:800;color:{theme.INK};"
+        f"font-size:1.05rem;'>Banked</td>"
+        f"<td style='padding:10px 0 0;border-top:2px solid "
+        f"{theme.BORDER_STRONG};text-align:right;font-weight:800;"
+        f"color:{theme.GREEN};font-size:1.3rem;'>"
+        f"{_d(report['banked'])}</td></tr></table></div>",
+        unsafe_allow_html=True)
+    theme.note(
+        "These two lines do not always subtract exactly to the third, and that "
+        "is correct rather than a rounding bug. Premium sold counts what you "
+        "sold **this month**; banked counts what settled **this month**. A trade "
+        "opened in June and closed in July has its premium in June and its "
+        "result in July.")
+    if report["roll_income"]:
+        theme.note(
+            f"**\\${report['roll_income']:,.0f}** of the banked total came from "
+            "rolling short calls. That credit is yours the day you roll, even "
+            "on a trade that is still open.")
+
+
 def render_strategy(report: dict) -> None:
     rows = report["by_strategy"]
     if not rows:
@@ -311,6 +407,7 @@ def render_strategy(report: dict) -> None:
     left, right = st.columns([1, 1])
     with left:
         _donut(rows, "Strategy")
+        render_money_math(report)
     with right:
         _breakdown_table(rows, "Strategy")
     top = rows[0]
@@ -415,46 +512,9 @@ def render(report: dict, settings: dict, pace: Optional[dict] = None,
     render_tiles(report, goal, float(settings["risk_limits"]["monthly_bp_limit"]))
     render_pace(pace, goal)
 
-    # The honest arithmetic, spelled out. The gap between the big premium
-    # number and the money in the account is where beginners get fooled by
-    # their own reports, so the report does that subtraction out loud.
-    st.write("")
-    with st.expander("How premium sold becomes money banked"):
-        rolls = report["roll_income"]
-        lines = [
-            ("Premium sold this month", report["premium_sold"], theme.GREEN),
-            ("Less what you paid to close positions", -report["cost_to_close"],
-             theme.RED),
-        ]
-        body = "".join(
-            f"<tr><td style='padding:6px 14px 6px 0;color:{theme.INK};"
-            f"font-size:1rem;'>{_esc(label)}</td>"
-            f"<td style='padding:6px 0;text-align:right;font-weight:800;"
-            f"color:{color};font-size:1rem;'>{_d(value)}</td></tr>"
-            for label, value, color in lines)
-        st.markdown(
-            f"<table style='width:100%;max-width:520px;border-collapse:collapse;'>"
-            f"{body}"
-            f"<tr><td style='padding:10px 14px 0 0;border-top:2px solid "
-            f"{theme.BORDER_STRONG};font-weight:800;color:{theme.INK};"
-            f"font-size:1.05rem;'>Banked</td>"
-            f"<td style='padding:10px 0 0;border-top:2px solid "
-            f"{theme.BORDER_STRONG};text-align:right;font-weight:800;"
-            f"color:{theme.GREEN};font-size:1.15rem;'>"
-            f"{_d(report['banked'])}</td></tr></table>",
-            unsafe_allow_html=True)
-        theme.note(
-            "These two lines do not always subtract exactly to the third, and "
-            "that is correct rather than a rounding bug. Premium sold counts "
-            "what you sold **this month**; banked counts what settled **this "
-            "month**. A trade opened in June and closed in July has its premium "
-            "in June and its result in July.")
-        if rolls:
-            theme.note(
-                f"**\\${rolls:,.0f}** of the banked total came from rolling "
-                "short calls. That credit is yours the day you roll, even on a "
-                "trade that is still open.")
-
+    st.divider()
+    theme.section("What you are aiming at", "Goals and budget")
+    render_goals(report, settings)
     st.divider()
     render_weeks(report, weekly_goal)
     st.divider()
@@ -463,3 +523,37 @@ def render(report: dict, settings: dict, pace: Optional[dict] = None,
     render_underlyings(report)
     st.divider()
     render_management(report)
+    st.divider()
+    render_at_a_glance(report, settings)
+
+
+def render_at_a_glance(report: dict, settings: dict) -> None:
+    """The month in one strip, at the end - the same few numbers the report
+    opened with, for when she has scrolled all the way down and wants the
+    summary again without going back up."""
+    goal = float(settings["targets"]["monthly"])
+    cap = report["capture_pct"]
+    cells = [
+        ("💰", _d(report["premium_sold"]), "PREMIUM SOLD"),
+        ("🏦", _d(report["banked"]), "BANKED"),
+        ("🎯", _pct((report["banked"] / goal) if goal else 0), "OF GOAL"),
+        ("🤝", str(report["trades_opened"]), "TRADES OPENED"),
+        ("✅", str(report["trades_closed"]), "TRADES CLOSED"),
+        ("📆", str(report["active_days"]), "ACTIVE DAYS"),
+        ("📈", _pct(cap) if cap is not None else "-", "PREMIUM KEPT"),
+    ]
+    body = "".join(
+        f"<div style='flex:1 1 130px;min-width:130px;text-align:center;'>"
+        f"<div style='font-size:1.3rem;'>{icon}</div>"
+        f"<div style='font-size:1.35rem;font-weight:800;color:#FFFFFF;"
+        f"line-height:1.2;'>{value}</div>"
+        f"<div style='font-size:.72rem;font-weight:800;color:{BAND_SUB};"
+        f"letter-spacing:.05em;'>{label}</div></div>"
+        for icon, value, label in cells)
+    st.markdown(
+        f"<div style='background:{BAND};border-radius:16px;padding:18px 20px;'>"
+        f"<div style='color:{BAND_SUB};font-size:.78rem;font-weight:800;"
+        f"letter-spacing:.06em;margin-bottom:12px;'>"
+        f"{_esc(report['label'].upper())} AT A GLANCE</div>"
+        f"<div style='display:flex;gap:14px;flex-wrap:wrap;'>{body}</div></div>",
+        unsafe_allow_html=True)

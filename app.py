@@ -3332,6 +3332,75 @@ def _plan_metrics(settings, per_row: int = 4) -> None:
         cols[i % per_row].metric(label, v)
 
 
+def _plan_editor(settings) -> None:
+    """Set the four numbers that define the plan, from inside the app.
+
+    They drive the goal bars, the pace read and the buying-power guardrail, so
+    editing them by hand in a YAML file was the one part of her own plan she
+    could not change without a text editor.
+    """
+    from src.engine import config_loader, plan_settings
+
+    current = plan_settings.read(settings)
+
+    with st.form("plan_form"):
+        c1, c2 = st.columns(2)
+        capital = c1.number_input(
+            "Capital in the account ($)", min_value=0.0, step=1000.0,
+            value=float(current["capital"]), format="%.0f",
+            help="What the account holds. Everything shown as a percentage of "
+                 "your account measures against this.")
+        bp_limit = c2.number_input(
+            "Monthly buying-power budget ($)", min_value=0.0, step=1000.0,
+            value=float(current["bp_limit"]), format="%.0f",
+            help="The most buying power you will commit across a whole month. "
+                 "A cumulative budget - closing a trade early does not hand its "
+                 "room back.")
+        c3, c4 = st.columns(2)
+        monthly = c3.number_input(
+            "Monthly income goal ($)", min_value=0.0, step=100.0,
+            value=float(current["monthly"]), format="%.0f",
+            help="What the month's income report measures against.")
+        auto = c4.checkbox(
+            "Set the weekly goal from the monthly one", value=True,
+            help="A month is 52/12 weeks, not 4. Your $3,500 and $808 already "
+                 "sit on exactly that ratio.")
+        weekly = st.number_input(
+            "Weekly income goal ($)", min_value=0.0, step=10.0,
+            value=float(plan_settings.weekly_from_monthly(monthly) if auto
+                        else current["weekly"]),
+            format="%.0f", disabled=auto,
+            help="The same target at the rhythm you actually trade in - the "
+                 "dashed line on the by-week chart.")
+        submitted = st.form_submit_button("Save my plan", type="primary")
+
+    if submitted:
+        values = {"capital": capital, "monthly": monthly,
+                  "weekly": (plan_settings.weekly_from_monthly(monthly)
+                             if auto else weekly),
+                  "bp_limit": bp_limit}
+        try:
+            plan_settings.save(values)
+        except ValueError as e:
+            st.error(str(e))
+        else:
+            config_loader.clear_cache()
+            st.success(f"Saved. Goal **{money(values['monthly'])} a month** "
+                       f"({money(values['weekly'])} a week) on "
+                       f"{money(values['capital'])}, with a "
+                       f"{money(values['bp_limit'])} monthly buying-power budget.")
+            st.rerun()
+
+    theme.note("These four numbers drive the goal bars in **📒 My trades**, the "
+               "pace read on the income report, and the buying-power warning in "
+               "**🎯 Find a trade**.")
+    theme.note("**One caveat on the hosted app:** a saved plan lives in the app's "
+               "own file, and the hosted version rebuilds that file whenever it "
+               "restarts or updates - so a change made here can be lost. If you "
+               "want new numbers to stick for good, tell me and I will put them "
+               "in permanently.")
+
+
 def _tab_settings(settings, provider) -> None:
     """The one home for connections, data status, and her plan numbers.
 
@@ -3354,10 +3423,9 @@ def _tab_settings(settings, provider) -> None:
     _connect_schwab_ui(provider)
 
     st.divider()
-    st.markdown("#### 🎯 Your plan")
+    st.markdown("#### 🎯 Your goals and budget")
     _plan_metrics(settings)
-    theme.note("These numbers come from `config/settings.yaml` - your capital, income goals, "
-               "and the monthly buying-power limit every checklist enforces.")
+    _plan_editor(settings)
     st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
     live = _live_from(settings)
     if live is None:

@@ -121,7 +121,18 @@ def test_settings_tab_shows_connections_and_plan(demo_app):
     at = demo_app.run()
     all_md = " ".join(str(m.value) for m in at.markdown)
     assert "Where your trades log" in all_md
-    assert "Your plan" in all_md
+    assert "Your goals and budget" in all_md
+
+
+def test_the_plan_numbers_can_be_edited_in_the_app(demo_app):
+    """Capital, the goals and the buying-power budget drive every progress bar
+    in the app, and used to be changeable only by editing a YAML file."""
+    at = demo_app.run()
+    labels = [i.label for i in at.number_input]
+    assert "Capital in the account ($)" in labels
+    assert "Monthly income goal ($)" in labels
+    assert "Weekly income goal ($)" in labels
+    assert "Monthly buying-power budget ($)" in labels
 
 
 def test_glossary_is_reachable_from_every_tab_and_filters(demo_app):
