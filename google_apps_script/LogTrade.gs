@@ -1,29 +1,39 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
- * VERSION 7 - logs each trade two ways, blanks leftover sample rows so they stop
- * showing #VALUE!, and finds your totals row automatically so it is never
- * overwritten even if rows shift:
- *   1. A hidden, machine-readable tab ("Options Assistant Log") that powers the
- *      app's My trades screen (tracking, results, delete). Created automatically.
- *   2. A human row in your "App Trades" tab (a copy of your monthly M(1) sheet),
- *      in your own columns, with the profit/commission/bucket formulas filled in
- *      so it computes just like your teacher's format.
+ * VERSION 8 - real money and practice money live in SEPARATE TABS.
+ *
+ *   "Real Money Log"       every trade placed with real money
+ *   "Practice Log"         every trade placed in thinkorswim PaperMoney
+ *   "Options Assistant Log"  your original tab: read-only history from before
+ *                            the two books were split. Nothing is ever written
+ *                            to it again, and everything in it is practice -
+ *                            it all predates the day you funded the account.
+ *
+ * Both new tabs are created automatically the first time a trade of that kind
+ * is logged. NOTHING in your existing tab is moved, renamed or deleted.
+ *
+ * Which tab a row goes to is decided by its "Account" column, and when the app
+ * reads back, the TAB is what decides which book a trade belongs to - so a row
+ * cannot be in the wrong book even if that cell is edited by hand.
  *
  * If you had an older version, paste this whole file over it, then: Deploy ->
  * Manage deployments -> (pencil) Edit -> Version: New version -> Deploy. The web
  * app URL stays the same.
  *
- * NOTE (2026-07-14): the App Trades mirror (way 2) is RETIRED - Rita moved to
- * the app's English month-by-month tracking, so the app no longer sends the
- * "mirror" field and doPost's mirror branch simply never runs. The code stays
- * for compatibility; no redeploy was needed. The App Trades tab is a frozen
- * archive.
+ * NOTE (2026-07-14): the App Trades mirror is RETIRED - Rita moved to the app's
+ * English month-by-month tracking, so the app no longer sends the "mirror"
+ * field and doPost's mirror branch simply never runs. The code stays for
+ * compatibility. The App Trades tab is a frozen archive.
  */
 
-// ---- the two tabs ----
-var MACHINE_TAB = "Options Assistant Log";   // created automatically; app reads this
-var MIRROR_TAB = "App Trades";               // your M(1)-format copy; must already exist
+// ---- the trade books ----
+var REAL_TAB = "Real Money Log";             // created automatically
+var PAPER_TAB = "Practice Log";              // created automatically
+var LEGACY_TAB = "Options Assistant Log";    // read-only history, never written
+var MIRROR_TAB = "App Trades";               // frozen archive of the M(1) format
+
+var ACCOUNT_COL_NAME = "Account";
 
 // ---- App Trades layout (1-based column numbers; header is on ROW 4) ----
 var MIRROR_HEADER_ROW = 4;
@@ -41,14 +51,27 @@ function _json(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function _machineSheet() {
+// The tab a trade of this account belongs in, created on first use.
+function _bookSheet(account) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(MACHINE_TAB);
-  if (!sheet) { sheet = ss.insertSheet(MACHINE_TAB); }
+  var name = (account === "real") ? REAL_TAB : PAPER_TAB;
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) { sheet = ss.insertSheet(name); }
   return sheet;
 }
 
-function _sheet() { return _machineSheet(); }   // doGet(mode=rows) reads this
+// Every tab the app reads, each with the book it belongs to. The tab decides
+// the book - that is what "completely separate" means here.
+function _allBooks() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var out = [];
+  var wanted = [[REAL_TAB, "real"], [PAPER_TAB, "paper"], [LEGACY_TAB, "paper"]];
+  for (var i = 0; i < wanted.length; i++) {
+    var sheet = ss.getSheetByName(wanted[i][0]);
+    if (sheet) { out.push({ sheet: sheet, account: wanted[i][1] }); }
+  }
+  return out;
+}
 
 function _mirrorSheet() {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MIRROR_TAB);  // null if absent
@@ -59,19 +82,19 @@ function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
 
-    // Delete a trade everywhere (by Trade ID).
+    // Delete a trade everywhere (by Trade ID), whichever book it is in.
     if (data.action === "delete" && data.trade_id) {
       var removed = _deleteMachineRows(String(data.trade_id));
       _clearMirrorRow(String(data.trade_id));
       return _json({ ok: true, deleted: removed });
     }
 
-    // Append the machine (tracking) row - unchanged behaviour.
     var header = data.header || [];
     var row = data.row || [];
-    _appendMachineRow(header, row);
+    var sheet = _appendMachineRow(header, row);
 
-    // Mirror into the human App Trades tab.
+    // Mirror into the human App Trades tab (retired - the app stopped sending
+    // this field, so this branch no longer runs).
     if (data.mirror) {
       if (data.mirror.close) {
         _updateMirrorClose(String(data.mirror.trade_id), Number(data.mirror.realized_pl));
@@ -80,14 +103,25 @@ function doPost(e) {
       }
     }
 
-    return _json({ ok: true, row: _machineSheet().getLastRow() });
+    return _json({ ok: true, tab: sheet.getName(), row: sheet.getLastRow() });
   } catch (err) {
     return _json({ ok: false, error: String(err) });
   }
 }
 
+// Read the row's Account cell to decide which book it belongs in. Anything
+// that is not exactly "real" goes to practice: counting a practice trade as
+// real income is the one mistake this must never make, so "not sure" means
+// practice.
+function _accountFromRow(header, row) {
+  var i = header.indexOf(ACCOUNT_COL_NAME);
+  if (i < 0 || i >= row.length) { return "paper"; }
+  return (String(row[i]).trim().toLowerCase() === "real") ? "real" : "paper";
+}
+
 function _appendMachineRow(header, row) {
-  var sheet = _machineSheet();
+  var account = _accountFromRow(header, row);
+  var sheet = _bookSheet(account);
   if (sheet.getLastRow() === 0 && header.length > 0) {
     sheet.appendRow(header);
   } else if (header.length > 0 && sheet.getLastRow() > 0) {
@@ -97,18 +131,24 @@ function _appendMachineRow(header, row) {
     }
   }
   if (row.length > 0) { sheet.appendRow(row); }
+  return sheet;
 }
 
+// Delete every row of this trade, in whichever book holds it. The legacy tab is
+// included so old trades can still be removed from the app.
 function _deleteMachineRows(tradeId) {
-  var sheet = _machineSheet();
-  var last = sheet.getLastRow();
-  if (last < 2) { return 0; }
-  var values = sheet.getRange(1, 1, last, sheet.getLastColumn()).getValues();
-  var idCol = values[0].indexOf("Trade ID");
-  if (idCol < 0) { return 0; }
+  var books = _allBooks();
   var deleted = 0;
-  for (var r = last; r >= 2; r--) {
-    if (String(values[r - 1][idCol]) === tradeId) { sheet.deleteRow(r); deleted++; }
+  for (var b = 0; b < books.length; b++) {
+    var sheet = books[b].sheet;
+    var last = sheet.getLastRow();
+    if (last < 2) { continue; }
+    var values = sheet.getRange(1, 1, last, sheet.getLastColumn()).getValues();
+    var idCol = values[0].indexOf("Trade ID");
+    if (idCol < 0) { continue; }
+    for (var r = last; r >= 2; r--) {
+      if (String(values[r - 1][idCol]) === tradeId) { sheet.deleteRow(r); deleted++; }
+    }
   }
   return deleted;
 }
@@ -223,22 +263,53 @@ function _clearMirrorRow(tradeId) {
 }
 
 // ------------------------------------------------------------ GET
-// mode=rows -> the machine tab as JSON (used by My trades).
+// mode=rows -> every book as one JSON table (used by My trades).
+//
+// The rows come back merged, each one carrying the Account of the TAB it was
+// read from. That is deliberate: the tab is the record of which book a trade is
+// in, so editing the Account cell by hand cannot move a trade between books.
 function doGet(e) {
   try {
     if (e && e.parameter && e.parameter.mode === "rows") {
-      var sheet = _sheet();
-      var last = sheet.getLastRow();
-      var header = [], rows = [];
-      if (last >= 1) {
+      var books = _allBooks();
+      var header = [];
+      var tables = [];
+
+      // Read every tab first, so the widest header wins - the legacy tab is one
+      // column narrower than the two new ones.
+      for (var b = 0; b < books.length; b++) {
+        var sheet = books[b].sheet;
+        var last = sheet.getLastRow();
+        if (last < 1) { continue; }
         var values = sheet.getRange(1, 1, last, sheet.getLastColumn()).getValues();
-        header = values[0];
-        rows = values.slice(1);
+        if (values[0].length > header.length) { header = values[0]; }
+        tables.push({ head: values[0], rows: values.slice(1), account: books[b].account });
+      }
+      if (header.indexOf(ACCOUNT_COL_NAME) < 0) { header = header.concat([ACCOUNT_COL_NAME]); }
+      var acctAt = header.indexOf(ACCOUNT_COL_NAME);
+
+      // Map each tab's rows onto the shared header BY COLUMN NAME, then stamp
+      // the account from the tab it came from.
+      var rows = [];
+      for (var t = 0; t < tables.length; t++) {
+        var tbl = tables[t];
+        for (var r = 0; r < tbl.rows.length; r++) {
+          var src = tbl.rows[r];
+          if (String(src.join("")).trim() === "") { continue; }   // blank row
+          var out = [];
+          for (var c = 0; c < header.length; c++) {
+            var at = tbl.head.indexOf(header[c]);
+            out.push((at >= 0 && at < src.length) ? src[at] : "");
+          }
+          out[acctAt] = tbl.account;
+          rows.push(out);
+        }
       }
       return _json({ ok: true, header: header, rows: rows });
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v7).")
+      .createTextOutput("Options Trading Assistant logger is running (v8 - "
+                        + "real money and practice in separate tabs).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return _json({ ok: false, error: String(err) });

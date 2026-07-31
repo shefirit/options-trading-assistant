@@ -56,8 +56,7 @@ def log_trade(
     account is "real" or "paper" and is stamped onto the row, so the two books
     stay separate for good rather than being re-guessed from dates later."""
     trade_id = new_trade_id(trade.underlying)
-    if account in ("real", "paper"):
-        sizing = {**sizing, "account": account}
+    sizing = {**sizing, "account": account}
     row = build_row(trade, strategy_name, sizing, passed_sop, note,
                     trade_id=trade_id, opened_on=opened_on,
                     expiration_on=expiration_on)
@@ -75,6 +74,7 @@ def roll_trade(
     new_credit: float = 0.0,
     note: str = "",
     rolled_on: Optional[date] = None,
+    account: str = "",
 ) -> tuple[str, bool]:
     """Record that the short call changed (a "roll" event on the same trade).
 
@@ -86,7 +86,7 @@ def roll_trade(
     """
     row = build_roll_row(trade_id, underlying, strategy_name, cash,
                          new_strike, new_expiration, new_credit, note,
-                         rolled_on=rolled_on)
+                         rolled_on=rolled_on, account=account)
     return _append(row)
 
 
@@ -100,6 +100,7 @@ def close_trade(
     note: str = "",
     closed_on: Optional[date] = None,
     close_cash: Optional[float] = None,
+    account: str = "",
 ) -> tuple[str, bool]:
     """Record that a trade was closed (a "close" event). Returns (destination,
     went_to_sheet). closed_on defaults to today; pass it for imported history.
@@ -109,7 +110,8 @@ def close_trade(
     """
     row = build_close_row(trade_id, underlying, strategy_name,
                           exit_cost, realized_pl, reason, note,
-                          closed_on=closed_on, close_cash=close_cash)
+                          closed_on=closed_on, close_cash=close_cash,
+                          account=account)
     return _append(row)
 
 

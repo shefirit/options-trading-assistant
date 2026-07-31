@@ -2112,7 +2112,8 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
                     # is untouched by a bookkeeping fix.
                     reason=(p.exit_reason or "").split(" - ")[0] or "Corrected",
                     note=why.strip() or "Corrected fill price",
-                    closed_on=p.closed_on, close_cash=close_cash)
+                    closed_on=p.closed_on, close_cash=close_cash,
+                    account=p.account)
             except Exception as e:
                 st.error(f"Could not save the correction: {e}")
                 return
@@ -2460,7 +2461,7 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
                            cash=float(credit), new_strike=float(strike),
                            new_expiration=exp, new_credit=float(credit),
                            note=note or f"Sold the {strike:g} call against it",
-                           rolled_on=sold_on)
+                           rolled_on=sold_on, account=p.account)
                 st.session_state.pop("trades_rows", None)
                 st.session_state.pop("_priced_positions", None)
                 st.session_state["ql_flash"] = (
@@ -2519,7 +2520,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                 else:
                     from src.logging_tools.trade_logger import roll_trade
                     roll_trade(p.trade_id, p.underlying, p.strategy_name,
-                               cash=-float(paid), note=note, rolled_on=back_on)
+                               cash=-float(paid), note=note, rolled_on=back_on,
+                               account=p.account)
                     st.session_state.pop("trades_rows", None)
                     st.session_state.pop("_priced_positions", None)
                     st.session_state["ql_flash"] = (
@@ -2598,7 +2600,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                 from src.logging_tools.trade_logger import roll_trade
                 roll_trade(p.trade_id, p.underlying, p.strategy_name,
                            float(cash), float(new_strike), new_exp,
-                           float(new_credit), note, rolled_on=rolled_on)
+                           float(new_credit), note, rolled_on=rolled_on,
+                           account=p.account)
                 st.session_state.pop("trades_rows", None)
                 st.session_state.pop("_priced_positions", None)
                 st.session_state["ql_flash"] = (
@@ -2670,7 +2673,8 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             from src.logging_tools.trade_logger import close_trade
             dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,
                                          exit_cost, realized, reason, note,
-                                         close_cash=close_cash)
+                                         close_cash=close_cash,
+                                         account=p.account)
             st.session_state.pop("trades_rows", None)
             st.session_state.pop("_priced_positions", None)
             st.rerun()
@@ -3411,14 +3415,19 @@ def _connect_sheet_ui() -> None:
                    "script from the `google_apps_script` folder, **Deploy → Web app** "
                    "(access: Anyone), then paste the link it gives you here.")
         if connected:
-            theme.note("**Keep the script updated (v7).** The script keeps your full trade "
-                       "log in the **Options Assistant Log** tab - the app's month view and "
-                       "tracking read from there, and delete works from the app too. The old "
-                       "Hebrew-format **App Trades** tab is retired: the app no longer writes "
-                       "to it, so it stays frozen as an archive (you can hide it). If you ever "
-                       "need to update the script: paste the new `LogTrade.gs` over the old "
-                       "one, then **Deploy → Manage deployments → ✏️ Edit → Version: New "
-                       "version → Deploy**. Your link stays the same.")
+            theme.note("**Update the script to v8 - this one you have to do.** v8 keeps "
+                       "real money and practice money in two separate tabs: "
+                       "**Real Money Log** and **Practice Log**, both created for you the "
+                       "first time each kind of trade is logged. Your existing "
+                       "**Options Assistant Log** tab is never written to again and is read "
+                       "as practice history - nothing in it is moved, renamed or deleted. "
+                       "The old Hebrew-format **App Trades** tab stays a frozen archive.")
+            theme.note("To update: paste the new `LogTrade.gs` (in the `google_apps_script` "
+                       "folder) over the old one, then **Deploy → Manage deployments → "
+                       "✏️ Edit → Version: New version → Deploy**. Your link stays the "
+                       "same. Until you do, trades keep landing in the single old tab and "
+                       "the app tells the two books apart by the **Account** column instead "
+                       "- nothing breaks, the tabs just are not split yet.")
         current = webhook_logger.get_url() or ""
         url = st.text_input("Web app link", value=current, key="webhook_url",
                             placeholder="https://script.google.com/macros/s/.../exec")

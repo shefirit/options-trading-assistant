@@ -519,3 +519,36 @@ def test_a_junk_account_value_is_ignored_rather_than_trusted():
     row = build_row(_trade(), "Put Credit Spread", {**SIZE, "account": "REAL-ish"},
                     True, "", trade_id="20260803-4-SPX")
     assert parse_rows(COLUMNS, [row])[0].account == ""
+
+
+def test_the_account_column_carries_through_roll_and_close_rows():
+    """Every row of a trade says which book it is in, so the sheet can be
+    sorted or filtered on that one column."""
+    from datetime import date as _date
+
+    from src.logging_tools.row import build_close_row, build_roll_row
+
+    opened = build_row(_trade(), "Put Credit Spread", {**SIZE, "account": "real"},
+                       True, "", trade_id="T1")
+    rolled = build_roll_row("T1", "SPX", "Put Credit Spread", 90.0,
+                            new_strike=7100.0, new_expiration=_date(2026, 10, 16),
+                            new_credit=140.0, account="real")
+    closed = build_close_row("T1", "SPX", "Put Credit Spread", 210.0, 210.0,
+                             "Profit target (50%) hit", account="real")
+    acct = COLUMNS.index("Account")
+    assert [opened[acct], rolled[acct], closed[acct]] == ["real", "real", "real"]
+
+    p = parse_rows(COLUMNS, [opened, rolled, closed])[0]
+    assert p.account == "real"
+    assert p.status == "closed"
+
+
+def test_an_older_row_with_no_account_column_at_all_still_parses():
+    """Her sheet's existing rows are 18 columns wide. They must keep working -
+    the account simply reads as unknown and falls back to the go-live date."""
+    row = build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                    trade_id="OLD")[:18]
+    positions = parse_rows(COLUMNS[:18], [row])
+    assert len(positions) == 1
+    assert positions[0].account == ""
+    assert positions[0].underlying == "SPX"

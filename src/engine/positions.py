@@ -256,6 +256,19 @@ def _get(row: list[Any], idx: dict[str, int], name: str, fallback: int) -> Any:
     return row[i]
 
 
+def _account_of(cell: Any, details: dict[str, Any]) -> str:
+    """Which book a row belongs to: "real", "paper", or "" when nobody said.
+
+    Anything else is treated as "nobody said" rather than trusted - a typo in
+    that cell must not quietly move a trade between the two books.
+    """
+    for value in (cell, details.get("account")):
+        text = str(value or "").strip().lower()
+        if text in ("real", "paper"):
+            return text
+    return ""
+
+
 def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
     """(the Details JSON as a dict, its legs) from the Details JSON cell."""
     if not details:
@@ -424,8 +437,10 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             # Stored in Details JSON so honouring TOS needed no new sheet column
             # (a schema change means she has to redeploy the Apps Script).
             bp_override=_to_float(data.get("bp_effect")),
-            account=(str(data.get("account", "")).strip().lower()
-                     if data.get("account") in ("real", "paper") else ""),
+            # The visible Account column is the source of truth. Details JSON
+            # is read as a fallback only for rows written in the short window
+            # when the stamp lived there instead.
+            account=_account_of(_get(row, idx, "Account", 18), data),
             short_delta=_to_float(_get(row, idx, "Short Delta", 4)) or 0.0,
             passed_sop=str(_get(row, idx, "Passed SOP", 10) or ""),
             note=str(_get(row, idx, "Notes", 11) or ""),

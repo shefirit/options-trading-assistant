@@ -33,6 +33,12 @@ COLUMNS = [
     # --- tracker columns ---
     "Trade ID", "Event", "Expiration", "Exit Cost $", "Realized P&L $",
     "Details JSON",
+    # Which book this row belongs to: "real" or "paper". A plain column rather
+    # than a field inside Details JSON, because the whole point is that she can
+    # SEE it - open the sheet, sort or filter on this one cell, and know which
+    # trades were real money. The Apps Script auto-extends the header when a
+    # new column appears, so adding this needed no redeploy.
+    "Account",
 ]
 
 
@@ -75,16 +81,18 @@ def _details_json(trade: Trade, sizing: Optional[dict[str, float]] = None) -> st
     # because adding a column means she has to redeploy the Apps Script.
     if sizing.get("bp_effect") is not None:
         data["bp_effect"] = round(float(sizing["bp_effect"]), 2)
-    # Which account this trade was placed in: "real" or "paper". Stamped on the
-    # trade rather than worked out later from the date it was opened, because a
-    # date rule cannot tell a practice trade placed AFTER going live from a real
-    # one - and she may well keep paper-testing a new strategy alongside real
-    # money. Rows written before this existed carry no stamp and fall back to
-    # the date rule. In Details JSON for the usual reason: a new column means
-    # she has to redeploy the Apps Script.
-    if sizing.get("account") in ("real", "paper"):
-        data["account"] = sizing["account"]
     return json.dumps(data, separators=(",", ":"))
+
+
+def _account(value: Any) -> str:
+    """The account cell: "real", "paper", or blank when nobody said.
+
+    Stamped on the row when the trade is logged rather than worked out later
+    from the date, because a date rule cannot tell a PRACTICE trade placed
+    after going live from a real one - and she may well keep paper-testing a
+    new strategy alongside real money.
+    """
+    return str(value) if value in ("real", "paper") else ""
 
 
 def build_row(
@@ -129,6 +137,7 @@ def build_row(
         "",   # Exit Cost $ - filled on the close row
         "",   # Realized P&L $ - filled on the close row
         _details_json(trade, sizing),
+        _account(sizing.get("account")),
     ]
 
 
@@ -142,6 +151,7 @@ def build_roll_row(
     new_credit: float = 0.0,
     note: str = "",
     rolled_on: Optional[date] = None,
+    account: str = "",
 ) -> list[Any]:
     """The "roll" event row - the short call changed and cash moved, on the
     SAME Trade ID.
@@ -177,7 +187,8 @@ def build_roll_row(
         new_expiration.isoformat() if new_expiration is not None else "",
         "",                           # Exit Cost $ - not a close
         round(cash, 2),               # Realized P&L $: the cash banked today
-        "",
+        "",                           # Details JSON - on the open row
+        _account(account),
     ]
 
 
@@ -191,6 +202,7 @@ def build_close_row(
     note: str = "",
     closed_on: Optional[date] = None,
     close_cash: Optional[float] = None,
+    account: str = "",
 ) -> list[Any]:
     """The "close" event row - written when you close the trade in My trades.
 
@@ -219,4 +231,5 @@ def build_close_row(
         round(realized_pl, 2),
         json.dumps({"close_cash": round(float(close_cash), 2)},
                    separators=(",", ":")),
+        _account(account),
     ]

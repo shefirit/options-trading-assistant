@@ -101,9 +101,13 @@ def run() -> None:
 
         note = ("imported from her sheet"
                 + (f" - {t['note']}" if t.get("note") else ""))
+        # Imported history is the PRACTICE book unless a trade says otherwise:
+        # everything in her sheet before going live was PaperMoney, and a
+        # paper trade counted as real income is the one error this must not make.
+        account = str(t.get("account", "paper"))
         dest, live, trade_id = log_trade(
             trade, strat["name"], sizing, bool(t.get("followed_sop", True)),
-            note, opened_on=opened, expiration_on=expiration)
+            note, opened_on=opened, expiration_on=expiration, account=account)
         line = f"open  {trade_id}  {t['underlying']:<5} {opened}  -> {dest}"
 
         if t.get("closed"):
@@ -111,7 +115,7 @@ def run() -> None:
                         float(t.get("exit_cost", 0.0)),
                         float(t.get("realized_pl", 0.0)),
                         str(t.get("reason", "Other")), t.get("lesson", ""),
-                        closed_on=t["closed"])
+                        closed_on=t["closed"], account=account)
             line += f" | closed {t['closed']} P&L {t.get('realized_pl', 0.0):+.0f}"
         print(line)
         imported += 1
