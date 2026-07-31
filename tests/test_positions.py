@@ -494,3 +494,28 @@ def test_a_correction_does_not_double_count_in_the_month():
                 if m["month"] == "2026-07")
     assert july["closed_count"] == 1
     assert july["realized_pl"] == 1510.0
+
+
+def test_the_account_stamp_round_trips_through_the_log():
+    """The account is written into Details JSON, not a new column - a new
+    column would mean redeploying the Apps Script."""
+    row = build_row(_trade(), "Put Credit Spread", {**SIZE, "account": "paper"},
+                    True, "practice run", trade_id="20260803-1-SPX")
+    p = parse_rows(COLUMNS, [row])[0]
+    assert p.account == "paper"
+
+    real = build_row(_trade(), "Put Credit Spread", {**SIZE, "account": "real"},
+                     True, "", trade_id="20260803-2-SPX")
+    assert parse_rows(COLUMNS, [real])[0].account == "real"
+
+
+def test_a_row_with_no_account_stamp_parses_as_unknown():
+    row = build_row(_trade(), "Put Credit Spread", SIZE, True, "",
+                    trade_id="20260803-3-SPX")
+    assert parse_rows(COLUMNS, [row])[0].account == ""
+
+
+def test_a_junk_account_value_is_ignored_rather_than_trusted():
+    row = build_row(_trade(), "Put Credit Spread", {**SIZE, "account": "REAL-ish"},
+                    True, "", trade_id="20260803-4-SPX")
+    assert parse_rows(COLUMNS, [row])[0].account == ""

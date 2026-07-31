@@ -41,7 +41,7 @@ from src.engine.config_loader import allowed_underlyings_for, load_settings, loa
 from src.engine.models import CheckStatus, Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
-from ui import components, glossary, research, theme, tv_chart
+from ui import components, glossary, income_report, research, theme, tv_chart
 
 st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
 theme.inject()
@@ -1923,7 +1923,8 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
         size = {"credit": chosen.credit, "max_loss": chosen.max_loss,
                 "buying_power": chosen.buying_power}
         _risk_and_payoff(chosen.trade, strat, size, settings)
-        _log_button(chosen.trade, strat["name"], size, report.passed, key="scan")
+        _log_button(chosen.trade, strat["name"], size, report.passed, key="scan",
+                    settings=settings)
 
 
 def _tos_ticket_block(trade, strat) -> None:
@@ -2361,6 +2362,9 @@ def _quick_log_form(settings, strategies, provider) -> None:
             # She is logging a trade that is already on her TOS screen, so the
             # real BP Effect is right there to copy.
             _bp_effect_input(draft["sizing"], "ql")
+            # Defaulted from the date the trade was PLACED, not today, so
+            # back-logging an older paper trade does not land it in the real book.
+            account = _account_choice(settings, "ql", draft["opened_on"])
             c1, c2 = st.columns([1, 1])
             if c1.button("✅ Save to my log", type="primary", key="ql_save"):
                 from src.logging_tools.trade_logger import log_trade
@@ -2368,7 +2372,8 @@ def _quick_log_form(settings, strategies, provider) -> None:
                     draft["trade"], draft["strat_name"], draft["sizing"],
                     draft["passed"], draft["note"],
                     opened_on=draft["opened_on"],
-                    expiration_on=draft["expiration"])
+                    expiration_on=draft["expiration"],
+                    account=account)
                 st.session_state.pop("trades_rows", None)
                 st.session_state.pop("_priced_positions", None)
                 st.session_state.pop("ql_draft", None)
@@ -2744,7 +2749,69 @@ def _today_section(items: list[dict], provider) -> None:
 ALL_TIME = "All time"
 
 
-def _results_section(all_pos, settings, bp_used: float) -> None:
+def _live_from(settings):
+    """The day real money started, from config/settings.yaml (account.live_from).
+
+    Empty or missing means she is still practising, and the whole log reads as
+    practice - which is the safe default: a paper trade counted as income is a
+    worse mistake than real income shown as practice.
+    """
+    import datetime as _dt
+
+    raw = str((settings.get("account") or {}).get("live_from") or "").strip()
+    if not raw:
+        return None
+    try:
+        return _dt.date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def mr_split(positions, settings) -> dict:
+    """The log cut into its two books, real and practice."""
+    from src.engine import month_report as mr
+    return mr.split_by_mode(positions, _live_from(settings))
+
+
+def _account_switch(settings, every_pos) -> str:
+    """The switch that scopes the whole My trades tab to one book.
+
+    It appears as soon as the log holds anything from the other book, and it
+    stays visible rather than hiding once she is fully live: a trader who
+    cannot see which account she is looking at is one bad glance away from
+    reading practice results as income.
+    """
+    split = mr_split(every_pos, settings)
+    live_from = _live_from(settings)
+    if live_from is None:
+        # Not funded yet. Everything is practice, and saying so once is
+        # clearer than a switch with one position.
+        if every_pos:
+            st.markdown(theme.chip("📝 Practice account (PaperMoney)", "amber"),
+                        unsafe_allow_html=True)
+        return "practice"
+    if not split["practice"]:
+        st.markdown(theme.chip("💵 Real money account", "green"),
+                    unsafe_allow_html=True)
+        return "real"
+
+    counts = {"real": len(split["real"]), "practice": len(split["practice"])}
+    labels = [f"{REAL_LABEL}  ({counts['real']})",
+              f"{PAPER_LABEL}  ({counts['practice']})"]
+    picked = st.radio(
+        "Which account are you looking at?", labels, index=0, horizontal=True,
+        key="trades_account",
+        help="Two completely separate books. Open trades, today's decisions, "
+             "results, records and your goal progress all follow this switch - "
+             "nothing from one account ever counts in the other.")
+    mode = "real" if picked.startswith(REAL_LABEL) else "practice"
+    if mode == "practice":
+        st.markdown(theme.chip("📝 Viewing your practice book - none of this is "
+                               "real money", "amber"), unsafe_allow_html=True)
+    return mode
+
+
+def _results_section(all_pos, settings, bp_used: float, mode: str = "real") -> None:
     """One results block, scoped by a single picker.
 
     There used to be two: "Monthly tracking" and "Your results". They answered
@@ -2753,8 +2820,10 @@ def _results_section(all_pos, settings, bp_used: float) -> None:
     With every trade in one month they were literally identical on screen, which
     is what made the tab look broken.
 
-    Now the picker decides the scope and everything below follows it.
+    Now the picker decides the scope and everything below follows it, and the
+    scope leads with the month's income report rather than four bare metrics.
     """
+    from src.engine import month_report as mr
     from src.engine import positions as pos_mod
 
     theme.section("Are you on pace for your goals?", "Results")
@@ -2765,36 +2834,58 @@ def _results_section(all_pos, settings, bp_used: float) -> None:
     # Default to this month: the question she opens the tab with is usually
     # "how is THIS month going", not "how has it all gone".
     idx = 1 if len(names) > 1 else 0
+
+    live_from = _live_from(settings)
+    # The account is already chosen at the top of the tab and scopes everything
+    # here - all_pos arrives pre-filtered, so this picker only chooses a month.
     pick = st.selectbox("Show me", names, index=idx, key="trades_month_pick",
                         help="One month at a time, or everything since you started.")
 
     monthly_goal = float(settings["targets"]["monthly"])
     bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
 
-    # The banner at the top of the tab already shows this month and all time, so
-    # repeating them here is the duplication she called out. Any OTHER month
-    # shows in full, because the banner says nothing about it.
+    # The income report is the headline view for a single month - it is the
+    # question "how did this month go" answered in full. All time keeps the
+    # cumulative dashboard, which is a different question.
+    month_key = (mr.ALL_TIME if pick == ALL_TIME
+                 else next(m["month"] for m in summaries if m["label"] == pick))
+    report = mr.build(all_pos, month=month_key, live_from=live_from, mode=mode)
+
+    # An empty REAL report in a month she knows she traded is the one moment
+    # this design can confuse her, so it explains itself rather than saying
+    # "nothing logged" about a month full of practice trades.
+    empty_note = ""
+    if mode == "real" and not report["has_activity"] and live_from:
+        empty_note = (
+            f"**No real-money trades in {report['label']} yet.** You funded on "
+            f"{live_from:%B} {live_from.day}, and this book holds only real money. "
+            "Any trades you are thinking of are in your practice book - switch "
+            "accounts at the top of this tab to see them. Your first real trade "
+            "starts this page off at zero, which is exactly where a real-money "
+            "record should start.")
+
+    income_report.render(report, settings, pace=mr.pace(report, monthly_goal),
+                         empty_note=empty_note)
+
+    st.divider()
     import datetime as _dt
-    covered_by_banner = pick == ALL_TIME or pick == f"{_dt.date.today():%B %Y}"
-    if covered_by_banner:
-        theme.note("Your headline numbers are at the top of this tab - here is what sits "
-                   "underneath them.")
+    covered = pick == ALL_TIME or pick == f"{_dt.date.today():%B %Y}"
 
     if pick == ALL_TIME:
         perf = pos_mod.performance(all_pos)
         components.render_results_dashboard(perf, settings["targets"], bp_used, bp_limit,
-                                            compact=covered_by_banner)
+                                            compact=covered)
     else:
+        # Just the trade list. The report above now carries every number
+        # render_month_summary used to print - profit against goal, counts, BP
+        # against the limit, the discipline score and the lessons - so calling
+        # it here would print the whole thing a second time.
         entry = next(m for m in summaries if m["label"] == pick)
-        components.render_month_summary(entry, monthly_goal, bp_limit,
-                                        compact=covered_by_banner)
         if entry["rows"]:
+            st.markdown("**Every trade this month:**")
             st.dataframe(components.month_trades_dataframe(entry["rows"]),
                          width="stretch", hide_index=True,
                          column_config=components.month_trades_column_config())
-        else:
-            theme.note("No trades touched this month. Log one with **➕ Quick Log** in "
-                       "Records below, or build one in 🎯 Find a trade.")
 
     # The month-by-month bars sit under both views: they are the one picture
     # that only makes sense across months, so scoping them to one would be odd.
@@ -2987,20 +3078,37 @@ def _tab_trades(settings, strategies, provider) -> None:
         st.success(flash)
 
     header, rows, source = _load_trade_log()
-    all_pos = pos_mod.parse_rows(header, rows)
+    every_pos = pos_mod.parse_rows(header, rows)
+
+    # The two books are kept completely apart, and the switch below decides
+    # which one this whole tab is about - the headline numbers, what needs doing
+    # today, the open trades, the results and the records. Scoping only the
+    # report would leave the biggest numbers on the page mixing practice money
+    # with real, which is the one thing this must never do.
+    mode = _account_switch(settings, every_pos)
+    all_pos = mr_split(every_pos, settings)[mode]
+
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)
     legacy = [p for p in all_pos if p.status == "legacy"]
     bp_used = pos_mod.bp_committed_this_month(all_pos)
-    st.session_state["month_bp_used"] = bp_used
+    # Only the real book's buying power constrains real trades, so this is what
+    # the Find-a-trade checklist reads. Practice trades tie up nothing.
+    st.session_state["month_bp_used"] = (
+        pos_mod.bp_committed_this_month(mr_split(every_pos, settings)["real"]))
 
     if not all_pos:
-        theme.note("Nothing here yet. Two ways to log your first trade: **Quick Log** "
-                   "below for a trade you already placed in thinkorswim, or **Log this "
-                   "trade** in 🎯 Find a trade when the app finds the setup "
-                   "for you. Either way it lands here and the app starts watching your "
-                   "exit rules: take the win at 50% of the credit, at 21 days to "
-                   "expiration close or roll for a credit, stop the loss at 2x.")
+        book = ("real-money book" if mode == "real" else "practice book")
+        theme.note(f"Nothing in your **{book}** yet. Two ways to log a trade: "
+                   "**Quick Log** below for one you already placed in thinkorswim, or "
+                   "**Log this trade** in 🎯 Find a trade when the app finds the setup "
+                   "for you. Both ask which account the trade is in. Either way it "
+                   "lands here and the app starts watching your exit rules: take the "
+                   "win at 50% of the credit, at 21 days to expiration close or roll "
+                   "for a credit, stop the loss at 2x.")
+        if mode == "real" and mr_split(every_pos, settings)["practice"]:
+            theme.note("Your practice trades are still here - switch accounts above "
+                       "to see them. They are kept completely apart from this book.")
         if source == "local" and not rows:
             from src.logging_tools import webhook_logger
             if webhook_logger.is_configured():
@@ -3043,7 +3151,7 @@ def _tab_trades(settings, strategies, provider) -> None:
     st.divider()
     _open_section(items, strategies, provider, priced_at)
     st.divider()
-    _results_section(all_pos, settings, bp_used)
+    _results_section(all_pos, settings, bp_used, mode)
     st.divider()
     _records_section(settings, strategies, provider, closed, legacy, bp_used)
 
@@ -3133,13 +3241,54 @@ def _bp_effect_input(size, key: str) -> None:
                    f"**\\${est:,.0f}** estimate.")
 
 
-def _log_button(trade, strategy_name, size, passed, key: str) -> None:
+REAL_LABEL = "💵 Real money"
+PAPER_LABEL = "📝 Practice (PaperMoney)"
+
+
+def _default_account(settings, opened_on=None) -> str:
+    """Which book a trade goes in unless she says otherwise.
+
+    Real once she has funded, practice before that. Backdated trades follow the
+    date they were PLACED, so importing history does not retroactively turn old
+    paper trades into real ones.
+    """
+    import datetime as _dt
+
+    live = _live_from(settings)
+    if live is None:
+        return "paper"
+    return "real" if (opened_on or _dt.date.today()) >= live else "paper"
+
+
+def _account_choice(settings, key: str, opened_on=None) -> str:
+    """The one control that decides which book a trade is written to.
+
+    It is a deliberate, visible choice on every log form rather than a hidden
+    global, because the cost of getting it wrong is asymmetric: a practice
+    trade counted as real income quietly inflates the record she uses to judge
+    whether this is working.
+    """
+    default = _default_account(settings, opened_on)
+    labels = [REAL_LABEL, PAPER_LABEL]
+    picked = st.radio(
+        "Which account is this trade in?", labels,
+        index=0 if default == "real" else 1, horizontal=True,
+        key=f"acct_{key}",
+        help="Real money and practice trades are kept completely apart - "
+             "separate open positions, separate results, separate records. "
+             "Nothing from one ever counts in the other.")
+    return "real" if picked == REAL_LABEL else "paper"
+
+
+def _log_button(trade, strategy_name, size, passed, key: str, settings=None) -> None:
     _bp_effect_input(size, key)
+    account = _account_choice(settings, key) if settings is not None else ""
     note = st.text_input("Note (optional)", key=f"note_{key}",
                          placeholder="e.g. VIX low, following the SOP")
     if st.button("Log this trade", key=f"log_{key}"):
         from src.logging_tools.trade_logger import log_trade
-        dest, live, trade_id = log_trade(trade, strategy_name, size, passed, note)
+        dest, live, trade_id = log_trade(trade, strategy_name, size, passed, note,
+                                         account=account)
         st.session_state.pop("trades_rows", None)   # My trades reloads fresh
         if live:
             st.success(f"Logged to your Google Sheet ✅ - now tracked in **📒 My trades**.  \n{dest}")
@@ -3195,7 +3344,18 @@ def _tab_settings(settings, provider) -> None:
     theme.note("These numbers come from `config/settings.yaml` - your capital, income goals, "
                "and the monthly buying-power limit every checklist enforces.")
     st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
-    theme.note("You are paper trading to learn the process. Follow the rules, not the P&L.")
+    live = _live_from(settings)
+    if live is None:
+        theme.note("You are paper trading to learn the process. Follow the rules, not "
+                   "the P&L. When you fund the account, set `account.live_from` in "
+                   "`config/settings.yaml` to that date - from then on the income "
+                   "report counts real money only.")
+    else:
+        theme.note(f"**Real money since {live:%B} {live.day}, {live.year}.** Trades "
+                   "opened before that "
+                   "date stay in your log as practice history and never count as "
+                   "income. Follow the rules, not the P&L - that does not change now "
+                   "that the money is real, it matters more.")
 
 
 def _connect_schwab_ui(provider) -> None:

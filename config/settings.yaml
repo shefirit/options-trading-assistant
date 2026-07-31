@@ -6,7 +6,16 @@
 
 account:
   starting_capital: 100000      # dollars you began with
-  platform: "thinkorswim PaperMoney"
+  platform: "thinkorswim"
+  # The day real money started. Trades opened BEFORE this date are practice
+  # (thinkorswim PaperMoney) and are kept out of your real-money income report;
+  # trades opened on or after it are the real thing. Set to "" while you are
+  # still practising - then the whole log reads as practice.
+  #
+  # This is how the app tells the two apart without re-tagging a single row in
+  # your Google Sheet. Your June and July paper trades stay in the log as
+  # history, they just stop counting as income.
+  live_from: "2026-07-31"
 
 # Your income goals (from your Notion hub).
 targets:

@@ -63,6 +63,11 @@ class Position(BaseModel):
     # target and the 2x stop. On a credit spread that IS the whole position; on
     # a PMCC it is only the short call, and a roll replaces it with the new one.
     credit: float = 0.0
+    # The credit as it was on the day she opened, kept even after a roll
+    # replaces `credit` with the new call's. The month report's "premium sold"
+    # counts what she actually sold on each date, so it needs the original -
+    # `credit` alone would report a July roll's credit as June's opening income.
+    open_credit: float = 0.0
     # Signed net cash at open: positive when the position paid her to open
     # (credit spreads), negative when it cost her (PMCC, covered calls).
     # Legacy rows logged before the ledger existed default to credit.
@@ -76,6 +81,9 @@ class Position(BaseModel):
     # The BP Effect copied straight off thinkorswim, when she typed it in.
     # None means "nobody told us", and bp_effect falls back to a derived value.
     bp_override: Optional[float] = None
+    # "real" or "paper", stamped at log time. "" on rows written before the
+    # two accounts were split, which fall back to the go-live date.
+    account: str = ""
     short_delta: float = 0.0
     passed_sop: str = ""
     note: str = ""
@@ -408,6 +416,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 _to_float(_get(row, idx, "DTE", 5))),
             contracts=int(_to_float(_get(row, idx, "Contracts", 6)) or 1),
             credit=credit,
+            open_credit=credit,
             open_cash=open_cash,
             shares_cost=_to_float(data.get("shares_cost")) or 0.0,
             max_loss=_to_float(_get(row, idx, "Max Loss $", 8)) or 0.0,
@@ -415,6 +424,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             # Stored in Details JSON so honouring TOS needed no new sheet column
             # (a schema change means she has to redeploy the Apps Script).
             bp_override=_to_float(data.get("bp_effect")),
+            account=(str(data.get("account", "")).strip().lower()
+                     if data.get("account") in ("real", "paper") else ""),
             short_delta=_to_float(_get(row, idx, "Short Delta", 4)) or 0.0,
             passed_sop=str(_get(row, idx, "Passed SOP", 10) or ""),
             note=str(_get(row, idx, "Notes", 11) or ""),

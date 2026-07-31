@@ -75,6 +75,15 @@ def _details_json(trade: Trade, sizing: Optional[dict[str, float]] = None) -> st
     # because adding a column means she has to redeploy the Apps Script.
     if sizing.get("bp_effect") is not None:
         data["bp_effect"] = round(float(sizing["bp_effect"]), 2)
+    # Which account this trade was placed in: "real" or "paper". Stamped on the
+    # trade rather than worked out later from the date it was opened, because a
+    # date rule cannot tell a practice trade placed AFTER going live from a real
+    # one - and she may well keep paper-testing a new strategy alongside real
+    # money. Rows written before this existed carry no stamp and fall back to
+    # the date rule. In Details JSON for the usual reason: a new column means
+    # she has to redeploy the Apps Script.
+    if sizing.get("account") in ("real", "paper"):
+        data["account"] = sizing["account"]
     return json.dumps(data, separators=(",", ":"))
 
 

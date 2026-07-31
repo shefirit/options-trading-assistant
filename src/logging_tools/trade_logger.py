@@ -45,13 +45,19 @@ def log_trade(
     note: str = "",
     opened_on: Optional[date] = None,
     expiration_on: Optional[date] = None,
+    account: str = "",
 ) -> tuple[str, bool, str]:
     """Log a new trade (an "open" event). Returns (destination, went_to_sheet,
     trade_id). The trade_id is what the My trades tab tracks the position by.
 
     opened_on / expiration_on default to today's behavior; pass them when the
-    trade was placed on an earlier date (Quick Log backdating, history import)."""
+    trade was placed on an earlier date (Quick Log backdating, history import).
+
+    account is "real" or "paper" and is stamped onto the row, so the two books
+    stay separate for good rather than being re-guessed from dates later."""
     trade_id = new_trade_id(trade.underlying)
+    if account in ("real", "paper"):
+        sizing = {**sizing, "account": account}
     row = build_row(trade, strategy_name, sizing, passed_sop, note,
                     trade_id=trade_id, opened_on=opened_on,
                     expiration_on=expiration_on)
