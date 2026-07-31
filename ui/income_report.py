@@ -382,50 +382,91 @@ def render_weeks(report: dict, weekly_goal: float) -> None:
 
 
 # --------------------------------------------------------------- by strategy
-def _donut(rows: list[dict], title: str) -> None:
+def strategy_donut(rows: list[dict], total: float):
+    """A readable ring: thick enough to see, its share printed on every slice
+    big enough to hold it, and the total sitting in the middle.
+
+    The first version was a hairline circle with a grey legend underneath and
+    not one number on it - it showed that four things existed and nothing about
+    their sizes, which is the only reason to draw a pie at all.
+    """
     df = pd.DataFrame([{"Name": r["name"], "Premium": r["premium"],
                         "Share": r["share"]} for r in rows if r["premium"] > 0])
-    if df.empty:
-        return
     names = list(df["Name"])
-    chart = alt.Chart(df).mark_arc(innerRadius=58, stroke="#FFFFFF",
-                                   strokeWidth=2).encode(
+    base = alt.Chart(df).encode(
         theta=alt.Theta("Premium:Q", stack=True),
-        color=alt.Color("Name:N", sort=names, title=title,
-                        scale=alt.Scale(domain=names,
-                                        range=SLOTS[:len(names)]),
-                        legend=alt.Legend(orient="bottom", columns=1,
-                                          labelLimit=260, labelFontSize=13,
-                                          titleFontSize=13)),
-        tooltip=[alt.Tooltip("Name:N", title=title),
+        color=alt.Color("Name:N", sort=names,
+                        scale=alt.Scale(domain=names, range=SLOTS[:len(names)]),
+                        # No Vega legend: it rendered in a grey well under her
+                        # contrast floor and could not carry the dollar amounts.
+                        # The legend beside the chart is built in HTML instead.
+                        legend=None),
+        tooltip=[alt.Tooltip("Name:N", title="Strategy"),
                  alt.Tooltip("Premium:Q", format="$,.0f"),
                  alt.Tooltip("Share:Q", format=".0%")])
-    st.altair_chart(chart.properties(height=300), width="stretch")
+    arcs = base.mark_arc(innerRadius=64, outerRadius=108,
+                         stroke="#FFFFFF", strokeWidth=2)
+    # Only on slices with room for it - a 3% sliver cannot hold "3%" without
+    # colliding with its neighbours.
+    shares = base.mark_text(radius=130, fontSize=13, fontWeight="bold",
+                            fill=theme.INK).encode(
+        text=alt.condition(alt.datum.Share >= 0.08,
+                           alt.Text("Share:Q", format=".0%"), alt.value("")))
+    middle = pd.DataFrame({"v": [f"${total:,.0f}"], "c": ["premium sold"]})
+    total_text = alt.Chart(middle).mark_text(
+        fontSize=21, fontWeight="bold", fill=theme.INK, dy=-8).encode(text="v:N")
+    caption = alt.Chart(middle).mark_text(
+        fontSize=12, fontWeight="bold", fill=theme.SECONDARY, dy=14).encode(
+        text="c:N")
+    return arcs + shares + total_text + caption
 
 
-def _breakdown_table(rows: list[dict], name_col: str) -> None:
-    df = pd.DataFrame([{
-        name_col: r["name"],
-        "Premium sold": r["premium"],
-        "Share": r["share"],
-        "Banked": r["banked"],
-        "Sales": r["trades"],
-    } for r in rows])
-    st.dataframe(df, width="stretch", hide_index=True, column_config={
-        "Premium sold": st.column_config.NumberColumn(
-            format="$%d", help="Premium you sold - before the cost of closing."),
-        "Share": st.column_config.ProgressColumn(
-            format="%.0f%%", min_value=0.0, max_value=1.0,
-            help="This slice of the month's premium."),
-        "Banked": st.column_config.NumberColumn(
-            format="$%d",
-            help="Money actually banked here - closes and roll credits. This "
-                 "can be negative even when premium sold is large, and that "
-                 "gap is the whole point of showing both."),
-        "Sales": st.column_config.NumberColumn(
-            help="Times you sold premium: opening a trade, or rolling a short "
-                 "call out to a later one."),
-    })
+def _legend_rows(rows: list[dict], name_col: str) -> None:
+    """The breakdown as readable rows: a colour chip that ties each line to its
+    slice, the name at full contrast, what it sold, and what it banked.
+
+    This replaces a st.dataframe that sat beside the chart. The table was
+    sortable but it could not show which colour was which, so reading the ring
+    meant hovering it slice by slice.
+    """
+    out = []
+    for i, r in enumerate(rows):
+        banked = r["banked"]
+        banked_tone = theme.GREEN if banked >= 0 else theme.RED
+        # A strategy can bank money this month having sold nothing in it - a
+        # trade opened in June and closed in July does exactly that. It has no
+        # slice in the ring, so it gets a hollow chip and says why, instead of
+        # reading as "$0, 0%, 0 sale(s)".
+        sold_earlier = r["premium"] <= 0 and banked != 0
+        chip = (f"border:2px solid {theme.BORDER_STRONG};background:transparent;"
+                if sold_earlier else f"background:{SLOTS[i % len(SLOTS)]};")
+        n = r["trades"]
+        detail = ("sold in an earlier month" if sold_earlier
+                  else f"{n} sale" if n == 1 else f"{n} sales")
+        right = ("&mdash;" if sold_earlier else _d(r["premium"]))
+        share = "" if sold_earlier else _pct(r["share"])
+        out.append(
+            f"<div style='display:flex;gap:10px;align-items:flex-start;"
+            f"padding:9px 0;border-bottom:1px solid {theme.BORDER};'>"
+            f"<span style='flex:0 0 12px;width:12px;height:12px;margin-top:5px;"
+            f"border-radius:3px;{chip}'></span>"
+            f"<div style='flex:1 1 auto;min-width:0;'>"
+            f"<div style='font-size:1rem;font-weight:800;color:{theme.INK};"
+            f"line-height:1.35;'>{_esc(r['name'])}</div>"
+            f"<div style='font-size:.9rem;font-weight:600;"
+            f"color:{theme.SECONDARY};'>"
+            f"banked <b style='color:{banked_tone};'>{_signed(banked)}</b>"
+            f" &middot; {detail}</div></div>"
+            f"<div style='flex:0 0 auto;text-align:right;'>"
+            f"<div style='font-size:1.05rem;font-weight:800;color:{theme.INK};'>"
+            f"{right}</div>"
+            f"<div style='font-size:.85rem;font-weight:700;"
+            f"color:{theme.SECONDARY};'>{share}</div></div></div>")
+    st.markdown(
+        f"<div style='font-size:.76rem;font-weight:800;color:{theme.SECONDARY};"
+        f"letter-spacing:.05em;margin-bottom:2px;'>{_esc(name_col.upper())} "
+        f"&middot; PREMIUM SOLD</div>{''.join(out)}",
+        unsafe_allow_html=True)
 
 
 def render_money_math(report: dict) -> None:
@@ -482,10 +523,16 @@ def render_strategy(report: dict) -> None:
     theme.section("Which of your eight strategies paid you?", "By strategy")
     left, right = st.columns([1, 1])
     with left:
-        _donut(rows, "Strategy")
-        render_money_math(report)
+        if any(r["premium"] > 0 for r in rows):
+            st.altair_chart(
+                strategy_donut(rows, report["premium_sold"])
+                .properties(height=320)
+                .configure_view(strokeWidth=0),
+                width="stretch")
     with right:
-        _breakdown_table(rows, "Strategy")
+        _legend_rows(rows, "Strategy")
+    st.write("")
+    render_money_math(report)
     top = rows[0]
     if top["premium"] > 0:
         theme.note(

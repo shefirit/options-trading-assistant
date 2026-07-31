@@ -131,3 +131,52 @@ def test_the_left_padding_grows_with_the_longest_label():
 
 def test_an_empty_chart_reserves_nothing_rather_than_crashing():
     assert ir._label_pad([]) >= 0
+
+
+# ----------------------------------------------------------- the strategy ring
+def _strategies():
+    return [{"name": "Poor Man's Covered Call (PMCC)", "premium": 6722.0,
+             "banked": 5000.0, "share": 0.68, "trades": 4},
+            {"name": "Iron Condor", "premium": 1600.0, "banked": 900.0,
+             "share": 0.16, "trades": 2},
+            {"name": "Covered Call - Model 3: Zero Cost Ratio", "premium": 1100.0,
+             "banked": -200.0, "share": 0.11, "trades": 1},
+            {"name": "Call Credit Spread (Bear Call Spread)", "premium": 409.0,
+             "banked": 300.0, "share": 0.05, "trades": 1}]
+
+
+def test_the_ring_is_thick_enough_to_read():
+    """It rendered as a hairline circle: an inner radius with no outer radius
+    leaves Vega to pick one, and it picked one barely larger."""
+    spec = ir.strategy_donut(_strategies(), 9831.0).to_dict()
+    arc = next(l for l in spec["layer"] if l["mark"]["type"] == "arc")["mark"]
+    assert arc["outerRadius"] - arc["innerRadius"] >= 35
+
+
+def test_the_total_sits_in_the_middle_of_the_ring():
+    spec = ir.strategy_donut(_strategies(), 9831.0).to_dict()
+    # Altair hoists a layer's own data into the top-level "datasets" block and
+    # leaves the layer holding only its name.
+    printed = [str(v) for rows in spec["datasets"].values()
+               for row in rows for v in row.values()]
+    assert any("$9,831" in p for p in printed)
+    assert any("premium sold" in p for p in printed)
+
+
+def test_only_slices_with_room_get_a_percentage_printed_on_them():
+    """A 3% sliver cannot hold "3%" without colliding with its neighbours."""
+    spec = ir.strategy_donut(_strategies(), 9831.0).to_dict()
+    labelled = [l for l in spec["layer"]
+                if l["mark"]["type"] == "text" and "condition" in
+                str(l.get("encoding", {}).get("text", ""))]
+    assert labelled, "the share labels are drawn conditionally"
+
+
+def test_the_grey_vega_legend_is_gone():
+    """It rendered under her contrast floor and could not carry the dollar
+    amounts. The legend beside the chart is built in HTML instead."""
+    spec = ir.strategy_donut(_strategies(), 9831.0).to_dict()
+    for layer in spec["layer"]:
+        colour = layer.get("encoding", {}).get("color")
+        if colour:
+            assert colour.get("legend") is None
