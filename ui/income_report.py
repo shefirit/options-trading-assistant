@@ -61,6 +61,25 @@ def _pct(x: Optional[float], nd: int = 0) -> str:
     return f"{x * 100:.{nd}f}%" if x is not None else "-"
 
 
+def _render(chart, height: int) -> None:
+    """Draw a chart so nothing at its edges gets cut off.
+
+    Vega sizes the plotting area first and lets axis labels and value text hang
+    outside it, so a long y-axis label lost its first characters ("/29 - 7/5")
+    and a bar's value label ran off the right ("$2,97"). autosize fit-x with
+    contains:padding makes the labels part of what has to fit.
+    """
+    st.altair_chart(
+        chart.properties(
+            height=height,
+            padding={"left": 6, "right": 46, "top": 6, "bottom": 6},
+            # Set through properties, not configure_autosize: a layered chart
+            # (bars plus the goal line) has no configure_autosize at all.
+            autosize=alt.AutoSizeParams(type="fit-x", contains="padding"),
+        ).configure_view(strokeWidth=0),
+        width="stretch")
+
+
 # ------------------------------------------------------------------- the band
 def render_band(report: dict, goal: float) -> None:
     """The headline: which month, real or practice, and the three numbers that
@@ -256,21 +275,26 @@ def render_pace(pace: Optional[dict], goal: float) -> None:
             f"gets much worse.")
 
 
-# ------------------------------------------------------------------- by week
-def render_weeks(report: dict, weekly_goal: float) -> None:
-    """Money banked per week against the $808 target - the picture that shows
-    whether a month was steady or one lucky Tuesday."""
-    weeks = report["weeks"]
-    if not weeks:
-        return
-    theme.section("Was it steady, or was it one good week?", "By week")
-
+# ------------------------------------------------------- chart builders
+# Separated from the rendering so the shape of each chart can be asserted in a
+# test. These two were rebuilt after they came out unreadable: fixed bar sizes
+# made five weeks render as one solid block, and with nothing reserved for the
+# labels the y-axis text lost its first characters and the value at the end of
+# the longest bar ran off the right edge.
+def weeks_chart(weeks: list[dict], weekly_goal: float):
+    """Money banked per week, with the weekly target as a dashed line."""
     df = pd.DataFrame([{"Week": w["label"], "Banked": w["banked"],
                         "Premium sold": w["premium"], "order": str(w["start"])}
                        for w in weeks])
     order = list(df.sort_values("order")["Week"])
-    bars = alt.Chart(df).mark_bar(size=34, cornerRadiusEnd=4).encode(
-        y=alt.Y("Week:N", sort=order, title=None),
+    bars = alt.Chart(df).mark_bar(cornerRadiusEnd=4).encode(
+        y=alt.Y("Week:N", sort=order, title=None,
+                # Band padding, NOT a fixed bar size: with size= the bars kept
+                # their height while the rows scaled with the number of weeks,
+                # so five weeks rendered as one solid block of colour.
+                scale=alt.Scale(paddingInner=0.35, paddingOuter=0.2),
+                axis=alt.Axis(labelLimit=200, labelPadding=8,
+                              labelFontSize=13, labelColor=theme.INK)),
         # A tick every $100 turns the axis into a wall of numbers on a month
         # that banked a few thousand. Six labels is enough to read a bar.
         x=alt.X("Banked:Q", title="Banked ($)",
@@ -280,13 +304,48 @@ def render_weeks(report: dict, weekly_goal: float) -> None:
         tooltip=[alt.Tooltip("Week:N"),
                  alt.Tooltip("Banked:Q", format="$,.0f"),
                  alt.Tooltip("Premium sold:Q", format="$,.0f")])
-    chart = bars
-    if weekly_goal:
-        rule = alt.Chart(pd.DataFrame({"goal": [weekly_goal]})).mark_rule(
-            color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(x="goal:Q")
-        chart = bars + rule
-    st.altair_chart(chart.properties(height=max(150, 46 * len(weeks))),
-                    width="stretch")
+    if not weekly_goal:
+        return bars
+    rule = alt.Chart(pd.DataFrame({"goal": [weekly_goal]})).mark_rule(
+        color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(x="goal:Q")
+    return bars + rule
+
+
+def producers_chart(rows: list[dict]):
+    """Premium sold per underlying, with its value printed at the bar's end."""
+    df = pd.DataFrame([{"Name": r["name"], "Premium": r["premium"],
+                        "Banked": r["banked"]} for r in rows])
+    bars = alt.Chart(df).mark_bar(cornerRadiusEnd=4).encode(
+        y=alt.Y("Name:N", sort=list(df["Name"]), title=None,
+                scale=alt.Scale(paddingInner=0.3, paddingOuter=0.2),
+                axis=alt.Axis(labelLimit=120, labelPadding=8,
+                              labelFontSize=13, labelColor=theme.INK)),
+        # Headroom on the right so the value label printed at the end of the
+        # longest bar has somewhere to sit instead of being clipped.
+        x=alt.X("Premium:Q", title="Premium sold ($)",
+                scale=alt.Scale(domainMin=0, nice=True,
+                                domainMax=float(df["Premium"].max()) * 1.16),
+                axis=alt.Axis(tickCount=6, format="$,.0f")),
+        color=alt.value(SLOTS[0]),
+        tooltip=[alt.Tooltip("Name:N", title="Underlying"),
+                 alt.Tooltip("Premium:Q", format="$,.0f"),
+                 alt.Tooltip("Banked:Q", format="$,.0f")])
+    labels = bars.mark_text(align="left", dx=7, fontSize=13,
+                            fontWeight="bold", color=theme.INK).encode(
+        text=alt.Text("Premium:Q", format="$,.0f"))
+    return bars + labels
+
+
+# ------------------------------------------------------------------- by week
+def render_weeks(report: dict, weekly_goal: float) -> None:
+    """Money banked per week against the $808 target - the picture that shows
+    whether a month was steady or one lucky Tuesday."""
+    weeks = report["weeks"]
+    if not weeks:
+        return
+    theme.section("Was it steady, or was it one good week?", "By week")
+
+    _render(weeks_chart(weeks, weekly_goal), height=max(160, 52 * len(weeks)))
 
     best = report["best_week"]
     if best and best["banked"] > 0:
@@ -425,21 +484,7 @@ def render_underlyings(report: dict) -> None:
     if not rows:
         return
     theme.section("Which names did the earning?", "Top producers")
-    df = pd.DataFrame([{"Name": r["name"], "Premium": r["premium"],
-                        "Banked": r["banked"]} for r in rows])
-    bars = alt.Chart(df).mark_bar(size=30, cornerRadiusEnd=4).encode(
-        y=alt.Y("Name:N", sort=list(df["Name"]), title=None),
-        x=alt.X("Premium:Q", title="Premium sold ($)",
-                axis=alt.Axis(tickCount=6, format="$,.0f")),
-        color=alt.value(SLOTS[0]),
-        tooltip=[alt.Tooltip("Name:N", title="Underlying"),
-                 alt.Tooltip("Premium:Q", format="$,.0f"),
-                 alt.Tooltip("Banked:Q", format="$,.0f")])
-    labels = bars.mark_text(align="left", dx=6, fontSize=13,
-                            fontWeight="bold", color=theme.INK).encode(
-        text=alt.Text("Premium:Q", format="$,.0f"))
-    st.altair_chart((bars + labels).properties(height=max(120, 40 * len(rows))),
-                    width="stretch")
+    _render(producers_chart(rows), height=max(140, 46 * len(rows)))
 
 
 # ---------------------------------------------------------- trade management

@@ -170,7 +170,9 @@ def _weeks(premium: list[dict], banked: list[dict]) -> list[dict[str, Any]]:
                 "start": start, "end": end,
                 # "6/8 - 6/12" reads faster than any date format with a year in
                 # it, and the year is already on the report's title.
-                "label": f"{start.month}/{start.day} - {end.month}/{end.day}",
+                # Day before month, the way she reads dates in Israel and
+                # Europe - 29/6, not 6/29.
+                "label": f"{start.day}/{start.month} - {end.day}/{end.month}",
                 "premium": 0.0, "banked": 0.0, "trades": 0,
             }
         return buckets[start]

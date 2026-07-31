@@ -972,7 +972,7 @@ def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
             lines.append(f"⏰ <b>Time exit:</b> this trade is already inside {int(te)} days "
                          "to expiration - it needs daily attention from day one.")
         else:
-            lines.append(f"⏰ <b>Time exit:</b> close by <b>{exit_day:%A, %B %d}</b> "
+            lines.append(f"⏰ <b>Time exit:</b> close by <b>{exit_day:%A}, {exit_day.day} {exit_day:%B}</b> "
                          f"({int(te)} days before expiration) no matter what.")
     if lines:
         st.markdown(
@@ -1647,19 +1647,32 @@ def render_month_bars(summaries: list[dict], monthly_goal: float) -> None:
     df = pd.DataFrame([{"label": m["label"], "month": m["month"],
                         "profit": m["realized_pl"]} for m in summaries])
     df = df.sort_values("month")   # oldest on the left
-    bars = alt.Chart(df).mark_bar(size=42).encode(
-        x=alt.X("label:N", sort=list(df["label"]), title=None),
-        y=alt.Y("profit:Q", title="Profit ($)"),
+    bars = alt.Chart(df).mark_bar(cornerRadiusEnd=4).encode(
+        # Padding rather than a fixed bar size: with two months and a fixed 42px
+        # the pair sat marooned at either end of a wide, mostly empty chart with
+        # their names turned on end.
+        x=alt.X("label:N", sort=list(df["label"]), title=None,
+                scale=alt.Scale(paddingInner=0.45, paddingOuter=0.35),
+                axis=alt.Axis(labelAngle=0, labelFontSize=13,
+                              labelColor=theme.INK, labelPadding=6)),
+        y=alt.Y("profit:Q", title="Profit ($)",
+                axis=alt.Axis(tickCount=5, format="$,.0f")),
         color=alt.condition("datum.profit >= 0",
                             alt.value(theme.GREEN), alt.value(theme.RED)),
         tooltip=[alt.Tooltip("label:N", title="Month"),
-                 alt.Tooltip("profit:Q", title="Profit $", format=",.0f")])
+                 alt.Tooltip("profit:Q", title="Profit $", format="$,.0f")])
     chart = bars
     if monthly_goal:
         rule = alt.Chart(pd.DataFrame({"goal": [monthly_goal]})).mark_rule(
             color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(y="goal:Q")
         chart = bars + rule
-    st.altair_chart(chart.properties(height=240), width="stretch")
+    st.altair_chart(
+        chart.properties(
+            height=260,
+            padding={"left": 6, "right": 16, "top": 10, "bottom": 6},
+            autosize=alt.AutoSizeParams(type="fit-x", contains="padding"),
+        ).configure_view(strokeWidth=0),
+        width="stretch")
     if monthly_goal:
         theme.note(f"The dashed line is your **\\${monthly_goal:,.0f}** "
                    "monthly goal.")

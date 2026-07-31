@@ -207,7 +207,7 @@ def _tab_market(settings, provider, strategies) -> None:
         if not market_open:
             reason = cal.closed_reason(today) or "a non-trading day"
             nxt = cal.next_market_open(today)
-            nxt_str = f"{nxt:%A}, {nxt:%B} {nxt.day}"
+            nxt_str = f"{nxt:%A}, {nxt.day} {nxt:%B}"
             st.markdown(theme.chip("🛑  U.S. market closed today", "red"), unsafe_allow_html=True)
             st.markdown(
                 f"<div style='margin-top:10px;font-size:1.05rem'>Today is <b>{reason}</b>, so "
@@ -2862,7 +2862,7 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real") -> N
     if mode == "real" and not report["has_activity"] and live_from:
         empty_note = (
             f"**No real-money trades in {report['label']} yet.** You funded on "
-            f"{live_from:%B} {live_from.day}, and this book holds only real money. "
+            f"{live_from.day} {live_from:%B}, and this book holds only real money. "
             "Any trades you are thinking of are in your practice book - switch "
             "accounts at the top of this tab to see them. Your first real trade "
             "starts this page off at zero, which is exactly where a real-money "
@@ -3423,7 +3423,7 @@ def _tab_settings(settings, provider) -> None:
                    "`config/settings.yaml` to that date - from then on the income "
                    "report counts real money only.")
     else:
-        theme.note(f"**Real money since {live:%B} {live.day}, {live.year}.** Trades "
+        theme.note(f"**Real money since {live.day} {live:%B} {live.year}.** Trades "
                    "opened before that "
                    "date stay in your log as practice history and never count as "
                    "income. Follow the rules, not the P&L - that does not change now "
