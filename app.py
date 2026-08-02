@@ -1765,12 +1765,12 @@ def _spread_event_warnings(underlyings, provider, dte_window=45) -> list:
     """Your SOP: no binary events (earnings / Fed) during a credit-spread trade."""
     import datetime as dt
 
-    from src.data import stock_universe
+    from src.engine import config_loader
     notes = []
     today = dt.date.today()
     if provider.is_real:
         for u in underlyings:
-            if not stock_universe.is_stock(u):
+            if config_loader.underlying_kind(u) != "stock":
                 continue   # ETFs/indexes have no company earnings
             earn = provider.get_earnings_info(u).get("earnings_date")
             if earn and today <= earn <= today + dt.timedelta(days=dte_window):

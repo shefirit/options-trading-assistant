@@ -659,7 +659,7 @@ class DataProvider:
                 symbol=symbol, error="Needs real market data.")
 
         def _fetch():
-            from src.data import stock_universe
+            from src.engine import config_loader
             chain = self._expiration_chain(symbol, target_dte, tradable=True)
             if chain is None:
                 chain = yfinance_client.get_expiration_chain(symbol, target_dte)
@@ -668,7 +668,7 @@ class DataProvider:
             trend = trend_from_prices(closes)
             earnings, _ = yfinance_client.get_calendar_dates(symbol)
             grade = None
-            if stock_universe.is_stock(symbol):   # ETFs have no meaningful grade
+            if config_loader.underlying_kind(symbol) == "stock":   # ETFs have no meaningful grade
                 info = yfinance_client.get_fundamentals(symbol)
                 avg_vol = None
                 if not (info.get("averageVolume") or info.get("averageDailyVolume10Day")):

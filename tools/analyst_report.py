@@ -92,7 +92,9 @@ def _head(title):
 def _kind(symbol: str) -> str:
     if symbol.upper().lstrip("^") in {s.lstrip("^") for s in INDEXES}:
         return "index"
-    return "stock" if stock_universe.is_stock(symbol) else "etf"
+    if symbol.upper() in set(stock_universe.liquid_etfs()):
+        return "etf"
+    return "stock"
 
 
 def _days_until(d):
