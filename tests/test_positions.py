@@ -486,11 +486,17 @@ def test_a_correction_does_not_double_count_in_the_month():
     from src.engine.positions import monthly_summary
 
     today = date(2026, 7, 18)
+    opened, closed = date(2026, 7, 2), date(2026, 7, 16)
+    # closed_on must be passed explicitly. It defaults to the real today, so a
+    # test that asserts on a fixed month only passed while the calendar happened
+    # to sit in that month - this one broke the day July became August.
     rows = [
         build_row(_trade(), "Iron Condor", SIZE, True, "",
-                  trade_id="NDX1", opened_on=today),
-        build_close_row("NDX1", "NDX", "Iron Condor", 2300.0, 1470.0, "21 DTE time exit"),
-        build_close_row("NDX1", "NDX", "Iron Condor", 2260.0, 1510.0, "21 DTE time exit"),
+                  trade_id="NDX1", opened_on=opened),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2300.0, 1470.0, "21 DTE time exit",
+                        closed_on=closed),
+        build_close_row("NDX1", "NDX", "Iron Condor", 2260.0, 1510.0, "21 DTE time exit",
+                        closed_on=closed),
     ]
     july = next(m for m in monthly_summary(parse_rows(COLUMNS, rows), today=today)
                 if m["month"] == "2026-07")
