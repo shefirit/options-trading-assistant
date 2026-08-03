@@ -1200,7 +1200,10 @@ def _tab_analyze(settings, provider, strategies) -> None:
     default = st.session_state.get("analyze_sym")
     idx = opts.index(default) if default in opts else None
     sym = st.selectbox("Symbol", opts, index=idx, key="analyze_sym",
-                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...")
+                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
+                       accept_new_options=True)
+    if sym:
+        sym = sym.strip().upper()
     theme.note("Type a ticker once - every tool below reads it. Indexes (SPX, NDX) have no "
                "company behind them, so the company tools stay empty for those.")
 
