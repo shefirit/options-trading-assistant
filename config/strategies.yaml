@@ -147,6 +147,37 @@ strategies:
     sizing:
       max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
 
+  # ---------------- THE WHEEL ----------------
+  # Phase 1 of the Wheel is structurally a cash secured put, so it scans the same
+  # way. What makes it a different TRADE is the exit block: Rita's ruling
+  # (2026-08-03) is that a Wheel put has NO stop loss and NO 21-day time exit,
+  # because both of those close the put before it can be assigned - and
+  # assignment is the doorway to Phase 2, not a failure. Risk control here is
+  # stock selection and position size, not a stop.
+  wheel:
+    name: "The Wheel (CSP into Covered Call)"
+    family: single_leg
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "You SELL a put on a stock you want to own. If it expires worthless you keep the cash and sell another. If you are assigned, you own 100 shares and start selling covered calls against them - around and around."
+    tos_hint: "Short put shows as -1. Cash needed = strike x 100 per contract. If assigned, the shares appear and you sell calls against them."
+    notion_url: "https://app.notion.com/p/3b103e90e03281f49c94ca1fffc6784f"
+    legs:
+      - role: short_put
+        action: sell
+        option_type: put
+    entry:
+      short_leg_delta_max: 0.30   # SOP says 0.20-0.30; 0.30 is the ceiling
+      dte_target: 35
+      dte_min: 30
+      dte_max: 45
+    exit:
+      profit_target_pct: 50
+      accepts_assignment: true    # no stop_loss_multiple, no time_exit_dte - deliberate
+    sizing:
+      max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
+
   # ---------------- POOR MAN'S COVERED CALL ----------------
   poor_mans_covered_call:
     name: "Poor Man's Covered Call (PMCC)"

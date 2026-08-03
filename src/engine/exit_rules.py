@@ -40,8 +40,15 @@ class ExitSignal(BaseModel):
     notes: list[str] = Field(default_factory=list)  # extra warnings worth seeing
 
 
-def _strike_notes(position: Position, underlying_price: float) -> list[str]:
-    """Warnings when price is close to - or past - an option you sold."""
+def _strike_notes(position: Position, underlying_price: float,
+                  accepts_assignment: bool = False) -> list[str]:
+    """Warnings when price is close to - or past - an option you sold.
+
+    accepts_assignment flips the tone on the put side. On a Wheel, price
+    reaching your short put IS the plan - it hands you the shares you wanted -
+    so calling it "trouble" and telling her to roll would be advising against
+    the strategy she chose.
+    """
     notes = []
     for leg in position.legs:
         if leg.action != Action.SELL or leg.strike <= 0:
@@ -51,10 +58,20 @@ def _strike_notes(position: Position, underlying_price: float) -> list[str]:
             if underlying_price <= k:
                 notes.append(
                     f"Price ({underlying_price:,.0f}) is BELOW your short put strike "
+                    f"({k:g}). Assignment is likely - that is the plan on a Wheel. Be "
+                    "ready to take the 100 shares, write down your cost basis (strike "
+                    "minus the premium you kept), and start selling covered calls at "
+                    "or above it."
+                    if accepts_assignment else
+                    f"Price ({underlying_price:,.0f}) is BELOW your short put strike "
                     f"({k:g}). The trade is in trouble - your SOP says roll down and "
                     "out for a credit, or close.")
             elif (underlying_price - k) / k <= STRIKE_PROXIMITY:
                 notes.append(
+                    f"Price ({underlying_price:,.0f}) is within 1.5% of your short put "
+                    f"strike ({k:g}). Assignment is getting close - fine on a Wheel, "
+                    "just make sure the cash is still set aside."
+                    if accepts_assignment else
                     f"Price ({underlying_price:,.0f}) is within 1.5% of your short put "
                     f"strike ({k:g}). Your SOP says consider rolling before it crosses.")
         else:
@@ -109,10 +126,15 @@ def evaluate(
 
     # ---- collect watch-level warnings first (they ride along on any signal)
     notes: list[str] = []
+    accepts_assignment = bool(exit_cfg.get("accepts_assignment"))
     if underlying_price is not None and underlying_price > 0:
-        notes.extend(_strike_notes(position, underlying_price))
+        notes.extend(_strike_notes(position, underlying_price, accepts_assignment))
     if short_delta is not None and short_delta >= DELTA_RED_FLAG:
         notes.append(
+            f"The short leg's delta is now {short_delta:.2f} - past your ~0.30 red "
+            "flag, so assignment is getting more likely. On a Wheel that is an "
+            "outcome you accepted, not a problem to fix."
+            if accepts_assignment else
             f"The short leg's delta is now {short_delta:.2f} - past your ~0.30 red "
             "flag. The odds have moved against this trade; consider rolling or closing.")
 

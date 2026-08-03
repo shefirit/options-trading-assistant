@@ -234,8 +234,11 @@ def _scan_iron_condor(
 
 def _scan_cash_secured_put(
     chain: OptionChain, contracts: int, max_candidates: int, target_dte: Optional[int] = None,
+    strategy_key: str = "cash_secured_put",
 ) -> list[Candidate]:
-    strategy = get_strategy("cash_secured_put")
+    """Also serves the Wheel - its entry is the same single short put, and only
+    the exit rules differ (see the wheel block in strategies.yaml)."""
+    strategy = get_strategy(strategy_key)
     entry = strategy["entry"]
     limit = float(entry["short_leg_delta_max"])   # ~0.30 for CSP
     dte = _resolve_dte(chain, entry, target_dte)
@@ -246,7 +249,7 @@ def _scan_cash_secured_put(
         if not (MIN_SHORT_DELTA <= put.abs_delta <= limit + DELTA_NEAR_MISS + 1e-9):
             continue
         trade = Trade(
-            strategy_key="cash_secured_put", underlying=chain.underlying, contracts=contracts,
+            strategy_key=strategy_key, underlying=chain.underlying, contracts=contracts,
             underlying_price=chain.underlying_price,
             legs=[_leg("short_put", Action.SELL, put)],
         )
@@ -284,8 +287,9 @@ def scan(
         return _scan_vertical(chain, strategy_key, OptionType.CALL, w, contracts, max_candidates, target_dte)
     if strategy_key == "iron_condor":
         return _scan_iron_condor(chain, w, contracts, max_candidates, target_dte)
-    if strategy_key == "cash_secured_put":
-        return _scan_cash_secured_put(chain, contracts, max_candidates, target_dte)
+    if strategy_key in ("cash_secured_put", "wheel"):
+        return _scan_cash_secured_put(chain, contracts, max_candidates, target_dte,
+                                      strategy_key=strategy_key)
     raise ValueError(f"No scanner wired up for '{strategy_key}'.")
 
 
@@ -441,11 +445,11 @@ def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float
                             _leg("short_call", Action.SELL, sc), _leg("long_call", Action.BUY, lc)])
         return _make_candidate(trade, strategy, delta_limit=limit)
 
-    if strategy_key == "cash_secured_put":
+    if strategy_key in ("cash_secured_put", "wheel"):
         short = _pick_target_short(chain.by(OptionType.PUT, dte), target)
         if not short:
             return None
-        trade = Trade(strategy_key="cash_secured_put", underlying=chain.underlying,
+        trade = Trade(strategy_key=strategy_key, underlying=chain.underlying,
                       contracts=contracts, underlying_price=chain.underlying_price,
                       legs=[_leg("short_put", Action.SELL, short)])
         return _make_candidate(trade, strategy, delta_limit=limit)
