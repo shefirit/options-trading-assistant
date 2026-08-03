@@ -2143,12 +2143,17 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
         # Keyed per trade on purpose. With one shared key, switching trades kept
         # the previous one's number in the box and offered to "correct" the new
         # trade to a figure that had nothing to do with it.
-        cost = c2.number_input(
-            "What you RECEIVED closing it ($)" if pays_to_close
-            else "What you PAID to close it ($)",
-            min_value=0.0, step=5.0, value=round(was_cash, 2),
-            key=f"fix_cost_{p.trade_id}", on_change=_keep_fix_open,
-            help="The real fill from thinkorswim.")
+        with c2:
+            cost = _fill_price_input(
+                "Price you RECEIVED closing it" if pays_to_close
+                else "Price you PAID to close it",
+                f"fix_cost_{p.trade_id}", int(p.contracts or 1),
+                default_total=was_cash,
+                # Closing a PMCC means selling the LEAPS back, which is a large
+                # per-share price by nature - no typed-a-total guard here.
+                total_hint_above=None if pays_to_close else 100.0,
+                help="The real fill from thinkorswim, per share. Prefilled with "
+                     "what is recorded now.")
 
         close_cash = float(cost) if pays_to_close else -float(cost)
         realized = p.open_cash + close_cash
@@ -2233,16 +2238,22 @@ def _quick_log_form(settings, strategies, provider) -> None:
         today = dt.date.today()
 
         with st.form("ql_form"):
-            d1, d2 = st.columns(2)
+            # Contracts sits up here rather than down beside the credit because
+            # every money box below is now a PRICE, and a price only becomes
+            # dollars once the app knows how many contracts it applies to.
+            d1, d2, d3 = st.columns([2, 2, 1])
             expiration = d1.date_input(
                 "Expiration date (from your TOS fill)"
                 if not has_far_leg else "Short call expiration (the near one)",
                 value=today + dt.timedelta(days=45), min_value=today,
-                key=f"ql_exp_{strategy_key}")
+                key=f"ql_exp_{strategy_key}", format=components.DATE_FMT)
             opened_on = d2.date_input(
                 "Opened on", value=today, max_value=today,
                 help="Change this only if you placed the trade on an earlier day.",
-                key=f"ql_opened_{strategy_key}")
+                key=f"ql_opened_{strategy_key}", format=components.DATE_FMT)
+            contracts = d3.number_input("Contracts", min_value=1, max_value=50,
+                                        value=1, step=1,
+                                        key=f"ql_contracts_{strategy_key}")
 
             far_exp = None
             leaps_cost = None
@@ -2253,30 +2264,35 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 far_exp = f1.date_input(
                     "LEAPS expiration (the far-dated call you BOUGHT)",
                     value=today + dt.timedelta(days=365), min_value=today,
-                    key=f"ql_farexp_{strategy_key}")
-                leaps_cost = f2.number_input(
-                    "What you paid for the LEAPS ($ total)", min_value=0.0,
-                    step=50.0, key=f"ql_leaps_{strategy_key}",
-                    help="From your TOS fill: the price you paid x 100 x "
-                         "contracts. A 40.00 fill on 1 contract = $4,000. This "
-                         "is your real money at risk, so the app needs it to "
-                         "tell you what the trade actually made.")
+                    key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
+                with f2:
+                    leaps_cost = _fill_price_input(
+                        "Price you paid for the LEAPS",
+                        f"ql_leaps_{strategy_key}", contracts, live_echo=False,
+                        # A LEAPS deep in the money genuinely trades above 100 a
+                        # share, so the typed-a-total guard would cry wolf here.
+                        total_hint_above=None,
+                        help="The fill price per share - a 40.00 fill on 1 "
+                             "contract is $4,000. This is your real money at "
+                             "risk, so the app needs it to tell you what the "
+                             "trade actually made.")
             elif has_far_leg:
                 f1, f2 = st.columns(2)
                 far_exp = f1.date_input(
                     "Protective put expiration (the far-dated one)",
                     value=today + dt.timedelta(days=365), min_value=today,
-                    key=f"ql_farexp_{strategy_key}")
+                    key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
                 share_price = f2.number_input(
                     "Share price when you bought the 100 shares ($)",
                     min_value=0.0, step=1.0, key=f"ql_shares_{strategy_key}")
-                protection_cost = st.number_input(
-                    "What the put side cost you ($ total, net)",
-                    step=25.0, key=f"ql_prot_{strategy_key}",
+                protection_cost = _fill_price_input(
+                    "Price the put side cost you (net)",
+                    f"ql_prot_{strategy_key}", contracts, live_echo=False,
+                    allow_negative=True, total_hint_above=None,
                     help="Model 1: what the long put cost. Model 2: the net "
                          "debit of the put spread. Model 3: often near zero - "
-                         "and if the ratio paid you a credit, type a negative "
-                         "number. Leave at 0 only if it really was free.")
+                         "and if the ratio paid you a credit, type a minus in "
+                         "front. Leave at 0 only if it really was free.")
 
             leg_defs = strat.get("legs", [])
             cols = st.columns(min(len(leg_defs), 4) or 1)
@@ -2290,16 +2306,15 @@ def _quick_log_form(settings, strategies, provider) -> None:
                     label, min_value=0.0, step=1.0,
                     key=f"ql_strike_{strategy_key}_{role}")
 
-            b1, b2 = st.columns(2)
-            contracts = b1.number_input("Contracts", min_value=1, max_value=50,
-                                        value=1, step=1,
-                                        key=f"ql_contracts_{strategy_key}")
-            credit_label = ("Total credit received ($, from your TOS fill)"
+            credit_label = ("Credit price on your fill"
                             if basis not in ("debit", "shares_plus_protection",
                                              "ratio_risk")
-                            else "Credit collected for the call you SOLD ($ total)")
-            credit_total = b2.number_input(credit_label, min_value=0.0, step=5.0,
-                                           key=f"ql_credit_{strategy_key}")
+                            else "Credit price for the call you SOLD")
+            credit_total = _fill_price_input(
+                credit_label, f"ql_credit_{strategy_key}", contracts,
+                live_echo=False,
+                help="The price on your TOS fill, per share. On a spread that "
+                     "is the one net price for the whole order.")
             note = st.text_input("Note (optional)", key=f"ql_note_{strategy_key}")
 
             submitted = st.form_submit_button("Check it", type="primary")
@@ -2375,10 +2390,20 @@ def _quick_log_form(settings, strategies, provider) -> None:
             except Exception:
                 notes.append("The SOP check could not run just now - the trade "
                              "still gets logged and tracked.")
+            # What the prices she typed came to in dollars. The boxes in the
+            # form cannot show this as she types (a form holds its values until
+            # submit), so the confirmation belongs here, on the card she reads
+            # before saving.
+            typed = [("Credit", float(credit_total))]
+            if leaps_cost:
+                typed.append(("LEAPS", -float(leaps_cost)))
+            if protection_cost:
+                typed.append(("Put side", -float(protection_cost)))
             st.session_state["ql_draft"] = {
                 "trade": trade, "strat_name": strat["name"], "sizing": sizing,
                 "passed": passed, "broke": broke, "notes": notes, "note": note,
                 "opened_on": opened_on, "expiration": expiration, "dte": dte,
+                "typed": typed, "contracts": int(contracts),
             }
 
     draft = st.session_state.get("ql_draft")
@@ -2387,8 +2412,8 @@ def _quick_log_form(settings, strategies, provider) -> None:
             p_trade, p_size = draft["trade"], draft["sizing"]
             theme.note(f"**Ready to save: {p_trade.underlying} · "
                        f"{draft['strat_name']}** · {p_trade.contracts} "
-                       f"contract(s) · opened {draft['opened_on'].isoformat()} · "
-                       f"expires {draft['expiration'].isoformat()} "
+                       f"contract(s) · opened {components.fmt_date(draft['opened_on'])} · "
+                       f"expires {components.fmt_date(draft['expiration'])} "
                        f"({draft['dte']} days)")
             open_cash = float(p_size.get("open_cash", p_size["credit"]))
             if open_cash < 0:
@@ -2411,6 +2436,18 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 m[0].metric("Credit", money(p_size["credit"]))
                 m[1].metric("Max loss", money(p_size["max_loss"]))
                 m[2].metric("Buying power", money(p_size["buying_power"]))
+            # Read back the prices as dollars, so a price typed where she used
+            # to type a total (or the other way round) is caught here rather
+            # than discovered weeks later in a month report.
+            n_con = int(draft.get("contracts") or 1)
+            typed = draft.get("typed") or []
+            if typed:
+                bits = [f"{name} **{_signed(amt)}** ({abs(amt) / (100 * n_con):,.2f} "
+                        f"x 100" + (f" x {n_con}" if n_con > 1 else "") + ")"
+                        for name, amt in typed]
+                theme.note("What you typed comes to: " + " · ".join(bits)
+                           + ". Wrong by a factor of 100? Reopen Quick Log and "
+                             "type the price, not the dollar total.")
             broke = draft.get("broke") or []
             if draft["passed"] and not broke:
                 st.markdown(theme.chip("SOP check: passed", "green"),
@@ -2497,24 +2534,24 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
         w1, w2, w3 = st.columns(3)
         sold_on = w1.date_input("Sold on", value=dt.date.today(),
                                 max_value=dt.date.today(),
-                                key=f"write_when_{kp}_{p.trade_id}")
+                                key=f"write_when_{kp}_{p.trade_id}", format=components.DATE_FMT)
         strike = w2.number_input("Strike you SOLD", min_value=0.0, step=1.0,
                                  key=f"write_strike_{kp}_{p.trade_id}")
         exp = w3.date_input("Expiration",
                             value=dt.date.today() + dt.timedelta(days=30),
                             min_value=dt.date.today(),
-                            key=f"write_exp_{kp}_{p.trade_id}")
+                            key=f"write_exp_{kp}_{p.trade_id}", format=components.DATE_FMT)
         suggested = _live_call_mid(provider, p.underlying, strike, exp)
-        credit = st.number_input(
-            "Credit you collected ($ total, from your TOS fill)",
-            min_value=0.0, step=5.0, value=float(suggested or 0.0),
-            key=f"write_credit_{kp}_{p.trade_id}_{strike:g}_{exp}",
-            help="The fill price x100 x contracts. This is what your 50% "
-                 "profit target measures against from now on.")
+        credit = _fill_price_input(
+            "Credit price on your fill",
+            f"write_credit_{kp}_{p.trade_id}_{strike:g}_{exp}",
+            int(p.contracts or 1), default_total=suggested,
+            help="The price you sold it at, per share - the app does the x100. "
+                 "This is what your 50% profit target measures against from "
+                 "now on.")
         if suggested:
-            theme.note(f"Suggested from today's chain: **\\${suggested:,.0f}** "
-                       f"for the {strike:g} call expiring {exp}. Change it if "
-                       "your fill said otherwise.")
+            theme.note("**Prefilled from today's chain** for that contract. "
+                       "Change it if your fill said otherwise.")
         note = st.text_input("Note (optional)", key=f"write_note_{kp}_{p.trade_id}")
 
         if st.button("Record the call I sold", type="primary",
@@ -2535,7 +2572,7 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
                 st.session_state.pop("_priced_positions", None)
                 st.session_state["ql_flash"] = (
                     f"Recorded: ${credit:,.0f} collected, now tracking the "
-                    f"{strike:g} call expiring {exp}.")
+                    f"{strike:g} call expiring {components.fmt_date(exp)}.")
                 st.rerun()
 
 
@@ -2562,7 +2599,8 @@ def _call_label(strike: Optional[float], expiration: Optional[dt.date]) -> str:
     if not strike:
         return "the call"
     text = f"the {strike:g} call"
-    return f"{text} expiring {expiration}" if expiration else text
+    return (f"{text} expiring {components.fmt_date(expiration)}"
+            if expiration else text)
 
 
 def _call_short(strike: Optional[float]) -> str:
@@ -2619,6 +2657,8 @@ def _step(number: int, title: str, sub: str = "") -> None:
 def _fill_price_input(label: str, key: str, contracts: int, *,
                       default_total: Optional[float] = None,
                       allow_negative: bool = False,
+                      live_echo: bool = True,
+                      total_hint_above: Optional[float] = 100.0,
                       help: str = "") -> float:
     """A money box that takes the price the way thinkorswim prints it.
 
@@ -2629,6 +2669,16 @@ def _fill_price_input(label: str, key: str, contracts: int, *,
     comes to, so the arithmetic is the app's job and the number she types is
     the number she is looking at. Returns TOTAL dollars, so everything
     downstream (and the log) is unchanged.
+
+    live_echo=False inside an st.form: a form holds its widget values until
+    submit, so a running total there would show the PREVIOUS value while she
+    types - worse than no total at all. Those forms confirm the money on their
+    preview card instead, after the submit that makes the numbers real.
+
+    total_hint_above guards the habit this breaks (every other box in the app
+    used to want a dollar total). Pass None where a genuine price can be large:
+    a LEAPS at 120.00 a share is ordinary, and warning about it would cry wolf
+    on the one trade she owns most of.
     """
     per = max(contracts, 1) * 100.0
     default = round(float(default_total or 0.0) / per, 2)
@@ -2636,6 +2686,13 @@ def _fill_price_input(label: str, key: str, contracts: int, *,
     price = float(st.number_input(label, step=0.05, format="%.2f", value=default,
                                   key=key, help=help, **extra))
     total = round(price * per, 2)
+
+    if not live_echo:
+        theme.note("Type it the way thinkorswim prints it - a price per share, "
+                   "like 1.50, not the dollar total. The app multiplies by 100 "
+                   "and by your contracts, and shows what it came to before you "
+                   "save.")
+        return total
 
     # Only once there is a price to convert - an empty form full of "= $0" rows
     # is the noise she was already complaining about.
@@ -2648,10 +2705,7 @@ def _fill_price_input(label: str, key: str, contracts: int, *,
             f"&nbsp;<span style='color:{theme.MUTED};'>({price:.2f} &times; 100"
             + (f" &times; {contracts}" if max(contracts, 1) > 1 else "")
             + ")</span></div>", unsafe_allow_html=True)
-    # She has typed dollar totals into every other form in this app, so the one
-    # box that wants a price is exactly where that habit will misfire. A short
-    # call worth over $100 a share is not something her SOP ever sells.
-    if abs(price) > 100:
+    if total_hint_above is not None and abs(price) > total_hint_above:
         st.warning(f"{price:,.2f} looks like a dollar total rather than the fill "
                    f"price. thinkorswim prints a price per share - 1.50, not 150. "
                    f"Typed as it is, this records &#36;{abs(total):,.0f}.")
@@ -2771,7 +2825,7 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                        "same day's profit either way.")
             back_on = st.date_input("Closed it on", value=dt.date.today(),
                                     max_value=dt.date.today(),
-                                    key=f"back_when_{kp}_{p.trade_id}")
+                                    key=f"back_when_{kp}_{p.trade_id}", format=components.DATE_FMT)
             paid = _fill_price_input(
                 "Price you paid to close it (as thinkorswim shows it)",
                 f"back_paid_{kp}_{p.trade_id}", contracts,
@@ -2828,7 +2882,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                  "out raises it. Prefilled with the strike you hold now.")
         new_exp = r1.date_input(
             "Expires", value=max(base + dt.timedelta(days=30), floor),
-            min_value=floor, key=f"roll_exp_{kp}_{p.trade_id}")
+            min_value=floor, key=f"roll_exp_{kp}_{p.trade_id}",
+            format=components.DATE_FMT)
 
         new_label = _call_label(new_strike, new_exp)
         new_short = _call_short(new_strike)
@@ -2934,7 +2989,7 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         f1, f2 = st.columns([1, 2])
         rolled_on = f1.date_input("Rolled on", value=dt.date.today(),
                                   max_value=dt.date.today(),
-                                  key=f"roll_when_{kp}_{p.trade_id}")
+                                  key=f"roll_when_{kp}_{p.trade_id}", format=components.DATE_FMT)
         note = f2.text_input("Note (optional)", key=f"roll_note_{kp}_{p.trade_id}")
 
         if st.button("Record the roll", type="primary", key=f"rollbtn_{kp}_{p.trade_id}"):
@@ -2951,9 +3006,10 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
             elif figs.impossible:
                 st.warning(figs.impossible)
             elif new_exp <= (p.expiration or dt.date.today()):
-                st.warning(f"A roll moves the call OUT in time, but {new_exp} is "
-                           f"not after this position's current expiration "
-                           f"({p.expiration}). Check the date.")
+                st.warning(f"A roll moves the call OUT in time, but "
+                           f"{components.fmt_date(new_exp)} is not after this "
+                           f"position's current expiration "
+                           f"({components.fmt_date(p.expiration)}). Check the date.")
             else:
                 from src.logging_tools.trade_logger import roll_trade
                 roll_trade(p.trade_id, p.underlying, p.strategy_name,
@@ -2966,7 +3022,7 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                     f"Roll recorded: {_signed(cash)} banked "
                     f"(${p.roll_income + cash:,.0f} from rolls on this trade so "
                     f"far), now tracking the {new_strike:g} call expiring "
-                    f"{new_exp}.")
+                    f"{components.fmt_date(new_exp)}.")
                 st.rerun()
 
 
@@ -2988,23 +3044,26 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             # long side back. The old "what you paid" box could not go
             # below zero, so a close that paid had nowhere to be typed.
             default_in = live.get("position_value")
-            proceeds = st.number_input(
-                "What you RECEIVED when you closed it (total $, from your "
-                "TOS fill)",
-                min_value=0.0, step=25.0,
-                value=round(max(float(default_in or 0.0), 0.0), 2),
-                key=f"exit_in_{kp}_{p.trade_id}",
+            proceeds = _fill_price_input(
+                "Credit price you RECEIVED when you closed it",
+                f"exit_in_{kp}_{p.trade_id}", int(p.contracts or 1),
+                default_total=max(float(default_in or 0.0), 0.0),
+                # Selling a LEAPS back is routinely 50.00+ a share, so the
+                # typed-a-total guard has no business firing here.
+                total_hint_above=None,
                 help="Selling the LEAPS back, minus buying back the short "
-                     "call - the net on your fill, x100 x contracts. A "
+                     "call - the one net price on your fill, per share. A "
                      "50.00 credit on 1 contract = $5,000. If closing "
                      "somehow cost you money, type 0 and note it below.")
             close_cash = float(proceeds)
             exit_cost = 0.0
         else:
-            exit_cost = st.number_input(
-                "What you paid to close it (total $, from your TOS fill)",
-                min_value=0.0, value=round(max(default_cost, 0.0), 2), step=5.0,
-                key=f"exit_cost_{kp}_{p.trade_id}")
+            exit_cost = _fill_price_input(
+                "Price you paid to close it",
+                f"exit_cost_{kp}_{p.trade_id}", int(p.contracts or 1),
+                default_total=max(default_cost, 0.0),
+                help="The price on your TOS fill, per share - the app does the "
+                     "x100. Prefilled with what it costs to close right now.")
             close_cash = -float(exit_cost)
         reason = st.selectbox(
             "Why you closed it",
@@ -3356,7 +3415,8 @@ def _open_section(items, strategies, provider, priced_at) -> None:
         if p.legs:
             strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
             theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
-                       + (f" · expires {p.expiration}" if p.expiration else ""))
+                       + (f" · expires {components.fmt_date(p.expiration)}"
+                          if p.expiration else ""))
 
         if p.is_uncovered:
             _write_call_form(p, provider)
@@ -3367,7 +3427,8 @@ def _open_section(items, strategies, provider, priced_at) -> None:
 
         with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
             _delete_control(p.trade_id,
-                            f"{p.underlying} {p.strategy_name} opened {p.opened}",
+                            f"{p.underlying} {p.strategy_name} opened "
+                            f"{components.fmt_date(p.opened)}",
                             key=f"open_{p.trade_id}")
 
 

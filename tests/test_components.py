@@ -293,7 +293,8 @@ def test_decide_by_dates_the_time_exit_instead_of_counting_down():
         def __init__(self, d): self._d = d
         def dte_left(self): return self._d
 
-    assert _decide_by(P(34), 21) == f"{dt.date.today() + dt.timedelta(days=13):%a %b %d}"
+    # Day before month, the way she writes dates.
+    assert _decide_by(P(34), 21) == f"{dt.date.today() + dt.timedelta(days=13):%a %d %b}"
     assert _decide_by(P(21), 21) == "today"
     assert _decide_by(P(13), 21) == "overdue"
     assert _decide_by(P(None), 21) == "-"
@@ -360,3 +361,39 @@ def test_an_errored_name_still_gets_a_row():
     df = premium_dataframe([_snap(), _snap(symbol="ZZZZ", error="no chain")])
     assert len(df) == 2
     assert "no chain" in str(df.iloc[1]["Verdict"])
+
+
+# ------------------------------------------------------------- european dates
+def test_dates_are_written_day_first():
+    """She writes 30/09/2026, not 2026-09-30. ISO stays in the log file, where
+    a machine reads it; everything she reads is day first."""
+    import datetime as dt
+
+    from ui.components import fmt_date
+
+    assert fmt_date(dt.date(2026, 9, 30)) == "30/09/2026"
+    assert fmt_date(dt.date(2026, 1, 5)) == "05/01/2026"
+    assert fmt_date(None) == "-"
+    assert fmt_date(None, empty="") == ""
+
+
+def test_trade_tables_hand_streamlit_real_dates_not_strings():
+    """A DD/MM/YYYY string sorts 01/12 above 02/01. Real dates plus a
+    DateColumn keep the column both readable AND sortable."""
+    import datetime as dt
+
+    from src.engine.positions import Position
+    from ui.components import (DATE_FMT, month_trades_column_config,
+                               month_trades_dataframe)
+
+    cfg = month_trades_column_config()
+    for col in ("Opened", "Closed"):
+        assert col in cfg, f"{col} has no column config"
+        assert getattr(cfg[col], "format", None) == DATE_FMT or DATE_FMT in str(cfg[col])
+
+    p = Position(trade_id="t1", underlying="SPY", strategy_name="Iron Condor",
+                 opened=dt.date(2026, 9, 30), closed_on=dt.date(2026, 12, 1),
+                 credit=100.0, realized_pl=50.0, status="closed")
+    frame = month_trades_dataframe([{"position": p, "tag": "closed"}])
+    assert frame["Opened"].iloc[0] == dt.date(2026, 9, 30),         "the table must carry a date, not a preformatted string"
+    assert frame["Closed"].iloc[0] == dt.date(2026, 12, 1)

@@ -33,6 +33,17 @@ def _esc(text: str) -> str:
     return text.replace("$", "\\$")
 
 
+# Day first, the way she writes a date. The app used to print ISO everywhere
+# (2026-09-30), which is right for the log file and wrong for a person reading
+# a sentence. Storage stays ISO - only what she reads changes.
+DATE_FMT = "DD/MM/YYYY"
+
+
+def fmt_date(value, empty: str = "-") -> str:
+    """A date as 30/09/2026. Accepts None so callers need no guard."""
+    return f"{value:%d/%m/%Y}" if value else empty
+
+
 def quality_label(symbol: str, grade: str | None) -> str:
     """What to print in the Quality column when there may be no letter grade.
 
@@ -736,7 +747,7 @@ def render_events(events, empty_note: str = "No major events in the next few wee
         theme.note(empty_note)
         return
     for e in events:
-        when = e.date.strftime("%a %b %d")
+        when = e.date.strftime("%a %d %b")
         days = "today" if e.days_away == 0 else f"in {e.days_away} day{'s' if e.days_away != 1 else ''}"
         label = f"{e.icon} <b>{_htmllib.escape(e.label)}</b> - {when} ({days})"
         st.markdown(f"<div style='color:#213229;line-height:1.55;margin-top:4px;'>{label}</div>",
@@ -1151,7 +1162,7 @@ def _decide_by(pos, time_exit_dte: int = 21) -> str:
         return "overdue"
     if days_to_go == 0:
         return "today"
-    return f"{_dt.date.today() + _dt.timedelta(days=days_to_go):%a %b %d}"
+    return f"{_dt.date.today() + _dt.timedelta(days=days_to_go):%a %d %b}"
 
 
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
@@ -1430,10 +1441,10 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
     for p in sorted(closed, key=lambda p: (p.closed_on or p.opened or pd.Timestamp.min.date()),
                     reverse=True):
         rows.append({
-            "Closed": p.closed_on.isoformat() if p.closed_on else "-",
+            "Closed": p.closed_on,
             "Symbol": p.underlying,
             "Strategy": p.strategy_name,
-            "Opened": p.opened.isoformat() if p.opened else "-",
+            "Opened": p.opened,
             "Credit $": p.credit,
             "Rolls $": p.roll_income or None,
             "Cash back $": p.close_cash if p.is_debit else None,
@@ -1566,8 +1577,8 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Result": _month_result_word(p, tag),
                 "Symbol": p.underlying,
                 "Strategy": p.strategy_name,
-                "Opened": p.opened.isoformat() if p.opened else "-",
-                "Closed": roll.rolled_on.isoformat() if roll.rolled_on else "-",
+                "Opened": p.opened,
+                "Closed": roll.rolled_on,
                 "Credit $": roll.new_credit or None,
                 "Result $": roll.cash,
                 "Why closed": (f"Rolled the short call to {roll.new_strike:g}"
@@ -1586,8 +1597,8 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
             "Result": _month_result_word(p, tag),
             "Symbol": p.underlying,
             "Strategy": p.strategy_name,
-            "Opened": p.opened.isoformat() if p.opened else "-",
-            "Closed": p.closed_on.isoformat() if p.closed_on else "-",
+            "Opened": p.opened,
+            "Closed": p.closed_on,
             "Credit $": p.credit,
             "Result $": result,
             "Why closed": reason or "-",
@@ -1601,7 +1612,9 @@ def month_trades_column_config():
             help="How this trade ended up. 'Still open' trades are being "
                  "watched in the open-trades list above. 'Rolled' is a short "
                  "call rolled out - the credit was banked that day."),
-        "Closed": st.column_config.TextColumn(
+        "Opened": st.column_config.DateColumn(format=DATE_FMT),
+        "Closed": st.column_config.DateColumn(
+            format=DATE_FMT,
             help="When the trade closed, or when the roll happened."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f",
             help="Premium collected for the short leg. On a PMCC or covered "
