@@ -14,6 +14,7 @@ from src.engine.config_loader import (
     is_european_style,
     load_settings,
     preferred_entry_dte,
+    underlying_fits_style,
 )
 from src.engine.models import (
     CheckResult,
@@ -40,9 +41,13 @@ def validate_trade(
 
     results: list[CheckResult] = []
 
-    # 1. Right underlying for the option style.
+    # 1. Right underlying for the option style. Judged by style, not by whether
+    # the name is in our universe files - those only cover the S&P 500 and
+    # Nasdaq-100, and the SOP allows any liquid name.
     results.append(
-        rules.check_underlying_style(trade, allowed_underlyings_for(trade.strategy_key))
+        rules.check_underlying_style(
+            trade, allowed_underlyings_for(trade.strategy_key),
+            fits_style=underlying_fits_style(trade.strategy_key, trade.underlying))
     )
 
     # 2. Delta rules on the option(s) you sell / buy.

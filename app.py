@@ -37,7 +37,12 @@ import streamlit as st
 
 from src.data.provider import DataProvider
 from src.engine import scanner
-from src.engine.config_loader import allowed_underlyings_for, load_settings, load_strategies
+from src.engine.config_loader import (
+    allowed_underlyings_for,
+    load_settings,
+    load_strategies,
+    underlying_fits_style,
+)
 from src.engine.models import CheckStatus, Leg, OptionType, Trade
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
@@ -1204,7 +1209,9 @@ def _tab_analyze(settings, provider, strategies) -> None:
                        accept_new_options=True)
     if sym:
         sym = sym.strip().upper()
-    theme.note("Type a ticker once - every tool below reads it. Indexes (SPX, NDX) have no "
+    theme.note("Type a ticker once - every tool below reads it. The list holds the indexes, the "
+               "big ETFs and the S&P 500 / Nasdaq-100 stocks; for anything else (SOFI, HOOD...) "
+               "type it and click the **Add:** line that appears. Indexes (SPX, NDX) have no "
                "company behind them, so the company tools stay empty for those.")
 
     # Short labels on purpose: the full names needed 1320px of tab bar and a
@@ -1708,10 +1715,16 @@ def _tab_build(settings, strategies, provider) -> None:
     st.session_state.setdefault("build_underlyings", default_u)
     if st.session_state.get("_prev_build_strategy") != strategy_key:
         st.session_state["_prev_build_strategy"] = strategy_key
-        valid = [u for u in st.session_state["build_underlyings"] if u in ordered]
+        # A hand-typed name is not in `ordered`, so keep anything the strategy's
+        # option style still allows - otherwise switching strategy would silently
+        # throw away a name the Analyze tab just handed over.
+        valid = [u for u in st.session_state["build_underlyings"]
+                 if u in ordered or underlying_fits_style(strategy_key, u)]
         st.session_state["build_underlyings"] = valid or default_u
     underlyings = top[1].multiselect("Underlying(s)", ordered, key="build_underlyings",
-                                     help="Type to search. Pick more than one to scan together.")
+                                     accept_new_options=True,
+                                     help="Type to search, or type any other ticker to add it. "
+                                          "Pick more than one to scan together.")
 
     _underlying_prices(underlyings, provider)
 
@@ -1721,8 +1734,9 @@ def _tab_build(settings, strategies, provider) -> None:
                    "the cleanest choice. **Stocks/ETFs** can be assigned, so the app enters them "
                    "nearer 45 DTE and warns about earnings.")
     else:
-        theme.note("Type any S&P 500 or Nasdaq-100 **stock** (AAPL, NVDA...) or an ETF "
-                   "(SPY, QQQ, IWM, DIA). Want the recommended play for a name? Use **Analyze**.")
+        theme.note("Pick any **stock** or **ETF** you can own shares of - the list holds the big "
+                   "ones, and for anything else type the ticker and click the **Add:** line. "
+                   "Want the recommended play for a name? Use **Analyze**.")
 
     uses_width = strat.get("family") == "credit_spread"
     row = st.columns([1, 1] if uses_width else [1, 2])

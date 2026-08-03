@@ -68,6 +68,27 @@ def allowed_underlyings_for(strategy_key: str) -> list[str]:
     return us_all
 
 
+def underlying_fits_style(strategy_key: str, underlying: str) -> bool:
+    """Can this strategy run on this ticker, including one typed by hand?
+
+    allowed_underlyings_for() can only offer names the universe files know, and
+    those cover the S&P 500 and Nasdaq-100 only. A liquid name outside them
+    (SOFI, HOOD) is still a legitimate underlying - the SOP says "any liquid
+    stock, ETF, or index" - so the real constraint is option style: European
+    strategies need a cash-settled index, US-style ones need something with
+    shares behind it.
+    """
+    settings = load_settings()
+    style = get_strategy(strategy_key).get("underlying_style", "us")
+    is_index = underlying.upper() in {s.upper()
+                                      for s in settings["underlyings"]["european_style"]}
+    if style == "european":
+        return is_index
+    if style == "us":
+        return not is_index
+    return True
+
+
 def underlying_kind(underlying: str) -> str:
     """'index' (European, cash-settled) | 'etf' (US-style ETF) | 'stock'.
 

@@ -35,8 +35,16 @@ VERY_SHORT_RUNWAY = 4       # at or under this, the trade is over before it star
 MIN_CREDIT_CHECK_PREFIX = "Credit at least"
 
 
-def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
-    ok = trade.underlying in allowed
+def check_underlying_style(trade: Trade, allowed: list[str],
+                           fits_style: Optional[bool] = None) -> CheckResult:
+    """Is this a name the strategy can actually run on?
+
+    `allowed` only holds the names the app can offer, and those come from the
+    S&P 500 / Nasdaq-100 universe files. A liquid name outside them (SOFI) is
+    still valid per the SOP - "any liquid stock, ETF, or index" - so the caller
+    passes `fits_style`, the option-style verdict, and that decides when given.
+    """
+    ok = trade.underlying in allowed if fits_style is None else fits_style
     # The allowed list can be hundreds of names, so summarize instead of listing all.
     has_index = any(s in allowed for s in ("SPX", "NDX", "RUT", "XSP"))
     if has_index:   # credit spreads / iron condors - any liquid name per the SOP
@@ -44,8 +52,9 @@ def check_underlying_style(trade: Trade, allowed: list[str]) -> CheckResult:
                 "Just make sure it's liquid enough to enter and exit easily.")
         expected = "any liquid stock, ETF, or index"
     else:           # cash secured puts / covered calls / PMCC
-        hint = ("Cash secured puts and covered calls need a US-style name you can own shares of - "
-                "an ETF (SPY, QQQ...) or an S&P 500 / Nasdaq-100 stock.")
+        hint = ("Cash secured puts and covered calls need a name you can own shares of - "
+                "a stock or an ETF. Cash-settled indexes (SPX, NDX, RUT, XSP) can never "
+                "be assigned, so there are no shares for them to land on.")
         expected = "US-style stock or ETF"
     return CheckResult(
         name="Right underlying for this strategy",
