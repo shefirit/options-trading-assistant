@@ -1081,8 +1081,10 @@ def _premium_compare(settings, provider) -> None:
     picks = st.multiselect(
         "Names to compare", options,
         default=[s for s in ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"] if s in options],
-        max_selections=20, key="premium_picks",
-        help="Add as many as you like - the table compares them all at once.")
+        max_selections=20, key="premium_picks", accept_new_options=True,
+        help="Add as many as you like - the table compares them all at once. "
+             "Not on the list? Type the ticker and click the Add: line.")
+    picks = [p.strip().upper() for p in picks if p and p.strip()]
 
     monthly_bp = float(settings["risk_limits"]["monthly_bp_limit"])
     state_key = "premium_calls" if calls else "premium_snaps"
@@ -2172,9 +2174,15 @@ def _quick_log_form(settings, strategies, provider) -> None:
 
         allowed = allowed_underlyings_for(strategy_key)
         default_i = allowed.index("SPX") if "SPX" in allowed else 0
+        # accept_new_options because this records a trade you ALREADY placed in
+        # thinkorswim. The list only covers the S&P 500 and Nasdaq-100, so
+        # without it a real fill on any other name simply could not be logged.
         underlying = top[1].selectbox("Underlying", allowed, index=default_i,
                                       key=f"ql_u_{strategy_key}",
-                                      help="Type to search.")
+                                      accept_new_options=True,
+                                      help="Type to search, or type any other ticker to add it.")
+        if underlying:
+            underlying = underlying.strip().upper()
 
         basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
         has_far_leg = basis in ("debit", "shares_plus_protection", "ratio_risk")
