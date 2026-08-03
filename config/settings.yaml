@@ -36,14 +36,18 @@ picks:
   min_price: 15                 # skip junk-priced names (assignment traps)
   hv_min: 0.12                  # calmer than 12%/yr pays too little premium to bother
   hv_max: 0.80                  # wilder than 80%/yr is "great premium, great danger"
-  max_stock_finalists: 20       # how many stocks get the full option-chain analysis
-  max_etf_finalists: 10         # how many ETFs get it
+  # How many names get the full option-chain look. Each one costs about 1.6s,
+  # so 40 + 20 adds roughly a minute to the sweep - small next to stage 1, which
+  # downloads a year of history for the whole universe. Raise these for more to
+  # choose from, lower them for a faster scan.
+  max_stock_finalists: 40       # how many stocks get the full option-chain analysis
+  max_etf_finalists: 20         # how many ETFs get it
   # Finalists are ranked by dollar volume, and dollar volume tracks company size
   # almost perfectly - NVDA trades $27B a day, a good mid-cap a fraction of that.
   # So the mega-caps took all 20 slots and no smaller name was ever priced, which
   # defeats the point of sweeping the whole market. These slots are held back for
   # mid-caps; any nobody claims fall back to the big names.
-  midcap_finalists: 8           # of the 20 stock slots, reserved for mid-caps
+  midcap_finalists: 16          # of the 40 stock slots, reserved for mid-caps
   midcap_max_cap: 100000000000  # under $100B counts as a mid-cap for that split
   # The Quick scan (no whole-market screen): the 4 indexes are always included,
   # plus this many of the biggest ETFs (by assets) and biggest stocks (by market

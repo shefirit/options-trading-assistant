@@ -76,11 +76,15 @@ def test_etfs_are_never_size_gated_by_market_cap():
 
 
 def test_finalists_are_capped_per_kind_and_ranked_by_dollar_volume():
+    # Sized off the rules, not hardcoded: these caps are hers to tune in
+    # settings.yaml, and a test that assumes a number breaks the moment she does.
+    n_stocks = RULES.max_stock_finalists + 5
+    n_etfs = RULES.max_etf_finalists + 2
     results = []
-    for i in range(25):    # 25 passing stocks, rising dollar volume
+    for i in range(n_stocks):      # passing stocks, rising dollar volume
         closes, vols = _series(volume=3_000_000 + i * 1_000_000)
         results.append(ms.build_result(f"S{i}", "stock", closes, vols, RULES, market_cap=5e10))
-    for i in range(12):    # 12 passing ETFs
+    for i in range(n_etfs):        # passing ETFs
         closes, vols = _series(volume=4_000_000 + i * 1_000_000)
         results.append(ms.build_result(f"E{i}", "etf", closes, vols, RULES))
     assert all(r.passed for r in results)
@@ -91,8 +95,8 @@ def test_finalists_are_capped_per_kind_and_ranked_by_dollar_volume():
     assert len(stocks) == RULES.max_stock_finalists
     assert len(etfs) == RULES.max_etf_finalists
     # The biggest names made it; the smallest were cut.
-    assert {r.symbol for r in stocks} == {f"S{i}" for i in range(5, 25)}
-    assert {r.symbol for r in etfs} == {f"E{i}" for i in range(2, 12)}
+    assert {r.symbol for r in stocks} == {f"S{i}" for i in range(5, n_stocks)}
+    assert {r.symbol for r in etfs} == {f"E{i}" for i in range(2, n_etfs)}
     vols_order = [r.dollar_volume for r in picked]
     assert vols_order == sorted(vols_order, reverse=True)
 
@@ -120,9 +124,11 @@ def _stock(name: str, volume: float, cap: float):
 
 
 def test_mega_caps_no_longer_take_every_stock_slot():
-    """25 huge names outrank 10 mid-caps on volume - the mid-caps still get in."""
-    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(25)]
-    results += [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10) for i in range(10)]
+    """Plenty of huge names outrank the mid-caps on volume - mids still get in."""
+    n_big = RULES.max_stock_finalists + 5
+    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(n_big)]
+    results += [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10)
+                for i in range(RULES.midcap_finalists + 2)]
 
     picked = ms.finalists(results, RULES)
     mids = [r for r in picked if r.symbol.startswith("MID")]
@@ -131,9 +137,10 @@ def test_mega_caps_no_longer_take_every_stock_slot():
 
 
 def test_unclaimed_mid_slots_go_back_to_the_big_names():
-    """A quiet day for mid-caps must not leave slots empty - she configured 20
-    candidates and should get 20."""
-    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(25)]
+    """A quiet day for mid-caps must not leave slots empty - she configured a
+    number of candidates and should get that many."""
+    n_big = RULES.max_stock_finalists + 5
+    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(n_big)]
     results += [_stock("MID0", 3_000_000, 2e10)]
 
     picked = ms.finalists(results, RULES)
@@ -144,7 +151,8 @@ def test_unclaimed_mid_slots_go_back_to_the_big_names():
 def test_unclaimed_large_slots_go_to_mid_caps_too():
     """The mirror case: a universe with few mega-caps must not waste the large
     slots either. This is what the existing cap test caught."""
-    results = [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10) for i in range(25)]
+    results = [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10)
+               for i in range(RULES.max_stock_finalists + 5)]
     picked = ms.finalists(results, RULES)
     assert len(picked) == RULES.max_stock_finalists
 

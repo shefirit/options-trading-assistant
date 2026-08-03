@@ -31,12 +31,12 @@ class ScreenRules(BaseModel):
     min_price: float = 15.0
     hv_min: float = 0.12                      # calmer than this pays no real premium
     hv_max: float = 0.80                      # wilder than this is danger, not income
-    max_stock_finalists: int = 20
-    max_etf_finalists: int = 10
+    max_stock_finalists: int = 40
+    max_etf_finalists: int = 20
     # Of the stock slots, how many are held back for mid-caps. Without this the
-    # mega-caps take all 20 on dollar volume alone and no smaller name is ever
-    # priced. Unclaimed mid slots fall back to the big names.
-    midcap_finalists: int = 8
+    # mega-caps take every slot on dollar volume alone and no smaller name is
+    # ever priced. Unclaimed slots fall back either way.
+    midcap_finalists: int = 16
     midcap_max_cap: float = 100_000_000_000   # under $100B counts as mid here
 
 
