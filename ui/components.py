@@ -32,6 +32,28 @@ def _esc(text: str) -> str:
     """
     return text.replace("$", "\\$")
 
+
+def quality_label(symbol: str, grade: str | None) -> str:
+    """What to print in the Quality column when there may be no letter grade.
+
+    This used to be `grade or "ETF"`, which quietly told a lie: a STOCK whose
+    grade could not be computed was printed as "ETF". That happens routinely on
+    the hosted app, where Yahoo throttles the fundamentals call from datacenter
+    IPs, so a real company like SOFI showed up looking like a fund.
+
+    A missing grade and an ETF are different facts, so say which one it is.
+    """
+    if grade:
+        return grade
+    from src.engine.config_loader import underlying_kind
+    kind = underlying_kind(symbol or "")
+    if kind == "etf":
+        return "ETF"
+    if kind == "index":
+        return "Index"
+    return "—"      # a stock we could not grade, not a fund
+
+
 _STATUS_COLOR = {"good": "green", "ok": "orange", "watch": "red"}
 _STATUS_ICON = {"good": "✅", "ok": "➖", "watch": "⚠️"}
 
@@ -512,7 +534,7 @@ def render_premium_cards(snapshots: list) -> None:
 
         label, vcolor, vbg, vborder = _VERDICT_STYLE.get(s.verdict, _VERDICT_STYLE["okay"])
         gcolor = _GRADE_COLOR.get(s.grade, "#0B7A54")   # ETF/None -> indigo
-        grade_txt = s.grade or "ETF"
+        grade_txt = quality_label(s.symbol, s.grade)
         rich_color = ("#0B7A54" if s.richness == "Rich"
                       else "#B45309" if s.richness == "Fair" else "#B91C1C")
         cushion = (f" · falls to ${s.breakeven:,.0f} before you lose "
@@ -621,7 +643,7 @@ def premium_dataframe(snapshots: list) -> "pd.DataFrame":
         rows.append({
             "Symbol": s.symbol,
             "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
-            "Quality": s.grade or "ETF",
+            "Quality": quality_label(s.symbol, s.grade),
             "Sell put at": s.short_strike,
             "Delta": s.short_delta,
             "Income $/mo": s.credit_dollars,
@@ -1755,7 +1777,7 @@ def picks_income_dataframe(picks: list) -> pd.DataFrame:
             "Symbol": s.symbol,
             "Price": round(s.price, 2) if s.price else None,
             "Verdict": _VERDICT_WORD.get(s.verdict, s.verdict),
-            "Quality": s.grade or "ETF",
+            "Quality": quality_label(s.symbol, s.grade),
             "Fits your SOP": _STRATEGY_SHORT.get(p.strategy_key, p.strategy_key),
             "Income $/mo": s.credit_dollars,
             "Yield %/mo": s.monthly_yield_pct,
@@ -1803,7 +1825,7 @@ def covered_call_dataframe(picks: list) -> pd.DataFrame:
             "Credit $": p.call_credit,
             "Yield/mo %": p.monthly_yield_pct,
             "Yield/yr %": p.annualized_yield_pct,
-            "Quality": p.grade or "ETF",
+            "Quality": quality_label(p.symbol, p.grade),
             "Trend": p.trend.title(),
             "Days": p.dte,
         })
@@ -1844,7 +1866,7 @@ def render_covered_call_detail(pick) -> None:
     """One covered call in full: the plan, the yields, and the honest caveats."""
     st.markdown(_esc(
         f"**{pick.symbol}** · ${pick.price:,.2f} · trend {pick.trend} · "
-        f"quality {pick.grade or 'ETF'}"))
+        f"quality {quality_label(pick.symbol, pick.grade)}"))
     m = st.columns(4)
     m[0].metric("Yield this month", f"{pick.monthly_yield_pct:.2f}%"
                 if pick.monthly_yield_pct is not None else "-",

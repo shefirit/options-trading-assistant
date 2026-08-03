@@ -880,7 +880,7 @@ def _picks_best_ideas(report, strategies) -> None:
                 "💰", "Best put to sell",
                 f"{s_.symbol} · {components.short_strategy(name)}",
                 f"Sell the {s_.short_strike:g} put: {yield_bit}. "
-                f"Trend {s_.trend}, quality {s_.grade or 'ETF'}."
+                f"Trend {s_.trend}, quality {components.quality_label(s_.symbol, s_.grade)}."
                 if s_.short_strike else yield_bit,
                 best_income.strategy_key, s_.symbol, f"best_inc_{s_.symbol}")
 
