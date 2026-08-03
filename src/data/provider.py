@@ -300,7 +300,13 @@ class DataProvider:
         def _fetch():
             from src.data import market_screener, stock_universe
             symbols = list(dict.fromkeys([*etfs, *stocks]))
-            history = yfinance_client.batch_history(symbols)
+            # A year, not the 3mo default: the trend read only applies its
+            # 200-day veto when it HAS 200 closes. On 3 months the screen passed
+            # names that stage 2 then rejected as downtrends, so a falling stock
+            # burned one of the few finalist slots and turned up in "left out"
+            # instead of a real candidate. Same number of requests, just fuller
+            # rows, since these are batched by ticker not by day.
+            history = yfinance_client.batch_history(symbols, period="1y")
             if not history:
                 return None
             caps = stock_universe.market_caps()

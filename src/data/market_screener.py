@@ -33,6 +33,11 @@ class ScreenRules(BaseModel):
     hv_max: float = 0.80                      # wilder than this is danger, not income
     max_stock_finalists: int = 20
     max_etf_finalists: int = 10
+    # Of the stock slots, how many are held back for mid-caps. Without this the
+    # mega-caps take all 20 on dollar volume alone and no smaller name is ever
+    # priced. Unclaimed mid slots fall back to the big names.
+    midcap_finalists: int = 8
+    midcap_max_cap: float = 100_000_000_000   # under $100B counts as mid here
 
 
 def rules_from_config(cfg: Optional[dict]) -> ScreenRules:
@@ -105,17 +110,56 @@ def build_result(
 
 
 def finalists(results: list[ScreenResult], rules: ScreenRules) -> list[ScreenResult]:
-    """The passers that get a full option-chain look: the biggest dollar-volume
-    names first, capped per kind so stocks can't crowd out ETFs or vice versa."""
+    """The passers that get a full option-chain look.
+
+    Ranked by dollar volume, capped per kind so stocks cannot crowd out ETFs.
+    Stock slots are then split into two tiers, because dollar volume tracks
+    company size almost perfectly: NVDA trades $27B a day, a good mid-cap a
+    fraction of that. On one list the mega-caps take every slot, so a hidden
+    gem can never surface - which is the entire point of the Full sweep.
+    Widening the universe did nothing on screen until this split existed.
+
+    A name with no known market cap ranks in the large tier, where it competes
+    on dollar volume exactly as it did before.
+    """
     passed = sorted((r for r in results if r.passed),
                     key=lambda r: r.dollar_volume or 0.0, reverse=True)
-    caps = {"stock": rules.max_stock_finalists, "etf": rules.max_etf_finalists}
-    taken = {"stock": 0, "etf": 0}
+
+    mid_slots = max(0, min(rules.midcap_finalists, rules.max_stock_finalists))
+    large_slots = rules.max_stock_finalists - mid_slots
+    taken = {"etf": 0, "large": 0, "mid": 0}
     out: list[ScreenResult] = []
+
+    def bucket(r: ScreenResult) -> str:
+        if r.kind != "stock":
+            return "etf"
+        cap = r.market_cap
+        return "mid" if cap is not None and cap < rules.midcap_max_cap else "large"
+
+    limits = {"etf": rules.max_etf_finalists, "large": large_slots, "mid": mid_slots}
     for r in passed:
-        if taken.get(r.kind, 0) < caps.get(r.kind, 0):
+        b = bucket(r)
+        if taken[b] < limits[b]:
             out.append(r)
-            taken[r.kind] = taken.get(r.kind, 0) + 1
+            taken[b] += 1
+
+    # Slots nobody claimed go to whoever is left, in either direction: a quiet
+    # day for mid-caps must not waste their slots, and a universe with few
+    # mega-caps must not waste the large ones. Either way she gets the full
+    # count of candidates she configured rather than a short list.
+    chosen = {r.symbol for r in out}
+    spare = rules.max_stock_finalists - taken["large"] - taken["mid"]
+    for r in passed:
+        if spare <= 0:
+            break
+        if r.kind == "stock" and r.symbol not in chosen:
+            out.append(r)
+            chosen.add(r.symbol)
+            spare -= 1
+
+    # Re-sort: the tier passes append out of order, and callers scan this list
+    # top-down, so the biggest, most liquid names should still come first.
+    out.sort(key=lambda r: r.dollar_volume or 0.0, reverse=True)
     return out
 
 

@@ -106,3 +106,61 @@ def test_funnel_note_counts_the_stages():
     note = ms.funnel_note([ok, bad, etf], picked)
     assert "2 stocks" in note and "1 ETFs" in note
     assert "2 cleared" in note and "top 2" in note
+
+
+# ---- mid-cap slots -----------------------------------------------------
+# Finalists rank on dollar volume, and dollar volume tracks company size almost
+# perfectly: NVDA trades $27B a day. On one list the mega-caps took all 20 slots
+# and no smaller name was ever priced, so widening the universe to the Russell
+# 1000 changed nothing on screen. These slots are held back for mid-caps.
+
+def _stock(name: str, volume: float, cap: float):
+    closes, vols = _series(volume=volume)
+    return ms.build_result(name, "stock", closes, vols, RULES, market_cap=cap)
+
+
+def test_mega_caps_no_longer_take_every_stock_slot():
+    """25 huge names outrank 10 mid-caps on volume - the mid-caps still get in."""
+    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(25)]
+    results += [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10) for i in range(10)]
+
+    picked = ms.finalists(results, RULES)
+    mids = [r for r in picked if r.symbol.startswith("MID")]
+    assert len(picked) == RULES.max_stock_finalists
+    assert len(mids) == RULES.midcap_finalists
+
+
+def test_unclaimed_mid_slots_go_back_to_the_big_names():
+    """A quiet day for mid-caps must not leave slots empty - she configured 20
+    candidates and should get 20."""
+    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(25)]
+    results += [_stock("MID0", 3_000_000, 2e10)]
+
+    picked = ms.finalists(results, RULES)
+    assert len(picked) == RULES.max_stock_finalists
+    assert "MID0" in {r.symbol for r in picked}
+
+
+def test_unclaimed_large_slots_go_to_mid_caps_too():
+    """The mirror case: a universe with few mega-caps must not waste the large
+    slots either. This is what the existing cap test caught."""
+    results = [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10) for i in range(25)]
+    picked = ms.finalists(results, RULES)
+    assert len(picked) == RULES.max_stock_finalists
+
+
+def test_finalists_stay_ordered_by_dollar_volume():
+    """Callers read this list top-down, so the tier passes must not scramble it."""
+    results = [_stock(f"BIG{i}", 20_000_000 + i * 1_000_000, 5e11) for i in range(15)]
+    results += [_stock(f"MID{i}", 3_000_000 + i * 100_000, 2e10) for i in range(15)]
+    vols = [r.dollar_volume for r in ms.finalists(results, RULES)]
+    assert vols == sorted(vols, reverse=True)
+
+
+def test_a_name_with_no_market_cap_is_treated_as_large():
+    """Unknown cap competes on dollar volume exactly as it did before."""
+    results = [_stock(f"MID{i}", 3_000_000, 2e10) for i in range(30)]
+    closes, vols = _series(volume=50_000_000)
+    results.append(ms.build_result("UNKNOWN", "stock", closes, vols, RULES))
+    picked = ms.finalists(results, RULES)
+    assert "UNKNOWN" in {r.symbol for r in picked}
