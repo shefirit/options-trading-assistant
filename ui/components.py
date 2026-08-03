@@ -558,13 +558,19 @@ def render_premium_detail(s) -> None:
     st.markdown(f"### {s.symbol} · ${s.price:,.2f}  ·  trend {s.trend}{grade_txt}")
 
     # The numbers a beginner actually decides on.
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Income / month", f"${s.credit_dollars:,.0f}")
     m2.metric("As % of cash", f"{s.monthly_yield_pct:.2f}%")
     m3.metric("Premium deal", s.richness,
               help="Rich = you're paid more than this stock's usual moves would justify (good "
                    "for you). Thin = it moves a lot but pays little (bad). Fair = normal.")
-    m4.metric("Can trade?", s.liquidity,
+    m4.metric("Vol rank", "n/a" if s.iv_rank is None else f"{s.iv_rank:.0f}",
+              help="0-100: how expensive this name's options are compared with its own past "
+                   "year. Above 70 means options are near their priciest all year, which is "
+                   "when selling pays best. Below 30 means they are cheap and you are being "
+                   "paid little. Note: ranked against how much the stock has actually moved, "
+                   "since no free source publishes a year of implied-volatility history.")
+    m5.metric("Can trade?", s.liquidity,
               help=f"Bid-ask spread {s.spread_pct:.0f}% of price, open interest "
                    f"{s.open_interest or 0:,}." if s.spread_pct else None)
 
@@ -622,6 +628,7 @@ def premium_dataframe(snapshots: list) -> "pd.DataFrame":
             "Yield %/mo": s.monthly_yield_pct,
             "Yield %/yr": s.annualized_yield_pct,
             "Premium deal": s.richness,
+            "Vol rank": s.iv_rank,
             "Watch out": ("⚠ earnings first" if s.earnings_before_expiry
                           else "⚠ hard to trade" if s.liquidity == "Thin" else "—"),
         })
@@ -652,6 +659,11 @@ def premium_column_config():
             help="Is the premium a good deal for the risk? Rich = you're paid MORE than this "
                  "stock's usual swings would justify (good for you). Thin = it swings a lot but "
                  "pays little (bad). Fair = about normal."),
+        "Vol rank": _st.column_config.NumberColumn(format="%.0f",
+            help="0-100: how expensive this name's options are versus its own past year. Above "
+                 "70 is near the priciest all year, the best time to sell. Below 30 is cheap "
+                 "and pays you little. Ranked against how much the stock has actually moved, "
+                 "because no free source publishes a year of implied-volatility history."),
     }
 
 
@@ -1748,6 +1760,7 @@ def picks_income_dataframe(picks: list) -> pd.DataFrame:
             "Income $/mo": s.credit_dollars,
             "Yield %/mo": s.monthly_yield_pct,
             "Premium deal": s.richness,
+            "Vol rank": s.iv_rank,
             "Dividend %/yr": p.dividend.yield_pct,
             "Watch out": ("⚠ earnings first" if s.earnings_before_expiry
                           else "⚠ hard to trade" if s.liquidity == "Thin" else "—"),

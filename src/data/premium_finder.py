@@ -59,6 +59,8 @@ class PremiumSnapshot(BaseModel):
     hv: Optional[float] = None                # realized vol
     iv_hv_ratio: Optional[float] = None
     richness: str = "n/a"                     # "Rich" | "Fair" | "Thin"
+    iv_rank: Optional[float] = None           # 0-100 vs this name's own year
+    iv_rank_read: str = "n/a"                 # plain English for iv_rank
     # context
     grade: Optional[str] = None               # A-F quality grade (stocks only)
     earnings_date: Optional[dt.date] = None
@@ -98,6 +100,68 @@ def annualized_vol(closes: list[float], lookback: int = 30) -> Optional[float]:
     mean = sum(rets) / len(rets)
     var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
     return round(math.sqrt(var) * math.sqrt(252), 4)
+
+
+def vol_history(closes: list[float], lookback: int = 30) -> list[float]:
+    """The rolling annualized realized volatility, one value per day we have
+    enough history for. Computes log returns once rather than re-slicing, so a
+    whole-market sweep does not pay for this 500 times over.
+    """
+    clean = [c for c in closes
+             if isinstance(c, (int, float)) and math.isfinite(c) and c > 0]
+    if len(clean) < lookback + 2:
+        return []
+    rets = [math.log(clean[i] / clean[i - 1]) for i in range(1, len(clean))]
+    out: list[float] = []
+    root = math.sqrt(252)
+    for end in range(lookback, len(rets) + 1):
+        w = rets[end - lookback:end]
+        mean = sum(w) / len(w)
+        var = sum((r - mean) ** 2 for r in w) / (len(w) - 1)
+        out.append(math.sqrt(var) * root)
+    return out
+
+
+def vol_rank(closes: list[float], current_vol: Optional[float],
+             lookback: int = 30) -> Optional[float]:
+    """0-100: how expensive options are for THIS name compared with its own year.
+
+    Textbook IV Rank ranks today's implied volatility against a year of its own
+    implied volatility. No free data source publishes that history (CBOE gives
+    one live snapshot, Alpha Vantage puts it behind the paid tier), and the
+    hosted app runs on an ephemeral disk so it cannot accumulate one either.
+
+    So we rank today's implied volatility against how much the stock has
+    ACTUALLY moved over the past year. It answers the same practical question -
+    are these options dear or cheap for this name right now - from data we can
+    always get. The UI says which one it is; it must never be presented as the
+    textbook number.
+
+    Returns None rather than a guess when there is not enough history to rank.
+    """
+    if current_vol is None or not math.isfinite(current_vol):
+        return None
+    hist = vol_history(closes, lookback)
+    if len(hist) < 60:      # under ~3 months of readings, a range means nothing
+        return None
+    lo, hi = min(hist), max(hist)
+    if hi - lo < 1e-9:
+        return None
+    pct = (current_vol - lo) / (hi - lo) * 100
+    return round(max(0.0, min(100.0, pct)), 1)
+
+
+def rank_read(rank: Optional[float]) -> str:
+    """Plain English for a vol rank, in the seller's terms."""
+    if rank is None:
+        return "n/a"
+    if rank >= 70:
+        return "Expensive - good time to sell"
+    if rank >= 50:
+        return "Above average - decent for selling"
+    if rank >= 30:
+        return "Middling"
+    return "Cheap - poor time to sell"
 
 
 def _nearest_atm_iv(puts: list, price: float) -> Optional[float]:
@@ -215,8 +279,13 @@ def snapshot(
     earnings_date: Optional[dt.date] = None,
     grade: Optional[str] = None,
     today: Optional[dt.date] = None,
+    closes: Optional[list[float]] = None,
 ) -> PremiumSnapshot:
-    """Compute the premium picture + odds + safety + a clear plan (pure)."""
+    """Compute the premium picture + odds + safety + a clear plan (pure).
+
+    closes: a year of daily closes, only used for the volatility rank. Optional
+    so every existing caller keeps working - they just get iv_rank of None.
+    """
     today = today or dt.date.today()
     price = chain.underlying_price
     puts = [c for c in chain.contracts if c.option_type == OptionType.PUT]
@@ -235,6 +304,7 @@ def snapshot(
     annualized = monthly_yield * (365 / dte) if dte else None
     atm_iv = _nearest_atm_iv(puts, price)
     iv_hv = round(atm_iv / hv, 2) if (atm_iv and hv) else None
+    rank = vol_rank(closes or [], atm_iv)
 
     # odds + safety margin
     pop = round((1 - short.abs_delta) * 100)        # ~prob the put expires worthless
@@ -262,6 +332,7 @@ def snapshot(
         hv=round(hv, 4) if hv else None,
         iv_hv_ratio=iv_hv,
         richness=_richness(iv_hv, atm_iv),
+        iv_rank=rank, iv_rank_read=rank_read(rank),
         grade=grade, earnings_date=earnings_date, earnings_before_expiry=earnings_in,
         flags=flags, trend=trend,
     )

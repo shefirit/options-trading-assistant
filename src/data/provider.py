@@ -663,7 +663,10 @@ class DataProvider:
             chain = self._expiration_chain(symbol, target_dte, tradable=True)
             if chain is None:
                 chain = yfinance_client.get_expiration_chain(symbol, target_dte)
-            closes = yfinance_client.get_history_closes(symbol, period="6mo")
+            # A full year, not 6 months, so the volatility rank has a 52-week
+            # range to sit in. Safe to widen: annualized_vol reads only the last
+            # 31 closes and trend_from_prices only the last 50, so neither moves.
+            closes = yfinance_client.get_history_closes(symbol, period="1y")
             hv = premium_finder.annualized_vol(closes)
             trend = trend_from_prices(closes)
             earnings, _ = yfinance_client.get_calendar_dates(symbol)
@@ -676,7 +679,8 @@ class DataProvider:
                 grade = stock_analysis.analyze(symbol, info, closes,
                                                avg_volume=avg_vol).grade
             return premium_finder.snapshot(symbol, chain, hv, trend, monthly_bp,
-                                           earnings_date=earnings, grade=grade)
+                                           earnings_date=earnings, grade=grade,
+                                           closes=closes)
 
         return cache.get_or_fetch(f"prem:{symbol}:{target_dte}", _fetch, 300)
 
