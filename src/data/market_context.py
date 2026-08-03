@@ -196,19 +196,38 @@ def daily_sentiment(index_changes: list[Optional[float]], vix: Optional[float]) 
     return f"{icon} {mood}{calm}", note
 
 
+# How far under the 200-day average counts as a real decline rather than noise
+# sitting on the line.
+LONG_TREND_BAND = 0.03
+
+
 def trend_from_prices(prices: list[float]) -> str:
-    """Simple trend from a list of recent daily closes (oldest first).
+    """Trend from a list of recent daily closes (oldest first).
 
     Compares the short (20-day) and long (50-day) averages, the same idea traders
-    use: short above long = uptrend.
+    use: short above long = uptrend. Then the 200-day average gets a veto.
+
+    The 20/50 crossover only sees about six weeks, and a stock in a sustained
+    slide can drift sideways for six weeks. SOFI read "sideways" on the
+    crossover while sitting 23% below its 200-day average and down 23% on the
+    year, which put it in the "puts you'd sell for income" list - exactly the
+    falling-knife the SOP says to avoid, since a put can leave you owning it.
+
+    So a name well below its 200-day is capped: a "sideways" or "down" short
+    read becomes "down", and even a rising short read is only allowed up to
+    "sideways". That last part matters - a stock that crashed and is genuinely
+    recovering is still below its 200-day for months, and calling that a
+    downtrend would throw away good candidates.
     """
     if len(prices) < 50:
         return "unknown"
     sma20 = sum(prices[-20:]) / 20
     sma50 = sum(prices[-50:]) / 50
     spread = (sma20 - sma50) / sma50
-    if spread > 0.01:
-        return "up"
-    if spread < -0.01:
-        return "down"
-    return "sideways"
+    short = "up" if spread > 0.01 else "down" if spread < -0.01 else "sideways"
+
+    if len(prices) >= 200:
+        sma200 = sum(prices[-200:]) / 200
+        if sma200 > 0 and prices[-1] < sma200 * (1 - LONG_TREND_BAND):
+            return "sideways" if short == "up" else "down"
+    return short

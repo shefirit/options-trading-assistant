@@ -80,3 +80,41 @@ def test_trend_from_prices():
     assert trend_from_prices(falling) == "down"
     assert trend_from_prices(flat) == "sideways"
     assert trend_from_prices([1, 2, 3]) == "unknown"  # not enough data
+
+
+# ---- the 200-day veto -------------------------------------------------
+# The 20/50 crossover only sees about six weeks. SOFI drifted sideways on it
+# while sitting 23% below its 200-day and down 23% on the year, so it landed in
+# the "puts you'd sell for income" list - the falling knife the SOP avoids.
+
+def _slid_then_flat() -> list[float]:
+    """A long slide, then a flat stretch: the shape that fooled the crossover."""
+    return [200.0 - i * 0.6 for i in range(200)] + [80.0] * 40
+
+
+def test_a_long_slide_that_went_flat_is_still_a_downtrend():
+    prices = _slid_then_flat()
+    # The last six weeks alone look calm...
+    assert trend_from_prices(prices[-60:]) == "sideways"
+    # ...but with the full year in view it is a downtrend.
+    assert trend_from_prices(prices) == "down"
+
+
+def test_a_recovering_stock_is_not_condemned_to_downtrend():
+    """A name that crashed and is genuinely climbing back sits under its
+    200-day for months. Calling that a downtrend would throw away exactly the
+    recoveries the wheel wants, so a rising short read is capped at sideways."""
+    prices = [200.0 - i * 0.8 for i in range(200)] + [40.0 + i * 1.2 for i in range(40)]
+    assert trend_from_prices(prices) == "sideways"
+
+
+def test_a_name_above_its_200_day_is_judged_on_the_crossover_alone():
+    rising = [100 + i * 0.5 for i in range(240)]
+    assert trend_from_prices(rising) == "up"
+
+
+def test_the_veto_needs_a_full_200_days_before_it_applies():
+    """With under 200 closes there is no long average to judge against, so the
+    old short-term answer stands rather than a guess."""
+    short_history = [100.0] * 60
+    assert trend_from_prices(short_history) == "sideways"
