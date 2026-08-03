@@ -2594,6 +2594,70 @@ def _signed(amount: float) -> str:
     return f"{'+' if amount >= 0 else '-'}${abs(amount):,.0f}"
 
 
+def _step(number: int, title: str, sub: str = "") -> None:
+    """A numbered step heading, so a form reads as a sequence not a wall.
+
+    The roll form's first version was a flat stack of labels, and she said it
+    was still hard to know what to fill: with nothing grouping them, all six
+    boxes look equally urgent and equally unexplained.
+    """
+    import html as _h
+
+    st.markdown(
+        f"<div style='display:flex;gap:10px;align-items:baseline;"
+        f"margin:14px 0 2px;border-top:1px solid {theme.BORDER};padding-top:12px;'>"
+        f"<div style='background:{theme.ACCENT};color:#fff;font-weight:800;"
+        f"border-radius:999px;min-width:24px;height:24px;display:flex;"
+        f"align-items:center;justify-content:center;font-size:0.9rem;'>{number}</div>"
+        f"<div><div style='font-weight:800;color:{theme.INK};font-size:1.05rem;'>"
+        f"{_h.escape(title)}</div>"
+        + (f"<div style='color:{theme.CAPTION};font-size:0.95rem;line-height:1.55;'>"
+           f"{_h.escape(sub)}</div>" if sub else "")
+        + "</div></div>", unsafe_allow_html=True)
+
+
+def _fill_price_input(label: str, key: str, contracts: int, *,
+                      default_total: Optional[float] = None,
+                      allow_negative: bool = False,
+                      help: str = "") -> float:
+    """A money box that takes the price the way thinkorswim prints it.
+
+    Every other money box in the app asks for a dollar TOTAL, which means she
+    has to work out 1.50 x 100 x contracts in her head before she can type
+    anything - on the one form she had already told me was confusing. This
+    takes the fill price straight off the statement and shows the total it
+    comes to, so the arithmetic is the app's job and the number she types is
+    the number she is looking at. Returns TOTAL dollars, so everything
+    downstream (and the log) is unchanged.
+    """
+    per = max(contracts, 1) * 100.0
+    default = round(float(default_total or 0.0) / per, 2)
+    extra = {} if allow_negative else {"min_value": 0.0}
+    price = float(st.number_input(label, step=0.05, format="%.2f", value=default,
+                                  key=key, help=help, **extra))
+    total = round(price * per, 2)
+
+    # Only once there is a price to convert - an empty form full of "= $0" rows
+    # is the noise she was already complaining about.
+    if price:
+        word = "contract" if max(contracts, 1) == 1 else "contracts"
+        st.markdown(
+            f"<div style='margin:-6px 0 10px;color:{theme.CAPTION};font-size:1rem;'>"
+            f"= <b style='color:{theme.INK};font-size:1.15rem;'>"
+            f"&#36;{abs(total):,.0f}</b> on {max(contracts, 1)} {word} "
+            f"&nbsp;<span style='color:{theme.MUTED};'>({price:.2f} &times; 100"
+            + (f" &times; {contracts}" if max(contracts, 1) > 1 else "")
+            + ")</span></div>", unsafe_allow_html=True)
+    # She has typed dollar totals into every other form in this app, so the one
+    # box that wants a price is exactly where that habit will misfire. A short
+    # call worth over $100 a share is not something her SOP ever sells.
+    if abs(price) > 100:
+        st.warning(f"{price:,.2f} looks like a dollar total rather than the fill "
+                   f"price. thinkorswim prints a price per share - 1.50, not 150. "
+                   f"Typed as it is, this records &#36;{abs(total):,.0f}.")
+    return total
+
+
 def _roll_money_panel(figs, old_short: str, new_short: str,
                       banked_before: float) -> None:
     """The money side of a roll, spelled out before she commits to it.
@@ -2668,18 +2732,25 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
     old_short = _call_short(old_strike)
     old_credit = float(p.credit or 0.0)
 
+    cost_now = live.get("cost_to_close")
+    contracts = max(int(p.contracts or 1), 1)
+
     with st.expander("🔄 Roll or close the short call"):
-        # What she is holding right now, before any box asks her about it. The
-        # form used to open straight into "What did you do?" with no reminder
-        # of which call it meant, so every figure below had to be matched to a
-        # position from memory.
+        # Where this call stands BEFORE she types anything. The first version
+        # only worked out the finished call's result once every box was filled,
+        # which put the explanation after the confusing part instead of before
+        # it - she opened the form, saw a wall of zeros, and was no wiser.
         if old_strike:
+            standing = ""
+            if cost_now is not None:
+                so_far = old_credit - float(cost_now)
+                standing = (
+                    f" Buying it back costs about ${float(cost_now):,.0f} today, "
+                    f"so as things stand that call is "
+                    f"{'up' if so_far >= 0 else 'down'} ${abs(so_far):,.0f}.")
             st.markdown(components._esc(
-                f"**Right now you are short {old_label}**, sold for "
-                f"${old_credit:,.0f}."
-                + (f" Buying it back costs about ${live['cost_to_close']:,.0f} "
-                   "at today's prices."
-                   if live.get("cost_to_close") is not None else "")))
+                f"**You are short {old_label}**, sold for ${old_credit:,.0f}."
+                + standing))
         # Her rule, in her words: roll it when the roll pays her a credit; when
         # it would cost a debit, close the call instead and sell the next one
         # separately. The two paths are named for that decision, not for the
@@ -2698,18 +2769,15 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                        "so. Selling a new one straight away is fine: the form "
                        "for it opens right after this, and both land in the "
                        "same day's profit either way.")
-            b1, b2 = st.columns(2)
-            back_on = b1.date_input("Closed it on", value=dt.date.today(),
+            back_on = st.date_input("Closed it on", value=dt.date.today(),
                                     max_value=dt.date.today(),
                                     key=f"back_when_{kp}_{p.trade_id}")
-            paid = b2.number_input(
-                "What you PAID to close it ($ total)",
-                min_value=0.0, step=5.0,
-                value=round(float(live.get("cost_to_close") or 0.0), 2),
-                key=f"back_paid_{kp}_{p.trade_id}",
-                help="The fill price x100 x contracts. Buying back a short call "
-                     "always costs money - that is the debit you were avoiding "
-                     "by not rolling.")
+            paid = _fill_price_input(
+                "Price you paid to close it (as thinkorswim shows it)",
+                f"back_paid_{kp}_{p.trade_id}", contracts,
+                default_total=cost_now,
+                help="The price on your fill, per share - the app multiplies by "
+                     "100 and by your contracts. Prefilled with today's price.")
             if paid:
                 # The same "did that call make money?" answer the roll path
                 # gives. Bought back on its own it is simple arithmetic, but it
@@ -2741,99 +2809,102 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                     st.rerun()
             return
 
-        theme.note("Roll it in thinkorswim first, then write the fill down here. "
-                   "The credit is banked in this month's profit, and the app "
-                   "starts watching the new call - same trade, no re-typing the "
-                   "LEAPS.")
-        r1, r2, r3 = st.columns(3)
-        rolled_on = r1.date_input("Rolled on", value=dt.date.today(),
-                                  max_value=dt.date.today(),
-                                  key=f"roll_when_{kp}_{p.trade_id}")
+        # ---- step 1: the new call ---------------------------------------
+        # Defaults that are USABLE on arrival. The first version opened with
+        # strike 0.00 and an expiration a month from today - which, on a call
+        # expiring further out than that, is a date the form's own validation
+        # then rejects. Roll OUT from the call she holds, not from today.
+        base = p.expiration or dt.date.today()
+        floor = max(base + dt.timedelta(days=1), dt.date.today())
+        _step(1, "The new call you sold",
+              "The further-out call - the one you SOLD in the roll. It has to "
+              "expire after the one you bought back.")
+        r1, r2 = st.columns(2)
         new_strike = r2.number_input(
-            "New short call strike", min_value=0.0, step=1.0,
+            "Strike", min_value=0.0, step=1.0,
+            value=float(old_strike or 0.0),
             key=f"roll_strike_{kp}_{p.trade_id}",
-            help="The call you SOLD in the roll - the further-out one.")
-        new_exp = r3.date_input(
-            "New expiration", value=dt.date.today() + dt.timedelta(days=30),
-            min_value=dt.date.today(), key=f"roll_exp_{kp}_{p.trade_id}")
+            help="Rolling straight out keeps the same strike; rolling up and "
+                 "out raises it. Prefilled with the strike you hold now.")
+        new_exp = r1.date_input(
+            "Expires", value=max(base + dt.timedelta(days=30), floor),
+            min_value=floor, key=f"roll_exp_{kp}_{p.trade_id}")
 
         new_label = _call_label(new_strike, new_exp)
         new_short = _call_short(new_strike)
         suggested = _live_call_mid(provider, p.underlying, new_strike, new_exp)
 
+        # ---- step 2: the money ------------------------------------------
         # A roll ORDER fills at one net price and never prints its two legs, so
-        # the old form's second box asked for a figure that was nowhere on her
-        # statement - the single thing about this form that confused her. Both
-        # ways of holding the same trade are offered now, and whichever two
-        # figures she has, the app works out the third instead of asking.
-        ONE_NET = "One net price for the whole roll (what a roll order shows)"
-        TWO_LEGS = "Two prices - what I paid, and what I got"
-        how = st.radio(
-            "What does your fill say?", [ONE_NET, TWO_LEGS],
-            key=f"roll_how_{kp}_{p.trade_id}",
-            help="Rolled in one order? That is one net price. Closed and sold "
-                 "as two separate orders, or reading the legs off Monitor > "
-                 "Account Statement > Account Trade History? That is two.")
+        # asking outright for a leg price sent her hunting for a figure that
+        # was not on her statement. One price is what she will have; the
+        # two-price way round is folded away for the times she has both.
+        _step(2, "What your fill said",
+              f"In thinkorswim: Monitor > Account Statement. A roll shows as "
+              f"ONE line ending in a price, like ...{p.underlying} "
+              f"{new_strike:g}/{old_strike:g} CALL @1.50 - it is that last "
+              f"number you want." if old_strike and new_strike else
+              "In thinkorswim: Monitor > Account Statement. A roll shows as one "
+              "line ending in the price you filled at.")
+        cash = _fill_price_input(
+            "Credit price on your fill", f"roll_cash_{kp}_{p.trade_id}",
+            contracts, allow_negative=True,
+            help="The single price at the end of your roll line - per share, "
+                 "not the dollar total. The app does the x100. If the roll cost "
+                 "you money instead of paying you, type a minus in front.")
 
-        if how == ONE_NET:
-            cash = st.number_input(
-                "Net credit on the fill ($ total)", step=5.0,
-                key=f"roll_cash_{kp}_{p.trade_id}",
-                help="The one net price on your fill, x100 x contracts. Filled "
-                     "at 1.50 credit on 1 contract = $150. Type a negative "
-                     "number if the roll cost you instead of paying you.")
-            # Keying on the strike and date re-seeds the default whenever she
-            # changes them - Streamlit ignores value= once a key has been seen.
-            new_credit = st.number_input(
-                f"What the new {new_strike:g} call sold for on its own ($ total)"
-                if new_strike else "What the NEW call sold for on its own ($ total)",
-                min_value=0.0, step=5.0, value=float(suggested or 0.0),
-                key=f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
-                help="This one is NOT on your fill - a one-order roll only "
-                     "prints the net. Use the suggestion, or read the leg off "
-                     "Monitor > Account Statement > Account Trade History in "
-                     "thinkorswim, which does list a spread's legs separately.")
-            if suggested:
-                theme.note(f"Not on your fill, so the app priced it: today's "
-                           f"chain says **\\${suggested:,.0f}** for {new_label}. "
-                           "Keep it unless your Account Trade History says "
-                           "otherwise - the check below will tell you if it is "
-                           "far off.")
-            elif new_strike:
-                theme.note("That contract could not be priced from the chain "
-                           "just now, so type what it sold for. If you only "
-                           "have the net, switch to two prices above and type "
-                           "what the buy-back cost instead.")
-            figs = roll_math.from_net(old_credit, cash, new_credit)
-            if cash and new_credit:
-                # The derived buy-back is the sanity check she CAN judge: she
-                # knows roughly what getting out of the old call cost, even
-                # when the new call's standalone price is a guess.
-                theme.note(f"Which means buying back {old_label} cost you about "
-                           f"**\\${figs.paid_to_close:,.0f}**. If that is not "
-                           "close, the new call's figure above is the one to "
-                           "fix.")
-        else:
-            g1, g2 = st.columns(2)
-            paid_back = g1.number_input(
-                f"What you PAID to buy back the {old_short} ($ total)",
-                min_value=0.0, step=5.0,
-                value=round(float(live.get("cost_to_close") or 0.0), 2),
-                key=f"roll_paid_{kp}_{p.trade_id}",
-                help="Buying back a call you sold always costs money. Prefilled "
-                     "with today's price - change it to your actual fill.")
-            new_credit = g2.number_input(
-                "What you GOT for the new call ($ total)",
-                min_value=0.0, step=5.0, value=float(suggested or 0.0),
-                key=f"roll_got_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
-                help="The premium the further-out call sold for, x100 x "
-                     "contracts.")
-            figs = roll_math.from_legs(old_credit, paid_back, new_credit)
-            cash = figs.net_credit
-            if paid_back and new_credit:
-                theme.note(f"Net credit on the order: **{_signed(figs.net_credit)}**. "
-                           "That should match the net price on your TOS fill - "
-                           "if it does not, one of the two prices is off.")
+        # Prefilled from the chain, so the common case is "leave it alone". The
+        # key carries the strike and date because Streamlit ignores value=
+        # once a key has been seen, and this default must follow those.
+        new_credit = _fill_price_input(
+            f"What the new {new_strike:g} call sold for by itself"
+            if new_strike else "What the new call sold for by itself",
+            f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
+            contracts, default_total=suggested,
+            help="Not on your fill - a one-order roll only prints the net. The "
+                 "app fills in today's price for that contract, which is close "
+                 "enough. Change it only if your Account Trade History lists "
+                 "the legs separately.")
+        if suggested:
+            theme.note("**Already filled in for you.** Your fill does not carry "
+                       "this number, so the app priced the contract off today's "
+                       "chain. Leave it as it is unless you know better.")
+        elif new_strike:
+            theme.note("The app could not price that contract just now, so type "
+                       "what it sold for. If you only have the roll's net price, "
+                       "open **My fill shows two prices** below instead.")
+        figs = roll_math.from_net(old_credit, cash, new_credit)
+
+        with st.expander("My fill shows two prices, not one"):
+            theme.note("Use this if you closed the old call and sold the new one "
+                       "as two separate orders, or if you are reading the legs "
+                       "off Monitor > Account Statement > Account Trade History, "
+                       "which does list a spread's legs one per line. Type both "
+                       "and the app works out the net for you.")
+            paid_back = _fill_price_input(
+                f"Price you paid to buy back the {old_short}",
+                f"roll_paid_{kp}_{p.trade_id}", contracts,
+                default_total=cost_now,
+                help="Prefilled with today's price - change it to your fill.")
+            got = _fill_price_input(
+                "Price you got for the new call",
+                f"roll_got_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
+                contracts, default_total=suggested)
+            use_legs = st.checkbox(
+                "Use these two prices instead of the one above",
+                key=f"roll_uselegs_{kp}_{p.trade_id}")
+            if paid_back and got:
+                legs = roll_math.from_legs(old_credit, paid_back, got)
+                theme.note(f"Those two make a net of **{_signed(legs.net_credit)}** "
+                           "on the order. It should match the price on your fill.")
+            if use_legs:
+                figs = roll_math.from_legs(old_credit, paid_back, got)
+                cash, new_credit = figs.net_credit, figs.new_credit
+
+        # ---- step 3: what it did, then record ---------------------------
+        _step(3, "Check it, then record it",
+              "Everything below is worked out from what you typed. Nothing is "
+              "saved until you press the button.")
 
         if figs.impossible:
             st.warning(figs.impossible)
@@ -2849,18 +2920,34 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
 
         if new_credit and cash:
             _roll_money_panel(figs, old_short, new_short, p.roll_income)
+            # The derived buy-back is the sanity check she CAN judge: she knows
+            # roughly what getting out of the old call cost, even when the new
+            # call's own price came from the app rather than her fill.
+            theme.note(f"Read the other way: buying back {old_label} cost you "
+                       f"about **\\${figs.paid_to_close:,.0f}**. If that looks "
+                       "wrong, the new call's price in step 2 is the one to fix.")
+        else:
+            theme.note("Fill in the price from your fill above and this is where "
+                       "the app shows what the roll did to your money, before "
+                       "you save anything.")
 
-        note = st.text_input("Note (optional)", key=f"roll_note_{kp}_{p.trade_id}")
+        f1, f2 = st.columns([1, 2])
+        rolled_on = f1.date_input("Rolled on", value=dt.date.today(),
+                                  max_value=dt.date.today(),
+                                  key=f"roll_when_{kp}_{p.trade_id}")
+        note = f2.text_input("Note (optional)", key=f"roll_note_{kp}_{p.trade_id}")
 
         if st.button("Record the roll", type="primary", key=f"rollbtn_{kp}_{p.trade_id}"):
             if not new_strike:
-                st.warning("Type the new short call's strike first.")
+                st.warning("Step 1 needs the strike of the call you sold.")
             elif not cash:
-                st.warning("Type the net credit from the roll - it is the money "
-                           "this roll actually made you.")
+                st.warning("Step 2 needs the price from your fill - it is the "
+                           "money this roll actually made you.")
             elif not new_credit:
-                st.warning("Type what the new call sold for on its own, so the "
-                           "app knows when it reaches your 50% target.")
+                st.warning("Step 2 needs what the new call sold for by itself. "
+                           "The app usually fills this in; if it could not price "
+                           "the contract, type it from your Account Trade "
+                           "History.")
             elif figs.impossible:
                 st.warning(figs.impossible)
             elif new_exp <= (p.expiration or dt.date.today()):
