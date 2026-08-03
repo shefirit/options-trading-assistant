@@ -57,15 +57,54 @@ def refresh() -> None:
     if nasdaq100:
         (OUT / "nasdaq100.json").write_text(json.dumps(nasdaq100), encoding="utf-8")
 
-    print(f"Saved {len(sp500)} S&P 500 and {len(nasdaq100)} Nasdaq-100 tickers to {OUT}")
+    russell = _russell1000()
+    if russell:
+        (OUT / "russell1000.json").write_text(json.dumps(russell), encoding="utf-8")
+
+    print(f"Saved {len(sp500)} S&P 500, {len(nasdaq100)} Nasdaq-100 and "
+          f"{len(russell)} Russell 1000 tickers to {OUT}")
+
+
+def _russell1000() -> list[str]:
+    """The Russell 1000 - roughly the 1,000 biggest US companies.
+
+    The S&P 500 alone misses plenty of large, liquid, optionable names: a
+    company can be well over $20B and still be outside it (SOFI was, which is
+    what sent us looking). The Russell 1000 is picked purely on size, so it
+    catches those without dropping into micro-cap territory.
+
+    Returns [] rather than raising if the page layout changes - the caller then
+    leaves the existing file alone instead of writing an empty universe.
+    """
+    try:
+        tabs = pd.read_html(io.StringIO(_html(
+            "https://en.wikipedia.org/wiki/Russell_1000_Index")))
+    except Exception as exc:
+        print(f"  ! Russell 1000 fetch failed ({exc}) - keeping the existing file")
+        return []
+    for tbl in tabs:
+        match = next((c for c in tbl.columns
+                      if "Ticker" in str(c) or "Symbol" in str(c)), None)
+        if match is None:
+            continue
+        tickers = _clean(tbl[match].astype(str))
+        if len(tickers) > 500:      # the components table, not a small sidebar one
+            return tickers
+    print("  ! Russell 1000 table not recognised - keeping the existing file")
+    return []
 
 
 def refresh_market_caps() -> None:
-    """Fetch every S&P 500 name's market cap into sample_data/market_caps.json.
+    """Fetch every tradable name's market cap into sample_data/market_caps.json.
 
     One Yahoo call per ticker - run it locally (residential IP), not on the
     cloud. Names that fail are simply left out; the screen falls back to
     dollar volume as its size proxy for them.
+
+    This MUST cover the whole stock universe, not just the S&P 500. The screen
+    rejects a stock for being too small only when it HAS a cap, so any ticker
+    missing from this file silently skips the $10B size bar - which would hit
+    precisely the newer, smaller Russell 1000 names the bar exists to judge.
     """
     import datetime as dt
 
@@ -73,7 +112,7 @@ def refresh_market_caps() -> None:
 
     from src.data import stock_universe
 
-    tickers = stock_universe.sp500()
+    tickers = stock_universe.all_stocks()
     caps: dict[str, float] = {}
     for i, sym in enumerate(tickers, 1):
         try:

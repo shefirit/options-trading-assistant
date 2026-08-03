@@ -41,9 +41,24 @@ def nasdaq100() -> list[str]:
 
 
 @functools.lru_cache(maxsize=1)
+def russell1000() -> list[str]:
+    """Roughly the 1,000 biggest US companies, picked on size alone.
+
+    The S&P 500 misses large, liquid names that fail its committee criteria -
+    SOFI is over $20B and outside it - so the Picks sweep could never surface
+    them. Empty if the file is missing, which just falls back to the old
+    S&P 500 + Nasdaq-100 universe.
+    """
+    return _load("russell1000.json")
+
+
+@functools.lru_cache(maxsize=1)
 def all_stocks() -> list[str]:
-    """Every tradable stock ticker (S&P 500 + Nasdaq-100 + featured), sorted."""
-    combined = set(sp500()) | set(nasdaq100()) | set(FEATURED)
+    """Every tradable stock ticker, sorted.
+
+    S&P 500 + Nasdaq-100 + Russell 1000 + the featured shortlist.
+    """
+    combined = set(sp500()) | set(nasdaq100()) | set(russell1000()) | set(FEATURED)
     combined = {t for t in combined if t and t.isupper() and 1 <= len(t) <= 6}
     return sorted(combined)
 

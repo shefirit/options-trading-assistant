@@ -25,3 +25,7 @@ Thumbs.db
 .idea/
 
 .claude/settings.local.json
+
+# Her own watchlist of tickers - trading interest stays out of a PUBLIC repo.
+# The app treats a missing file as an empty list, so this is safe to omit.
+sample_data/watchlist.json

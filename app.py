@@ -367,16 +367,43 @@ def _tab_picks(settings, strategies, provider) -> None:
     _picks_scan(settings, strategies, provider)
 
 
+def _watchlist_ui() -> None:
+    """Names the Full sweep must always screen, whatever the market screen says.
+
+    The sweep keeps only finalists that clear every bar, so a name she is
+    actively researching can vanish on a day it misses one. These are always
+    evaluated, so she sees the reason instead of a gap.
+    """
+    from src.data import stock_universe, watchlist
+
+    saved = watchlist.read()
+    with st.expander(f"⭐ My watchlist - always scanned ({len(saved)})", expanded=False):
+        theme.note("Add any ticker you are following. It gets scanned every Full sweep even "
+                   "if the screen would have dropped it, so you always see where it stands. "
+                   "Not on the list? Type it and click the **Add:** line.")
+        opts = list(dict.fromkeys(saved + stock_universe.all_stocks()))
+        picked = st.multiselect("Tickers", opts, default=saved, key="watchlist_pick",
+                                accept_new_options=True,
+                                max_selections=watchlist.MAX_SYMBOLS)
+        if st.button("Save watchlist", key="watchlist_save"):
+            stored = watchlist.save(picked)
+            st.success(f"Saved {len(stored)} name(s): {', '.join(stored) or 'none'}"
+                       if stored else "Watchlist cleared.")
+        theme.note("Saved on this device. The hosted app rebuilds its files when it "
+                   "restarts, so re-add them if they ever disappear there.")
+
+
 def _picks_scan(settings, strategies, provider) -> None:
     import time as _time
 
     from src.engine import recommender
 
     theme.note("One button scans your allowed universe - the 4 cash-settled indexes, the big "
-               "liquid ETFs, and the whole S&P 500 - and ranks who fits your SOP for a "
-               "monthly premium trade today: generous premium, sane risk, and a dividend "
-               "when there is one. These are **candidates with reasons, not instructions** - "
-               "you check the winner in 🎯 Find a trade and you decide.")
+               "liquid ETFs, and the whole Russell 1000 (roughly the 1,000 biggest US "
+               "companies, so it reaches past the S&P 500) - and ranks who fits your SOP "
+               "for a monthly premium trade today: generous premium, sane risk, and a "
+               "dividend when there is one. These are **candidates with reasons, not "
+               "instructions** - you check the winner in 🎯 Find a trade and you decide.")
 
     if not provider.is_real:
         st.info("Today's picks need real market data - connect to the internet first. "
@@ -401,10 +428,12 @@ def _picks_scan(settings, strategies, provider) -> None:
         "How wide should the scan look?",
         ["⚡ Quick look - the indexes, the biggest ETFs, and the largest, most-traded "
          "stocks (about a minute)",
-         "🌐 Full market sweep - screen every S&P 500 stock + ~45 big ETFs for hidden "
+         "🌐 Full market sweep - screen the whole Russell 1000 + ~45 big ETFs for hidden "
          "gems (a few minutes the first time each day)"],
         key="picks_scope")
     full = scope.startswith("🌐")
+
+    _watchlist_ui()
 
     if st.button("💡 Find today's candidates", type="primary", key="picks_go"):
         st.session_state["picks_report"] = _run_picks_scan(
@@ -614,7 +643,7 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     import datetime as dt
     import time as _time
 
-    from src.data import cache, market_screener, premium_finder, stock_universe
+    from src.data import cache, market_screener, premium_finder, stock_universe, watchlist
     from src.data.market_context import build_context
     from src.engine import recommender
 
@@ -633,8 +662,12 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     # ---- stage 1: who earns an option-chain fetch ----
     if full:
         with st.spinner("Screening the whole market (price, size, volume, trend)..."):
+            # all_stocks(), not sp500(): the S&P 500 misses large, liquid names
+            # that fail its committee criteria, so the sweep could never surface
+            # them. The Russell 1000 covers those, and the screen's own size,
+            # volume and trend bars still decide who survives.
             screen = provider.get_screen(f"full:{dt.date.today().isoformat()}",
-                                         stock_universe.sp500(),
+                                         stock_universe.all_stocks(),
                                          stock_universe.liquid_etfs(), rules)
         if screen is None:
             finalists = ([(s, "etf") for s in settings["underlyings"]["us_style"]]
@@ -665,6 +698,17 @@ def _run_picks_scan(provider, settings, strategies, monthly, vix, full: bool):
     # trending down - a strong big-cap in a downtrend earns a bearish call spread.
     have = {s for s, _ in finalists}
     finalists += [(s, "stock") for s in bearish_pool if s not in have]
+
+    # Her own watchlist always gets evaluated, even when the screen dropped it.
+    # A name she is actively researching should not vanish from her results on
+    # a day it happens to miss one bar - she wants to see the reason, not a gap.
+    have = {s for s, _ in finalists}
+    watching = [s for s in watchlist.read() if s not in have]
+    finalists += [(s, "etf" if s in set(stock_universe.liquid_etfs()) else "stock")
+                  for s in watching]
+    if watching:
+        report.funnel_note += (f" Plus {len(watching)} from your watchlist "
+                               f"({', '.join(watching)}).")
 
     total = max(len(indexes) + len(finalists), 1)
     done = 0
