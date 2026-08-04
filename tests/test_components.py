@@ -163,40 +163,6 @@ def _item(underlying, strikes, strategy, opened, dte, action):
     return {"position": _Pos(), "live": {}, "signal": sig}
 
 
-def test_position_labels_keep_same_day_twins_apart():
-    # The bug: labels were dictionary keys of underlying + strategy + open date,
-    # so a second SPX spread opened the same day overwrote the first and became
-    # impossible to select, close or roll.
-    from ui.components import position_labels
-
-    items = [_item("SPX", [7200, 7175], "Put Credit Spread", "2026-07-25", 40, "hold"),
-             _item("SPX", [7100, 7075], "Put Credit Spread", "2026-07-25", 40, "hold")]
-    labels = position_labels(items)
-    assert len(set(labels)) == 2, "two real trades must be two distinct choices"
-    assert "7200/7175" in labels[0]
-    assert "7100/7075" in labels[1]
-
-
-def test_position_labels_are_unique_even_when_everything_matches():
-    from ui.components import position_labels
-
-    items = [_item("SPX", [7200, 7175], "Put Credit Spread", "2026-07-25", 40, "hold")] * 2
-    assert len(set(position_labels(items))) == 2
-
-
-def test_position_labels_flag_the_ones_needing_action():
-    from ui.components import position_labels
-
-    items = [_item("SPX", [7200], "CSP", "2026-07-01", 13, "time"),
-             _item("QQQ", [500], "CSP", "2026-07-02", 40, "hold"),
-             _item("PLTR", [128], "CSP", "2026-06-23", 13, "stop")]
-    labels = position_labels(items)
-    assert "⏰ Decide today" in labels[0]
-    assert "🛑" in labels[2]
-    # A quiet position must not be dressed up as urgent.
-    assert "Decide today" not in labels[1] and "🛑" not in labels[1]
-
-
 def test_the_star_never_lands_on_a_rule_breaker():
     # A star reads as a recommendation, so it may not sit on the setup that
     # breaks the delta rule while the compliant one below goes unmarked.

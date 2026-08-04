@@ -1113,38 +1113,6 @@ def short_strategy(name: str) -> str:
     return head.split(":")[0].replace(" - Model ", " M").strip()
 
 
-def position_labels(items: list[dict]) -> list[str]:
-    """One line per open trade, for the picker under the table.
-
-    Two things this has to do that the old label did not. It has to be UNIQUE:
-    the options used to be dictionary keys built from underlying, strategy and
-    open date, so two SPX put credit spreads opened the same day collapsed into
-    one entry and the second became unreachable - visible in the table, but
-    impossible to open, close or roll. Strikes and the position's own index fix
-    that.
-
-    And it has to carry the exit signal. The card above says "2 of 5 open trades
-    need action today" and then made her click through all five to find them.
-    """
-    out = []
-    for i, it in enumerate(items):
-        pos, sig = it["position"], it["signal"]
-        strikes = "/".join(f"{leg.strike:g}" for leg in pos.legs)
-        bits = [pos.underlying]
-        if strikes:
-            bits.append(strikes)
-        bits.append(short_strategy(pos.strategy_name))
-        dte = pos.dte_left()
-        if dte is not None:
-            bits.append(f"{dte} days left")
-        if sig.action in ("stop", "time", "profit"):
-            bits.append(_SIGNAL_WORD.get(sig.action, sig.action))
-        # The leading number guarantees uniqueness even if every other field
-        # matches, and it lines up with the table's row order.
-        out.append(f"{i + 1}.  " + "  ·  ".join(bits))
-    return out
-
-
 def _decide_by(pos, time_exit_dte: int = 21) -> str:
     """The DATE her 21-day time exit falls on, not a countdown.
 

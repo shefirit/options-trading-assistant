@@ -111,3 +111,41 @@ def test_every_date_picker_is_set_to_day_first(app_with_one_pmcc):
     at = app_with_one_pmcc.run()
     for box in at.date_input:
         assert box.format == DATE_FMT, f"{box.label} shows {box.format}"
+
+
+# ------------------------------------------------------- the restructured tab
+def test_each_open_trade_appears_once_with_its_own_buttons(app_with_one_pmcc):
+    """The tab used to show the same trade up to three times: a Today block
+    with forms, a table of all of them, and a dropdown opening ONE in full.
+    One trade is now one card."""
+    at = app_with_one_pmcc.run()
+    assert not at.exception
+    labels = [e.label for e in at.expander]
+    assert labels.count("🔄 Roll or close the short call") == 1
+    assert sum("Close this trade" in l for l in labels) == 1
+    assert any("Show the numbers" in l for l in labels)
+
+
+def test_the_numbers_are_folded_away_behind_the_summary(app_with_one_pmcc):
+    """Eleven metrics per trade was most of the scrolling. They are still
+    there, one click away."""
+    at = app_with_one_pmcc.run()
+    assert any("Show the numbers" in e.label for e in at.expander)
+    assert any("See them all in one table" in e.label for e in at.expander)
+
+
+def test_the_card_leads_with_a_sentence_about_the_money(app_with_one_pmcc):
+    at = app_with_one_pmcc.run()
+    body = " ".join(str(m.value) for m in at.markdown)
+    # The seeded PMCC sold its call for $500 and cannot be priced offline, so
+    # the honest version of the sentence is the credit and the days left.
+    assert "credit collected" in body
+    assert "days left" in body
+
+
+def test_the_old_separate_today_block_is_gone(app_with_one_pmcc):
+    """It duplicated whichever trades needed action, forms and all. The cards
+    are ordered by urgency instead, with one banner at the top."""
+    at = app_with_one_pmcc.run()
+    body = " ".join(str(m.value) for m in at.markdown)
+    assert "Anything to do today?" not in body

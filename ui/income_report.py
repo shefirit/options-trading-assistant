@@ -470,50 +470,69 @@ def _legend_rows(rows: list[dict], name_col: str) -> None:
 
 
 def render_money_math(report: dict) -> None:
-    """Premium sold, minus what closing it cost, equals what was banked - laid
-    out as a small statement rather than hidden behind a link.
+    """The month's two different money questions, kept apart on purpose.
 
-    The gap between the big premium number and the money in the account is
-    where an income report can fool the person reading it, so the subtraction
-    is done in the open, on the page.
+    This used to be headed "HOW PREMIUM SOLD BECAME MONEY BANKED" and laid out
+    as a subtraction - premium sold, less the cost of closing, equals banked -
+    with a paragraph underneath admitting the three numbers do not actually
+    subtract. That is a confusing way to be honest. They do not subtract
+    because they measure DIFFERENT MONTHS: premium is counted when she sells,
+    the result when it settles.
+
+    So they are now two labelled answers rather than one broken sum. Banked
+    leads, because it is the number her goal is measured against.
     """
-    lines = [
-        ("Premium sold this month", report["premium_sold"], theme.GREEN),
-        ("Less what you paid to close positions", -report["cost_to_close"],
-         theme.RED),
-    ]
-    body = "".join(
-        f"<tr><td style='padding:7px 14px 7px 0;color:{theme.INK};"
-        f"font-size:1rem;'>{_esc(label)}</td>"
-        f"<td style='padding:7px 0;text-align:right;font-weight:800;"
-        f"color:{color};font-size:1.05rem;'>{_signed(value)}</td></tr>"
-        for label, value, color in lines)
-    st.markdown(
-        f"<div style='background:{theme.TILE};border:1px solid "
-        f"{theme.BORDER_STRONG};border-radius:14px;padding:16px 18px;'>"
-        f"<div style='font-size:.78rem;font-weight:800;color:{theme.SECONDARY};"
-        f"letter-spacing:.05em;margin-bottom:6px;'>HOW PREMIUM SOLD BECAME "
-        f"MONEY BANKED</div>"
-        f"<table style='width:100%;border-collapse:collapse;'>{body}"
-        f"<tr><td style='padding:10px 14px 0 0;border-top:2px solid "
-        f"{theme.BORDER_STRONG};font-weight:800;color:{theme.INK};"
-        f"font-size:1.05rem;'>Banked</td>"
-        f"<td style='padding:10px 0 0;border-top:2px solid "
-        f"{theme.BORDER_STRONG};text-align:right;font-weight:800;"
-        f"color:{theme.GREEN};font-size:1.3rem;'>"
-        f"{_d(report['banked'])}</td></tr></table></div>",
-        unsafe_allow_html=True)
+    def _panel(eyebrow: str, rows: list[tuple], total: Optional[tuple] = None) -> str:
+        body = "".join(
+            f"<tr><td style='padding:7px 14px 7px 0;color:{theme.INK};"
+            f"font-size:1rem;'>{_esc(label)}</td>"
+            f"<td style='padding:7px 0;text-align:right;font-weight:800;"
+            f"color:{color};font-size:1.05rem;'>{value}</td></tr>"
+            for label, value, color in rows)
+        if total is not None:
+            label, value, color = total
+            body += (
+                f"<tr><td style='padding:10px 14px 0 0;border-top:2px solid "
+                f"{theme.BORDER_STRONG};font-weight:800;color:{theme.INK};"
+                f"font-size:1.05rem;'>{_esc(label)}</td>"
+                f"<td style='padding:10px 0 0;border-top:2px solid "
+                f"{theme.BORDER_STRONG};text-align:right;font-weight:800;"
+                f"color:{color};font-size:1.3rem;'>{value}</td></tr>")
+        return (
+            f"<div style='background:{theme.TILE};border:1px solid "
+            f"{theme.BORDER_STRONG};border-radius:14px;padding:16px 18px;"
+            f"height:100%;'>"
+            f"<div style='font-size:.78rem;font-weight:800;"
+            f"color:{theme.SECONDARY};letter-spacing:.05em;margin-bottom:6px;'>"
+            f"{eyebrow}</div>"
+            f"<table style='width:100%;border-collapse:collapse;'>{body}"
+            f"</table></div>")
+
+    left, right = st.columns(2)
+    with left:
+        rolls = report.get("roll_income") or 0.0
+        rows = [("From trades you closed", _d(report["banked"] - rolls), theme.INK)]
+        if rolls:
+            rows.append(("From rolling short calls, banked the day you rolled",
+                         _d(rolls), theme.INK))
+        st.markdown(_panel("MONEY THAT SETTLED THIS MONTH", rows,
+                           ("Banked", _d(report["banked"]), theme.GREEN)),
+                    unsafe_allow_html=True)
+    with right:
+        st.markdown(_panel(
+            "WHAT YOU SOLD THIS MONTH",
+            [("Premium collected", _d(report["premium_sold"]), theme.GREEN),
+             ("Paid to buy positions back", _signed(-report["cost_to_close"]),
+              theme.RED)]), unsafe_allow_html=True)
     theme.note(
-        "These two lines do not always subtract exactly to the third, and that "
-        "is correct rather than a rounding bug. Premium sold counts what you "
-        "sold **this month**; banked counts what settled **this month**. A trade "
+        "**The two panels do not subtract into each other, and that is on "
+        "purpose.** Premium counts the month you **sold**; banked counts the "
+        "month it **settled**. A trade "
         "opened in June and closed in July has its premium in June and its "
-        "result in July.")
-    if report["roll_income"]:
-        theme.note(
-            f"**\\${report['roll_income']:,.0f}** of the banked total came from "
-            "rolling short calls. That credit is yours the day you roll, even "
-            "on a trade that is still open.")
+        "result in July."
+        + (" Roll credits are yours the day you roll, even on a trade that is "
+           "still open - which is why they sit in the banked column."
+           if report.get("roll_income") else ""))
 
 
 def render_strategy(report: dict) -> None:
