@@ -10,8 +10,8 @@ from typing import Any, Optional
 
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
-from src.logging_tools.row import (COLUMNS, build_close_row, build_roll_row,
-                                   build_row, new_trade_id)
+from src.logging_tools.row import (COLUMNS, build_assign_row, build_close_row,
+                                   build_roll_row, build_row, new_trade_id)
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -87,6 +87,27 @@ def roll_trade(
     row = build_roll_row(trade_id, underlying, strategy_name, cash,
                          new_strike, new_expiration, new_credit, note,
                          rolled_on=rolled_on, account=account)
+    return _append(row)
+
+
+def assign_trade(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    strike: float,
+    contracts: int,
+    note: str = "",
+    assigned_on: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Record that a short put was assigned into shares (an "assign" event).
+
+    Same Trade ID, so the wheel stays one position from the first put to the
+    day the shares are called away. Returns (destination, went_to_sheet).
+    """
+    row = build_assign_row(trade_id, underlying, strategy_name, strike,
+                           contracts, note, assigned_on=assigned_on,
+                           account=account)
     return _append(row)
 
 

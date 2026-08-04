@@ -76,6 +76,12 @@ class Position(BaseModel):
     # Held separately because shares are not in the option chain but still have
     # to be valued at today's price when pricing the position.
     shares_cost: float = 0.0
+    # Set when a short put was ASSIGNED and became shares. This is what keeps a
+    # wheel one position: the put, the shares, and every call written against
+    # them afterwards all live on the same trade, so the premium already
+    # collected keeps counting towards what those shares really cost.
+    assigned_on: Optional[date] = None
+    assigned_strike: Optional[float] = None
     max_loss: float = 0.0
     buying_power: float = 0.0
     # The BP Effect copied straight off thinkorswim, when she typed it in.
@@ -297,6 +303,30 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
     return data, legs
 
 
+def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
+    """A short put became shares. Turn the position into what she now holds.
+
+    Deliberately NOT counted as income or loss: buying the shares moves money
+    from cash into stock, so it belongs in open_cash (capital deployed) and not
+    in roll_income (premium banked). Getting that wrong would show a wheel as a
+    catastrophic losing month every time she is assigned, on a strategy where
+    assignment is the plan rather than the accident.
+    """
+    pos.assigned_on = event.get("assigned_on")
+    pos.assigned_strike = event.get("strike")
+    cash = float(event.get("cash") or 0.0)
+    pos.open_cash = round(pos.open_cash + cash, 2)
+    pos.shares_cost = round(abs(cash), 2)
+    # The put is gone - it was exercised, not bought back. Until she writes a
+    # call against the shares the position holds no option at all, which is
+    # exactly the "uncovered" state the sell-a-call form already handles.
+    pos.legs = [leg for leg in pos.legs
+                if not (leg.action == Action.SELL
+                        and leg.option_type == OptionType.PUT)]
+    if not pos.legs:
+        pos.expiration = None
+
+
 def _apply_roll(pos: Position, roll: RollEvent) -> None:
     """Move the position's short call to wherever this event put it.
 
@@ -371,6 +401,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     opens: dict[str, Position] = {}
     ordered: list[Position] = []
     rolls: list[tuple[str, RollEvent]] = []
+    assigns: list[tuple[str, dict[str, Any]]] = []
     closes: list[dict[str, Any]] = []
 
     for row in rows:
@@ -396,6 +427,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 "realized_pl": _to_float(_get(row, idx, "Realized P&L $", 16)),
                 "reason": str(_get(row, idx, "Notes", 11) or ""),
             })
+            continue
+
+        if event == "assign" and trade_id:
+            assigns.append((trade_id, {
+                "assigned_on": _to_date(_get(row, idx, "Date", 0)),
+                "strike": _to_float(_get(row, idx, "Legs (strikes)", 3)),
+                "cash": _to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
+            }))
             continue
 
         if event == "roll" and trade_id:
@@ -451,6 +490,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         ordered.append(pos)
         if trade_id:
             opens[trade_id] = pos
+
+    # Assignment first: it turns the put into shares, and every roll after it
+    # is a CALL written against those shares.
+    for trade_id, a in sorted(assigns,
+                              key=lambda r: r[1]["assigned_on"] or date.min):
+        pos = opens.get(trade_id)
+        if pos is not None:
+            _apply_assignment(pos, a)
 
     # Rolls in the order they happened, so the last one wins on strike/date.
     for trade_id, roll in sorted(

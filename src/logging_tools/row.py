@@ -192,6 +192,50 @@ def build_roll_row(
     ]
 
 
+def build_assign_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    strike: float,
+    contracts: int,
+    note: str = "",
+    assigned_on: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "assign" event row - a short put became 100 shares per contract.
+
+    This is what lets the wheel stay ONE trade. Before it existed, assignment
+    ended the position and the shares reappeared as an unrelated covered call,
+    which threw away the premium already collected - and with it the only
+    number the wheel is really about, what those shares cost after premium.
+
+    The cash is negative and large (she pays strike x 100 per contract for the
+    shares), and it goes in the same Realized P&L column every other event
+    uses, so the month reports need no special case. The strike lands in the
+    Legs column so the shares can be priced later.
+    """
+    from src.engine.wheel import assignment_cash
+
+    cash = assignment_cash(strike, contracts)
+    return [
+        (assigned_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        f"{strike:g}",
+        "", "", contracts,
+        "",                           # Credit $ - assignment collects nothing
+        "", "", "",
+        note or f"Assigned {100 * max(int(contracts or 1), 1)} shares at {strike:g}",
+        trade_id,
+        "assign",
+        "",                           # Expiration - the put is gone
+        "",
+        cash,                         # Realized P&L $: the cash that left today
+        "",
+        _account(account),
+    ]
+
+
 def build_close_row(
     trade_id: str,
     underlying: str,

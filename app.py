@@ -2895,12 +2895,13 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         # was not on her statement. One price is what she will have; the
         # two-price way round is folded away for the times she has both.
         _step(2, "What your fill said",
-              f"In thinkorswim: Monitor > Account Statement. A roll shows as "
-              f"ONE line ending in a price, like ...{p.underlying} "
-              f"{new_strike:g}/{old_strike:g} CALL @1.50 - it is that last "
-              f"number you want." if old_strike and new_strike else
-              "In thinkorswim: Monitor > Account Statement. A roll shows as one "
-              "line ending in the price you filled at.")
+              f"It is the price your order filled at - one line, ending in "
+              f"one number, like ...{p.underlying} {new_strike:g}/"
+              f"{old_strike:g} CALL @1.50. In thinkorswim web it is under "
+              f"Activity, with your other filled orders."
+              if old_strike and new_strike else
+              "It is the price your order filled at. In thinkorswim web your "
+              "filled orders are under Activity.")
         cash = _fill_price_input(
             "Credit price on your fill", f"roll_cash_{kp}_{p.trade_id}",
             contracts, allow_negative=True,
@@ -2918,8 +2919,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
             contracts, default_total=suggested,
             help="Not on your fill - a one-order roll only prints the net. The "
                  "app fills in today's price for that contract, which is close "
-                 "enough. Change it only if your Account Trade History lists "
-                 "the legs separately.")
+                 "enough. Change it only if your order history happens to list "
+                 "the two legs separately.")
         if suggested:
             theme.note("**Already filled in for you.** Your fill does not carry "
                        "this number, so the app priced the contract off today's "
@@ -2931,11 +2932,11 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         figs = roll_math.from_net(old_credit, cash, new_credit)
 
         with st.expander("My fill shows two prices, not one"):
-            theme.note("Use this if you closed the old call and sold the new one "
-                       "as two separate orders, or if you are reading the legs "
-                       "off Monitor > Account Statement > Account Trade History, "
-                       "which does list a spread's legs one per line. Type both "
-                       "and the app works out the net for you.")
+            theme.note("Use this if you closed the old call and sold the new "
+                       "one as two separate orders - then you have two prices "
+                       "rather than one. Some order-history screens also list a "
+                       "spread's legs one per line. Type both and the app works "
+                       "out the net for you.")
             paid_back = _fill_price_input(
                 f"Price you paid to buy back the {old_short}",
                 f"roll_paid_{kp}_{p.trade_id}", contracts,
@@ -3023,6 +3024,151 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                     f"(${p.roll_income + cash:,.0f} from rolls on this trade so "
                     f"far), now tracking the {new_strike:g} call expiring "
                     f"{components.fmt_date(new_exp)}.")
+                st.rerun()
+
+
+def _wheel_panel(p, price: Optional[float]) -> None:
+    """What the shares she was assigned actually cost her.
+
+    The one number the wheel turns on. Every premium she has collected on this
+    trade - the put that got her assigned, and every call written since - comes
+    off the price she paid, so the basis falls month after month. Nowhere in
+    the app said so before: assignment used to end the trade, and the shares
+    turned up as an unrelated covered call with the history thrown away.
+    """
+    from src.engine import wheel
+
+    state = wheel.state_from(p, price)
+    if state is None:
+        return
+
+    rows = [
+        _money_line(
+            f"{state.shares} shares, bought at {state.paid_per_share:g}",
+            f"assigned on {components.fmt_date(p.assigned_on)}",
+            f"-${state.paid_per_share * state.shares:,.0f}", theme.INK),
+        _money_line(
+            "Premium collected on this trade",
+            "the put that assigned you, plus every call written since",
+            f"+${state.premium_collected:,.0f}", theme.GREEN),
+        _money_line(
+            "So the shares really cost you",
+            f"{state.cost_basis:g} a share - premium has taken "
+            f"${state.premium_per_share:,.2f} off the {state.paid_per_share:g} "
+            "you paid",
+            f"${state.cost_basis:,.2f}", theme.INK, strong=True),
+    ]
+    st.markdown(
+        f"<div style='background:{theme.TILE};border:1px solid {theme.BORDER};"
+        f"border-radius:12px;padding:12px 16px;margin:6px 0 10px;'>"
+        f"<div style='font-weight:800;color:{theme.INK};font-size:1.02rem;"
+        f"margin-bottom:4px;'>🎡 Your wheel on {_h_esc(p.underlying)}</div>"
+        + "".join(rows) + "</div>", unsafe_allow_html=True)
+
+    if state.market_price is not None:
+        if state.below_basis:
+            theme.note(
+                f"**{p.underlying} is at \\${state.market_price:,.2f}, under "
+                f"your \\${state.cost_basis:,.2f} basis.** That is not a loss "
+                "until you sell, and it is the normal middle of a wheel: every "
+                "call you write against these shares pulls the basis down "
+                "again. Keep writing calls at or above the basis so being "
+                "called away is still a win.")
+        else:
+            theme.note(
+                f"**{p.underlying} is at \\${state.market_price:,.2f}, above "
+                f"your \\${state.cost_basis:,.2f} basis.** Selling here would "
+                f"bank \\${state.unrealised:,.0f} on the shares on top of the "
+                "premium you have already kept.")
+
+    if state.call_strike:
+        won = (state.called_away_profit or 0) >= 0
+        theme.note(
+            f"**If the {state.call_strike:g} call finishes in the money**, your "
+            f"shares are called away at \\${state.call_strike:g} and the whole "
+            f"wheel ends {'up' if won else 'DOWN'} "
+            f"**\\${abs(state.called_away_profit or 0):,.0f}** - that is the "
+            f"\\${state.call_strike:g} you would be paid against your "
+            f"\\${state.cost_basis:,.2f} basis, on {state.shares} shares. "
+            + ("A good outcome: take it and start the wheel again."
+               if won else
+               "That strike is BELOW your basis, so being called away locks in "
+               "a loss. Your SOP says never write a call below your cost "
+               "basis - roll it up and out instead."))
+    else:
+        theme.note(
+            f"**Nothing is earning on these shares right now.** Sell a call "
+            f"against them to start the premium going again - at "
+            f"\\${state.cost_basis:,.2f} or higher, so being called away is "
+            "still a win.")
+
+
+def _h_esc(text: str) -> str:
+    import html as _h
+
+    return _h.escape(str(text))
+
+
+def _assign_form(p, kp: str = "detail") -> None:
+    """Record that a short put was assigned into shares.
+
+    Her SOP treats assignment on a wheel or a cash-secured put as the plan, not
+    an accident - so this is a normal thing to record, not an error path. It
+    keeps the SAME trade, which is the whole point: the premium already
+    collected has to keep counting towards what the shares cost.
+    """
+    import datetime as dt
+
+    from src.engine import wheel
+
+    if not wheel.is_wheelable(p):
+        return
+
+    strikes = [leg.strike for leg in p.legs
+               if leg.action == Action.SELL and leg.option_type == OptionType.PUT]
+    strike = strikes[0] if strikes else 0.0
+    shares = 100 * max(int(p.contracts or 1), 1)
+
+    with st.expander("🎡 I was assigned - I own the shares now"):
+        theme.note(
+            f"On a wheel this is the plan, not a mistake. Recording it here "
+            f"keeps everything on ONE trade, so the \\${p.credit:,.0f} you "
+            f"already collected still counts towards what the shares cost you. "
+            f"The app then asks you to sell calls against them.")
+        a1, a2 = st.columns(2)
+        when = a1.date_input("Assigned on", value=dt.date.today(),
+                             max_value=dt.date.today(),
+                             key=f"asg_when_{kp}_{p.trade_id}",
+                             format=components.DATE_FMT)
+        at_strike = a2.number_input(
+            "Strike you were assigned at", min_value=0.0, step=1.0,
+            value=float(strike), key=f"asg_strike_{kp}_{p.trade_id}",
+            help="The put you sold. Assignment always happens at its strike, "
+                 "whatever the shares are worth that morning.")
+        if at_strike:
+            basis = at_strike - (float(p.credit or 0.0) / shares)
+            st.markdown(components._esc(
+                f"You will own **{shares} shares** at ${at_strike:g}, costing "
+                f"**${at_strike * shares:,.0f}**. With the ${p.credit:,.0f} "
+                f"premium already collected, your cost basis starts at "
+                f"**${basis:,.2f} a share** - and every call you write from "
+                "here lowers it."))
+        note = st.text_input("Note (optional)", key=f"asg_note_{kp}_{p.trade_id}")
+        if st.button("Record the assignment", type="primary",
+                     key=f"asgbtn_{kp}_{p.trade_id}"):
+            if not at_strike:
+                st.warning("Type the strike you were assigned at.")
+            else:
+                from src.logging_tools.trade_logger import assign_trade
+                assign_trade(p.trade_id, p.underlying, p.strategy_name,
+                             float(at_strike), int(p.contracts or 1), note,
+                             assigned_on=when, account=p.account)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Assignment recorded: you own {shares} {p.underlying} "
+                    f"shares at {at_strike:g}. Sell a call against them with "
+                    "➕ Sell a call against it.")
                 st.rerun()
 
 
@@ -3418,11 +3564,14 @@ def _open_section(items, strategies, provider, priced_at) -> None:
                        + (f" · expires {components.fmt_date(p.expiration)}"
                           if p.expiration else ""))
 
+        _wheel_panel(p, px)
+
         if p.is_uncovered:
             _write_call_form(p, provider)
         elif p.is_debit:
             _roll_form(p, live, provider)
 
+        _assign_form(p)
         _close_form(p, live)
 
         with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):

@@ -69,14 +69,27 @@ def open_pmcc_row():
     return pmcc_row
 
 
-def _app_with(monkeypatch, row):
+def _app_with_rows(monkeypatch, rows):
     from streamlit.testing.v1 import AppTest
 
     monkeypatch.setattr(DataProvider, "create", classmethod(lambda cls: cls("demo")))
     from src.logging_tools import trade_logger
     monkeypatch.setattr(trade_logger, "fetch_all_rows",
-                        lambda: (COLUMNS, [row], "local"))
+                        lambda: (COLUMNS, list(rows), "local"))
     return AppTest.from_file("app.py", default_timeout=60)
+
+
+def _app_with(monkeypatch, row):
+    return _app_with_rows(monkeypatch, [row])
+
+
+@pytest.fixture
+def app_with_rows(monkeypatch):
+    """The offline app over whatever log rows a test builds - for the shapes
+    that take several events to reach, like a wheel after assignment."""
+    def build(rows):
+        return _app_with_rows(monkeypatch, rows)
+    return build
 
 
 @pytest.fixture

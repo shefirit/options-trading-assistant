@@ -81,10 +81,10 @@ def from_net(old_credit: float, net_credit: float, new_credit: float) -> RollFig
 def from_legs(old_credit: float, paid_to_close: float, new_credit: float) -> RollFigures:
     """Build the figures from the two leg prices, when she has them.
 
-    thinkorswim lists a spread order's legs separately under Monitor > Account
-    Statement > Account Trade History, and closing then re-selling as two
-    orders gives her both prices directly. Either way the net is derived rather
-    than typed, so it always agrees with the legs.
+    Closing and then re-selling as two separate orders gives her both prices
+    directly, and some order-history screens list a spread's legs one per line.
+    Either way the net is derived rather than typed, so it always agrees with
+    the legs.
     """
     net = float(new_credit) - float(paid_to_close)
     return RollFigures(
