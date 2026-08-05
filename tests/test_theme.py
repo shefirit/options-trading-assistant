@@ -113,4 +113,7 @@ def test_the_kpi_grid_is_a_grid_and_not_a_flex_row():
     """Six flex cards wrapping four-and-two stretch the last two to half the
     width each. A dashboard's top row has to be a row of equals."""
     assert "grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))" in theme._CSS
-    assert "@media (max-width: 400px)" in theme._CSS
+    # Two a row on a phone, one only on the very narrow ones - six cards stacked
+    # is a lot of scrolling to read six numbers.
+    assert "@media (max-width: 640px)" in theme._CSS
+    assert "@media (max-width: 340px)" in theme._CSS

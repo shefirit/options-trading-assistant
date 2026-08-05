@@ -73,15 +73,21 @@ def _page(at) -> str:
 
 
 # ------------------------------------------------- the three-progress-bar fix
-def test_the_page_draws_exactly_one_progress_bar(app_with_rows):
+def test_the_monthly_goal_is_never_drawn_as_a_progress_bar(app_with_rows):
     """THE regression test. This page used to carry three progress bars of the
     same number - one in the headline strip, one in the report's goals panel,
     one in the pace note. Three answers to one question reads as an app that
     has not decided what it thinks.
 
-    The one that remains belongs to the open-trades pricing spinner, which is
-    a different thing entirely. The goal itself is now drawn once, as the
-    bullet chart, which is not a progress element at all.
+    The fixture has no OPEN trades on purpose, so any bar on the page would
+    have to be a goal bar. The goal is now drawn once, as the bullet chart,
+    which is not a progress element at all.
+
+    What was removed is three drawings of the MONTHLY GOAL, not the idea of a
+    progress bar. One trade's progress toward its own 50% profit target is a
+    different number about a different thing and it stays, inside that trade's
+    "Show the numbers". It cannot be asserted here because the seeded PMCC has
+    no live price offline, so the bar has nothing to draw.
     """
     at = app_with_rows(_closed_row()).run()
     assert len(at.get("progress")) == 0

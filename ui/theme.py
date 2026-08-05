@@ -467,9 +467,10 @@ a {{ color: {ACCENT_DARK}; }}
     .ota-track-scale {{ font-size: 0.78rem; }}
 }}
 
-/* Small phones: two 200px cards no longer fit, so one to a row beats two
-   squeezed ones with the numbers wrapping mid-value. */
-@media (max-width: 400px) {{
+/* Only the very narrow phones drop to one card a row. At 375px - the common
+   iPhone width - two still fit at about 169px each, and six cards one to a
+   row is a lot of scrolling to read six numbers. */
+@media (max-width: 340px) {{
     .ota-kpi {{ grid-template-columns: 1fr; }}
 }}
 </style>

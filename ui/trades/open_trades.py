@@ -54,6 +54,15 @@ def _open_section(items, strategies, provider, priced_at) -> None:
                    "inside your rules.")
     theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
                "few minutes, or press ↻ Refresh at the top.")
+    # The four numbers on every card, explained once here rather than repeated
+    # under each one. "Decide by" is the only one that is not self-evident.
+    theme.note(
+        "Each card shows four numbers without opening anything: what the stock "
+        "or index is trading at now, **kept so far** (how much of the credit "
+        "you collected is yours if you closed today - your SOP takes the win at "
+        "50%), days left until expiration, and **decide by** - the date your "
+        "21-day rule lands on, which is the day you close or roll rather than "
+        "just hold.")
 
     for it in ordered:
         _trade_card(it, strategies, provider)
