@@ -1861,3 +1861,27 @@ def render_covered_call_detail(pick) -> None:
         theme.note("• " + line)
     for w in pick.warnings:
         st.warning(_esc(w))
+
+
+# ================================================== shared trade-logging inputs
+def bp_effect_input(size, key: str) -> None:
+    """Let the real thinkorswim BP Effect override the app's estimate.
+
+    Her ruling: TOS is always right. The app cannot see her broker's margin
+    rules - house requirements are not the Reg-T textbook - so where it can only
+    guess, the number she can read off the screen wins.
+
+    Shared: both Quick Log and the Find-a-trade log button ask for it.
+    """
+    est = float(size.get("buying_power", 0.0))
+    typed = st.number_input(
+        "Buying power effect from thinkorswim ($, optional)",
+        min_value=0.0, value=0.0, step=25.0, key=f"bpeff_{key}",
+        help=f"The **BP Effect** column on the position row in TOS. The app "
+             f"estimates ${est:,.0f}, and your broker's own number beats that "
+             f"estimate every time - type it here and the monthly budget uses "
+             f"it. Leave at 0 to keep the estimate.")
+    if typed > 0:
+        size["bp_effect"] = float(typed)
+        theme.note(f"Using **\\${typed:,.0f}** from thinkorswim instead of the app's "
+                   f"**\\${est:,.0f}** estimate.")

@@ -177,24 +177,24 @@ def test_the_star_never_lands_on_a_rule_breaker():
 
 # ---------- the always-visible headline numbers ----------
 def test_first_sentence_trims_the_essay_but_keeps_short_reasons():
-    import app
+    from ui.trades import widgets
 
     long = ("Your SOP says never hold past 21 days to expiration without a decision: "
             "from here things go wrong fast. Close it - or roll for a credit.")
-    assert app._first_sentence(long).endswith("go wrong fast.")
+    assert widgets._first_sentence(long).endswith("go wrong fast.")
     short = "Kept 78% of the credit."
-    assert app._first_sentence(short) == short
-    assert app._first_sentence("") == ""
+    assert widgets._first_sentence(short) == short
+    assert widgets._first_sentence("") == ""
 
 
 def test_uncovered_positions_reach_the_today_list():
     """A PMCC with no call written against it is idle capital - the whole income
     of that strategy is the call she has not sold yet."""
-    import app
+    from ui.trades import data as trades_data
 
-    assert "uncovered" in app.ACTION_SIGNALS
+    assert "uncovered" in trades_data.ACTION_SIGNALS
     for expected in ("stop", "time", "profit"):
-        assert expected in app.ACTION_SIGNALS
+        assert expected in trades_data.ACTION_SIGNALS
 
 
 def test_risk_card_hides_the_cash_tile_when_it_repeats_the_buying_power():

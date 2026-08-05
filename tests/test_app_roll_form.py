@@ -24,29 +24,29 @@ def test_the_seeded_row_is_a_trackable_debit_position(open_pmcc_row):
 def test_the_short_call_leg_is_the_call_not_the_leaps(open_pmcc_row):
     """A PMCC holds two long-dated calls' worth of confusion: the form must
     name the call she sold, never the LEAPS she bought."""
-    import app
+    from ui.trades import actions
 
     p = positions.parse_rows(COLUMNS, [open_pmcc_row()])[0]
-    leg = app._short_call_leg(p)
+    leg = actions._short_call_leg(p)
     assert leg is not None
     assert leg.strike == 500.0
-    assert app._call_label(leg.strike, p.expiration).startswith("the 500 call")
+    assert actions._call_label(leg.strike, p.expiration).startswith("the 500 call")
 
 
 def test_the_short_call_leg_is_none_when_nothing_is_written(open_pmcc_row):
-    import app
+    from ui.trades import actions
 
     p = positions.parse_rows(COLUMNS, [open_pmcc_row()])[0]
     p.legs = [l for l in p.legs if l.role != "short_call"]
-    assert app._short_call_leg(p) is None
+    assert actions._short_call_leg(p) is None
 
 
 def test_signed_money_shows_its_sign():
-    import app
+    from ui.trades import widgets
 
-    assert app._signed(200.0) == "+$200"
-    assert app._signed(-200.0) == "-$200"
-    assert app._signed(0.0) == "+$0"
+    assert widgets._signed(200.0) == "+$200"
+    assert widgets._signed(-200.0) == "-$200"
+    assert widgets._signed(0.0) == "+$0"
 
 
 # ------------------------------------------------------------------ the rendering
