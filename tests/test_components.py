@@ -363,3 +363,32 @@ def test_trade_tables_hand_streamlit_real_dates_not_strings():
     frame = month_trades_dataframe([{"position": p, "tag": "closed"}])
     assert frame["Opened"].iloc[0] == dt.date(2026, 9, 30),         "the table must carry a date, not a preformatted string"
     assert frame["Closed"].iloc[0] == dt.date(2026, 12, 1)
+
+
+def test_the_score_card_says_unknown_rather_than_showing_a_dash():
+    """A "-" in the amber grade slot reads as a poor score. A name whose data
+    never arrived gets a question mark in neutral grey instead."""
+    from src.data.stock_analysis import analyze
+    from ui.components import _score_card
+
+    closes = [100.0 + i * 0.2 for i in range(260)]
+    blank = analyze("NVDA", {}, closes)
+    html = _score_card(blank, {})
+    assert ">?</div>" in html
+    assert "could not be worked out" in html
+    assert "#B45309" not in html, "an unknown score must not wear the amber warning colour"
+
+
+def test_the_score_card_still_badges_a_fund_and_a_company():
+    from src.data.stock_analysis import analyze
+    from ui.components import _score_card
+
+    closes = [100.0 + i * 0.2 for i in range(260)]
+    spy = analyze("SPY", {"quoteType": "ETF", "shortName": "SPDR"}, closes,
+                  avg_volume=70_000_000)
+    assert "ETF" in _score_card(spy, {})
+    aapl = analyze("AAPL", {"quoteType": "EQUITY", "sector": "Technology",
+                            "marketCap": 3.5e12, "trailingPE": 30.0,
+                            "profitMargins": 0.25, "revenueGrowth": 0.10},
+                   closes, avg_volume=50_000_000)
+    assert aapl.grade in _score_card(aapl, {})

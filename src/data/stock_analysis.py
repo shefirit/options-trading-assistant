@@ -42,6 +42,9 @@ class StockAnalysis(BaseModel):
     # Too few company numbers arrived to grade it. The grade is None and every
     # verdict built on it should say so rather than guess.
     data_partial: bool = False
+    # "company" | "fund" | "unknown". is_fund above is the two-way view kept
+    # for callers that only care about the fund case; "unknown" is NOT a fund.
+    kind: str = "company"
     suitable: bool = True            # decent candidate for selling options?
     # A-F report card - for a COMPANY. None on a fund, which has no company to
     # grade: SPY is 500 of them, so profit margin and revenue growth are not
@@ -203,22 +206,53 @@ def _liquidity_metric(avg_vol: Optional[float]) -> Metric:
 
 _FUND_TYPES = {"etf", "mutualfund", "index", "fund"}
 
+# Only a basket has these.
+_FUND_FIELDS = ("totalAssets", "fundFamily", "navPrice", "category")
 
-def _is_fund(info: dict[str, Any]) -> bool:
-    """Is this a basket rather than a company?
+# Only a company has these.
+_COMPANY_FIELDS = ("profitMargins", "revenueGrowth", "returnOnEquity", "sector")
 
-    Yahoo's quoteType says so directly. When it is missing, a name with no
-    sector AND no company economics behind it (no profit margin, no revenue
-    growth) is a fund for our purposes - a real company that is simply missing
-    one field still has the others.
+# Proof the feed actually answered about a named security. Without one of
+# these the response is not an answer, and nothing can be concluded from what
+# it does not contain.
+_IDENTITY_FIELDS = ("shortName", "longName")
+
+
+def classify(info: dict[str, Any]) -> str:
+    """"fund" | "company" | "unknown" - a basket, a company, or no answer?
+
+    In order:
+      1. quoteType settles it outright when the feed sends one.
+      2. Fields only a fund has (total assets, fund family) mean fund.
+      3. Fields only a company has (margins, sector) mean company.
+      4. A NAMED response carrying neither is a fund - the feed answered and
+         had no company economics to give. This is how GLD is caught on feeds
+         that omit quoteType.
+      5. Anything else is unknown.
+
+    Step 5 is the one that was missing, and step 4 is why it mattered. Reading
+    "fund" from the ABSENCE of company numbers is only sound when the feed
+    actually replied; an empty response has no company economics either. Yahoo
+    returns empty from cloud hosts routinely, so a throttled fetch used to make
+    the app state, as fact, that NVDA is "a basket of many holdings, not one
+    company". Absence of evidence is now evidence of nothing.
     """
     qt = str(info.get("quoteType") or info.get("typeDisp") or "").strip().lower()
     if qt:
-        return qt in _FUND_TYPES
-    has_company_numbers = any(info.get(k) is not None
-                              for k in ("profitMargins", "revenueGrowth",
-                                        "returnOnEquity", "sector"))
-    return not has_company_numbers
+        return "fund" if qt in _FUND_TYPES else "company"
+    if any(info.get(k) is not None for k in _FUND_FIELDS):
+        return "fund"
+    if any(info.get(k) is not None for k in _COMPANY_FIELDS):
+        return "company"
+    if any(info.get(k) is not None for k in _IDENTITY_FIELDS):
+        return "fund"
+    return "unknown"
+
+
+def _is_fund(info: dict[str, Any]) -> bool:
+    """Kept for callers that only care about the fund case. `unknown` is not a
+    fund, so this is False for it - see classify() for the three-way answer."""
+    return classify(info) == "fund"
 
 
 def analyze(symbol: str, info: dict[str, Any], closes: list[float],
@@ -226,9 +260,13 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
     price = (info.get("currentPrice") or info.get("regularMarketPrice")
              or (closes[-1] if closes else None))
 
-    is_fund = _is_fund(info)
+    kind = classify(info)
+    is_fund = kind == "fund"
     # A fund is judged on how it trades, not on company accounts it does not
     # have. Scoring it against blank fundamentals is what made SPY a "D".
+    # An UNKNOWN name still gets the fundamentals list, all of it reading
+    # "did not load" - that is the honest picture, and dropping the rows would
+    # hide the fact that anything was meant to be there.
     fundamentals = [] if is_fund else [
         _market_cap_metric(info.get("marketCap")),
         _pe_metric(info.get("trailingPE")),
@@ -280,7 +318,16 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
 
     partial = not is_fund and not enough
 
-    if partial:
+    if kind == "unknown":
+        # Nothing at all came back - not even the fields every security has.
+        # This used to be classified a FUND, on the reasoning that a name with
+        # no company economics must be a basket, and then said so about
+        # whatever she had typed in.
+        summary = (f"No company details loaded for {symbol} at all, so there is "
+                   "nothing here to grade and no way to say what kind of "
+                   "security it is. The price and trend below come from price "
+                   "history and are still real. Try again in a few minutes.")
+    elif partial:
         summary = (f"Not enough of {symbol}'s company numbers loaded to grade it. "
                    "This is a data problem, not a verdict on the company - the "
                    "price and trend below are still real. Try again in a few "
@@ -314,6 +361,7 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
         liquid=liquid,
         liquidity_checked=liquidity_checked,
         data_partial=partial,
+        kind=kind,
         suitable=suitable,
         grade=grade,
         is_fund=is_fund,

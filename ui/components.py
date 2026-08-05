@@ -209,10 +209,22 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
     """The 'Quality score' box - stats strip with the grade badge, like the
     EarningsHub score card. Pure HTML so dollar signs render safely.
     """
-    # A fund gets the "ETF" badge premium_finder already uses, not a letter
-    # from company metrics it does not have.
-    badge = analysis.grade or ("ETF" if analysis.is_fund else "-")
-    gcolor = _GRADE_COLOR.get(analysis.grade, "#3730A3" if analysis.is_fund else "#B45309")
+    # Three badges, matching the three things that can be true. A fund gets the
+    # "ETF" badge premium_finder already uses rather than a letter from company
+    # metrics it does not have; a name whose data never arrived gets a question
+    # mark in neutral grey, because an amber "-" reads as a poor score.
+    unknown = analysis.kind == "unknown" or (
+        analysis.grade is None and not analysis.is_fund)
+    badge = analysis.grade or ("ETF" if analysis.is_fund else "?")
+    gcolor = _GRADE_COLOR.get(
+        analysis.grade,
+        "#3730A3" if analysis.is_fund else "#4E625A" if unknown else "#B45309")
+    if unknown:
+        heading, sub = "Quality score", "could not be worked out - see below"
+    elif analysis.is_fund:
+        heading, sub = "What it is", "a basket of holdings, not one company"
+    else:
+        heading, sub = "Quality score", "(from the checks below)"
     pe = info.get("trailingPE")
     fpe = info.get("forwardPE")
     ps = info.get("priceToSalesTrailing12Months")
@@ -242,10 +254,9 @@ def _score_card(analysis: StockAnalysis, info: dict) -> str:
         f"gap:12px;margin:4px 0 10px;'>"
         f"<div style='line-height:2;'>"
         f"<div style='font-weight:700;margin-bottom:2px;'>"
-        f"{'What it is' if analysis.is_fund else 'Quality score'} "
+        f"{heading} "
         f"<span style='color:#35463D;font-weight:500;font-size:0.85rem;'>"
-        f"{'a basket of holdings, not one company'if analysis.is_fund else '(from the checks below)'}"
-        f"</span></div>"
+        f"{sub}</span></div>"
         f"<div>{row1}</div><div>{row2}</div></div>"
         f"<div style='background:{gcolor};color:#fff;border-radius:12px;min-width:52px;"
         f"height:52px;display:flex;align-items:center;justify-content:center;"

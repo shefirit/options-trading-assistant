@@ -172,3 +172,50 @@ def test_the_grade_is_scored_only_on_metrics_that_arrived():
             "profitMargins": 0.55, "averageVolume": 2.0e8}
     a = stock_analysis.analyze("NVDA", half, _rising_closes())
     assert a.grade in ("A", "B"), f"graded {a.grade} on blanks"
+
+
+# ---------------------------------------------------------------------------
+# "No answer" is not "a fund".
+#
+# The old rule read "fund" from the ABSENCE of company economics, which only
+# holds if the feed actually replied - an empty response has no company
+# economics either. A throttled fetch therefore made the app state, as fact,
+# that a mega-cap was "a basket of many holdings, not one company".
+# ---------------------------------------------------------------------------
+def test_an_empty_response_is_unknown_not_a_fund():
+    assert stock_analysis.classify({}) == "unknown"
+    a = stock_analysis.analyze("NVDA", {}, _rising_closes())
+    assert a.kind == "unknown"
+    assert a.is_fund is False
+    assert "basket" not in a.summary
+    assert a.grade is None
+
+
+def test_a_bare_price_with_no_name_is_still_no_answer():
+    """One field is not a reply. Concluding "fund" from it is the same guess
+    at a slightly higher threshold."""
+    assert stock_analysis.classify({"regularMarketPrice": 180.0}) == "unknown"
+    assert stock_analysis.classify({"averageVolume": 2e8}) == "unknown"
+
+
+def test_a_named_response_with_no_company_numbers_is_still_a_fund():
+    """The deliberate rule this must not break: some feeds omit quoteType, and
+    GLD is caught by having a name and no company economics."""
+    assert stock_analysis.classify(
+        {"shortName": "Gold Trust", "regularMarketPrice": 60.0}) == "fund"
+
+
+def test_fund_only_fields_settle_it_without_a_quotetype():
+    assert stock_analysis.classify({"totalAssets": 6e11}) == "fund"
+    assert stock_analysis.classify({"fundFamily": "SPDR"}) == "fund"
+
+
+def test_quotetype_still_wins_outright():
+    assert stock_analysis.classify({"quoteType": "ETF"}) == "fund"
+    assert stock_analysis.classify({"quoteType": "EQUITY"}) == "company"
+
+
+def test_the_unknown_summary_blames_the_data_not_the_company():
+    a = stock_analysis.analyze("NVDA", {}, _rising_closes())
+    assert "No company details loaded" in a.summary
+    assert "still real" in a.summary          # the price and trend below are
