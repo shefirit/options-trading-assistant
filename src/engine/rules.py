@@ -68,14 +68,46 @@ def check_underlying_style(trade: Trade, allowed: list[str],
     )
 
 
+def delta_missing(leg) -> bool:
+    """Whether this leg's delta was never filled in.
+
+    Leg.delta defaults to 0.0, and a real option chain never returns exactly
+    zero - even a far out-of-the-money strike prices at 0.001-something. So an
+    exact 0.0 on a leg means "the chain lookup did not fill this in", not "this
+    option has no sensitivity to price".
+
+    The distinction matters because the checks below compare against a MAXIMUM.
+    An unfilled 0.0 sails under every limit and used to come back as a green
+    tick reading "delta 0.000 - within your limit", which is the checklist
+    telling her a trade was verified when nothing was measured.
+    """
+    return leg.delta == 0.0
+
+
 def check_short_leg_delta_max(trade: Trade, max_delta: float) -> list[CheckResult]:
     """Every option you SELL must have delta at or under the limit (e.g. < 0.10)."""
     results: list[CheckResult] = []
     for leg in trade.short_legs:
+        name = f"Short {leg.option_type.value} delta under {max_delta:.2f}"
+        if delta_missing(leg):
+            results.append(CheckResult(
+                name=name,
+                status=CheckStatus.WARN,
+                message=(
+                    f"No delta came through for the {leg.strike:g} "
+                    f"{leg.option_type.value} you are selling, so this rule "
+                    "could not be checked. Read the delta off the option chain "
+                    f"in thinkorswim - your SOP wants it at or under "
+                    f"{max_delta:.2f}."
+                ),
+                expected=f"<= {max_delta:.2f}",
+                actual="not available",
+            ))
+            continue
         ok = leg.abs_delta <= max_delta + 1e-9
         results.append(
             CheckResult(
-                name=f"Short {leg.option_type.value} delta under {max_delta:.2f}",
+                name=name,
                 status=CheckStatus.PASS if ok else CheckStatus.FAIL,
                 message=(
                     f"Short {leg.option_type.value} at strike {leg.strike:g} has delta "
@@ -99,6 +131,14 @@ def check_short_call_target_delta(trade: Trade, target: float) -> Optional[Check
     if not short_calls:
         return None
     leg = short_calls[0]
+    if delta_missing(leg):
+        return CheckResult(
+            name=f"Short call near delta {target:.2f}",
+            status=CheckStatus.WARN,
+            message=(f"No delta came through for the {leg.strike:g} call you are "
+                     f"selling, so this could not be checked. Your SOP aims for "
+                     f"about {target:.2f} - read it off the chain in thinkorswim."),
+            expected=f"~{target:.2f}", actual="not available")
     low, high = target - DELTA_TOLERANCE, target + DELTA_TOLERANCE
     ok = low <= leg.abs_delta <= high
     return CheckResult(
@@ -123,6 +163,14 @@ def check_long_leaps_delta(trade: Trade, min_delta: float) -> Optional[CheckResu
     if not long_calls:
         return None
     leg = max(long_calls, key=lambda l: l.abs_delta)
+    if delta_missing(leg):
+        return CheckResult(
+            name=f"Long LEAPS delta at least {min_delta:.2f}",
+            status=CheckStatus.WARN,
+            message=(f"No delta came through for the {leg.strike:g} LEAPS call, so "
+                     f"this could not be checked. Your SOP wants it deep in the "
+                     f"money, at {min_delta:.2f} or higher."),
+            expected=f">= {min_delta:.2f}", actual="not available")
     ok = leg.abs_delta >= min_delta - 1e-9
     return CheckResult(
         name=f"Long LEAPS delta at least {min_delta:.2f}",

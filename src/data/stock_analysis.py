@@ -17,7 +17,15 @@ class Metric(BaseModel):
     label: str
     value: str                       # already formatted for display
     read: str                        # plain-English meaning
-    status: str = "ok"               # "good" | "ok" | "watch"
+    # "good" | "ok" | "watch" | "unknown".
+    #
+    # "unknown" means the number never arrived, and it is NOT a caution. It
+    # used to be: a missing market cap, P/E or profit margin each scored
+    # "watch", identical to a genuinely bad one, so when Yahoo throttled its
+    # fundamentals from the hosted app - which it does routinely from cloud
+    # IPs - NVDA came out graded F and described as illiquid. An absent
+    # measurement is not a finding about the company.
+    status: str = "ok"
 
 
 class StockAnalysis(BaseModel):
@@ -28,6 +36,12 @@ class StockAnalysis(BaseModel):
     fundamentals: list[Metric] = Field(default_factory=list)
     technicals: list[Metric] = Field(default_factory=list)
     liquid: bool = True
+    # Whether volume was actually READ. False means "not checked", which is a
+    # different thing from illiquid and must not be reported as one.
+    liquidity_checked: bool = True
+    # Too few company numbers arrived to grade it. The grade is None and every
+    # verdict built on it should say so rather than guess.
+    data_partial: bool = False
     suitable: bool = True            # decent candidate for selling options?
     # A-F report card - for a COMPANY. None on a fund, which has no company to
     # grade: SPY is 500 of them, so profit margin and revenue growth are not
@@ -73,7 +87,9 @@ def _fmt_big(n: Optional[float]) -> str:
 # ---------- fundamentals ----------
 def _market_cap_metric(cap: Optional[float]) -> Metric:
     if not cap:
-        return Metric(label="Company size", value="n/a", read="Size unknown.", status="watch")
+        return Metric(label="Company size", value="n/a",
+                      read="Company size did not load - this is a missing number, "
+                           "not a small company.", status="unknown")
     if cap >= 200e9:
         read, status = "Mega-cap - one of the biggest, most stable companies.", "good"
     elif cap >= 10e9:
@@ -87,8 +103,11 @@ def _market_cap_metric(cap: Optional[float]) -> Metric:
 
 def _pe_metric(pe: Optional[float]) -> Metric:
     if pe is None:
+        # This used to read "the company may not have steady profits", which
+        # turned an absent field into an accusation. A loss-making company is
+        # caught by the pe < 0 branch below; a blank one is just blank.
         return Metric(label="Valuation (P/E)", value="n/a",
-                      read="No P/E - the company may not have steady profits.", status="watch")
+                      read="Valuation did not load.", status="unknown")
     if pe < 0:
         return Metric(label="Valuation (P/E)", value=f"{pe:.1f}",
                       read="Negative - the company is not profitable right now. Caution.",
@@ -104,7 +123,8 @@ def _pe_metric(pe: Optional[float]) -> Metric:
 
 def _margin_metric(m: Optional[float]) -> Metric:
     if m is None:
-        return Metric(label="Profit margin", value="n/a", read="Profitability unknown.", status="watch")
+        return Metric(label="Profit margin", value="n/a",
+                      read="Profit margin did not load.", status="unknown")
     pct = m * 100
     if pct >= 20:
         read, status = "Very profitable - keeps a big slice of every sale.", "good"
@@ -119,7 +139,8 @@ def _margin_metric(m: Optional[float]) -> Metric:
 
 def _growth_metric(g: Optional[float]) -> Metric:
     if g is None:
-        return Metric(label="Revenue growth", value="n/a", read="Growth unknown.", status="ok")
+        return Metric(label="Revenue growth", value="n/a",
+                      read="Revenue growth did not load.", status="unknown")
     pct = g * 100
     if pct >= 15:
         read, status = "Growing fast.", "good"
@@ -135,7 +156,9 @@ def _growth_metric(g: Optional[float]) -> Metric:
 # ---------- technicals ----------
 def _trend_metric(price: float, s50: Optional[float], s200: Optional[float]) -> Metric:
     if not (price and s50 and s200):
-        return Metric(label="Trend", value="n/a", read="Not enough history.", status="ok")
+        return Metric(label="Trend", value="n/a",
+                      read="Not enough price history to read a trend.",
+                      status="unknown")
     if price > s50 > s200:
         read, status, val = "Uptrend - price is above both moving averages. Healthy.", "good", "Up ▲"
     elif price < s50 < s200:
@@ -147,7 +170,9 @@ def _trend_metric(price: float, s50: Optional[float], s200: Optional[float]) -> 
 
 def _rsi_metric(value: Optional[float]) -> Metric:
     if value is None:
-        return Metric(label="Momentum (RSI)", value="n/a", read="Not enough history.", status="ok")
+        return Metric(label="Momentum (RSI)", value="n/a",
+                      read="Not enough price history for a momentum read.",
+                      status="unknown")
     if value >= 70:
         read, status = "Overbought - has run up fast and may pull back.", "watch"
     elif value <= 30:
@@ -159,8 +184,12 @@ def _rsi_metric(value: Optional[float]) -> Metric:
 
 def _liquidity_metric(avg_vol: Optional[float]) -> Metric:
     if not avg_vol:
+        # NOT a caution. This branch is what told her "NVDA does not trade
+        # enough volume for comfortable options trading" - Yahoo had simply
+        # not returned the field, which it often does not from a cloud host.
         return Metric(label="Trading volume", value="n/a",
-                      read="Volume unknown - may be hard to trade.", status="watch")
+                      read="Trading volume did not load, so liquidity could "
+                           "not be checked here.", status="unknown")
     if avg_vol >= 5e6:
         read, status = "Very liquid - easy to get in and out at fair prices.", "good"
     elif avg_vol >= 1e6:
@@ -219,24 +248,49 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
         _liquidity_metric(avg_vol),
     ]
 
-    liquid = any(m.label == "Avg daily volume" and m.status in ("good", "ok") for m in technicals)
-    watches = sum(1 for m in fundamentals + technicals if m.status == "watch")
-    goods = sum(1 for m in fundamentals + technicals if m.status == "good")
-    # A fund only has to be liquid and not falling apart; there are no company
-    # fundamentals for it to score three greens on.
+    vol_metric = next((m for m in technicals
+                       if m.label in ("Avg daily volume", "Trading volume")), None)
+    # Three states, not two: liquid, illiquid, and never checked. They used to
+    # collapse into "not liquid", which is how the most heavily traded stock in
+    # the market got told it does not trade enough volume.
+    liquidity_checked = vol_metric is not None and vol_metric.status != "unknown"
+    liquid = liquidity_checked and vol_metric.status in ("good", "ok")
+
+    all_metrics = fundamentals + technicals
+    known = [m for m in all_metrics if m.status != "unknown"]
+    watches = sum(1 for m in known if m.status == "watch")
+    goods = sum(1 for m in known if m.status == "good")
     suitable = liquid and watches <= 1 and (is_fund or goods >= 3)
 
-    # Report-card grade: 2 points per green, 1 per neutral, 0 per caution.
-    # Funds get no letter at all - see StockAnalysis.grade.
-    all_metrics = fundamentals + technicals
+    # Report-card grade: 2 points per green, 1 per neutral, 0 per caution -
+    # scored over the metrics that actually ARRIVED. Grading a name on blanks
+    # is what turned a throttled fundamentals fetch into an F.
+    #
+    # Under half the company numbers and there is no grade at all. A letter off
+    # one metric is a guess wearing a report card, and she reads these to
+    # decide what to sell options on.
     grade = None
-    if not is_fund and all_metrics:
-        score = ((2 * goods + sum(1 for m in all_metrics if m.status == "ok"))
-                 / (2 * len(all_metrics)))
+    graded_on = len([m for m in fundamentals if m.status != "unknown"])
+    enough = graded_on >= 2
+    if not is_fund and known and enough:
+        score = ((2 * goods + sum(1 for m in known if m.status == "ok"))
+                 / (2 * len(known)))
         grade = "A" if score >= 0.85 else "B" if score >= 0.70 else \
                 "C" if score >= 0.55 else "D" if score >= 0.40 else "F"
 
-    if is_fund and liquid:
+    partial = not is_fund and not enough
+
+    if partial:
+        summary = (f"Not enough of {symbol}'s company numbers loaded to grade it. "
+                   "This is a data problem, not a verdict on the company - the "
+                   "price and trend below are still real. Try again in a few "
+                   "minutes, or look it up on your broker.")
+    elif not liquidity_checked:
+        summary = (f"{symbol}'s trading volume did not load, so this cannot say "
+                   "whether it trades enough for comfortable options trading. "
+                   "Everything else below is real. Check the volume on your "
+                   "broker before selling options on it.")
+    elif is_fund and liquid:
         summary = (f"{symbol} is a fund - a basket of many holdings, not one company - so "
                    "there is no company quality to grade. What matters for selling options "
                    "on it is that it trades heavily and moves steadily, and it does.")
@@ -258,6 +312,8 @@ def analyze(symbol: str, info: dict[str, Any], closes: list[float],
         fundamentals=fundamentals,
         technicals=technicals,
         liquid=liquid,
+        liquidity_checked=liquidity_checked,
+        data_partial=partial,
         suitable=suitable,
         grade=grade,
         is_fund=is_fund,

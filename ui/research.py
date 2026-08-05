@@ -16,8 +16,9 @@ import streamlit as st
 
 from ui import theme
 
-_STATUS_COLOR = {"good": theme.GREEN, "ok": theme.SECONDARY, "watch": theme.RED}
-_STATUS_ICON = {"good": "🟢", "ok": "🟡", "watch": "🔴"}
+_STATUS_COLOR = {"good": theme.GREEN, "ok": theme.SECONDARY, "watch": theme.RED,
+                 "unknown": theme.SECONDARY}
+_STATUS_ICON = {"good": "🟢", "ok": "🟡", "watch": "🔴", "unknown": "❔"}
 
 
 def _esc(text: str) -> str:

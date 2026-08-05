@@ -65,8 +65,11 @@ def quality_label(symbol: str, grade: str | None) -> str:
     return "—"      # a stock we could not grade, not a fund
 
 
-_STATUS_COLOR = {"good": "green", "ok": "orange", "watch": "red"}
-_STATUS_ICON = {"good": "✅", "ok": "➖", "watch": "⚠️"}
+# "unknown" is grey and a question mark on purpose - it means the number did
+# not load, which is not a caution and must not wear a warning colour.
+_STATUS_COLOR = {"good": "green", "ok": "orange", "watch": "red",
+                 "unknown": "gray"}
+_STATUS_ICON = {"good": "✅", "ok": "➖", "watch": "⚠️", "unknown": "❔"}
 
 
 def render_market_tiles(tiles: list[dict], market_open: bool = True) -> None:

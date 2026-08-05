@@ -343,3 +343,58 @@ def test_cash_secured_put_has_no_width_so_no_credit_floor():
         legs=[Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
                   strike=470, delta=-0.28, premium=3.0, dte=30)])
     assert _credit_check(validate_trade(trade)) is None
+
+
+# ============================================================================
+# A rule that could not be checked must never come back green.
+#
+# Leg.delta defaults to 0.0, and every delta rule compares against a MAXIMUM,
+# so an unfilled leg sailed under each limit and the checklist reported
+# "delta 0.000 - within your limit" with a green tick. That is the pre-trade
+# safety net telling her a trade was verified when nothing was measured.
+# ============================================================================
+from src.engine.models import CheckStatus  # noqa: E402
+from src.engine.rules import delta_missing  # noqa: E402
+
+
+def _delta_checks(report):
+    return [c for c in report.results if "delta" in c.name.lower()
+            and "Position delta" not in c.name]
+
+
+def test_a_missing_delta_warns_instead_of_passing():
+    trade = put_credit_spread(short_delta=0.0, long_delta=0.0)
+    checks = _delta_checks(validate_trade(trade))
+    assert checks, "expected a delta check"
+    assert all(c.status is CheckStatus.WARN for c in checks)
+    assert all(c.actual == "not available" for c in checks)
+
+
+def test_the_warning_says_where_to_read_the_number():
+    """She can always get the delta off the option chain in thinkorswim, so the
+    message has to send her there rather than just going quiet."""
+    trade = put_credit_spread(short_delta=0.0, long_delta=0.0)
+    msg = " ".join(c.message for c in _delta_checks(validate_trade(trade)))
+    assert "thinkorswim" in msg
+    assert "could not be checked" in msg
+
+
+def test_a_real_delta_inside_the_limit_still_passes():
+    trade = put_credit_spread(short_delta=-0.08)
+    assert all(c.status is CheckStatus.PASS for c in _delta_checks(validate_trade(trade)))
+
+
+def test_a_real_delta_over_the_limit_still_fails():
+    trade = put_credit_spread(short_delta=-0.45)
+    assert any(c.status is CheckStatus.FAIL for c in _delta_checks(validate_trade(trade)))
+
+
+def test_only_an_exact_zero_counts_as_missing():
+    """A genuinely tiny delta is a real measurement and must be judged, not
+    excused. Real chains never return exactly 0.0."""
+    tiny = Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+               strike=5000.0, delta=-0.001, premium=8.0, dte=45)
+    blank = Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=5000.0, delta=0.0, premium=8.0, dte=45)
+    assert delta_missing(tiny) is False
+    assert delta_missing(blank) is True
