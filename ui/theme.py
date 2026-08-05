@@ -36,6 +36,13 @@ GREEN = "#0B7A54"         # success / good
 AMBER = "#B45309"         # warning
 RED = "#C02A1B"           # danger
 
+# The dark results band. Deep navy rather than the app's green on purpose: a
+# band of headline numbers should read as its own object - a page torn out of a
+# monthly statement - and not as another panel of the tab it sits in.
+BAND = "#12294A"
+BAND_SUB = "#D8E6F7"      # labels and captions on the band
+BAND_HERO = "#7DE8B0"     # the one number the band exists for
+
 _CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -290,6 +297,87 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-pulse-sym  {{ font-size: 0.72rem; font-weight: 600; color: #35463D; }}
 .ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK}; }}
 
+/* ---------------- the KPI row (laptop first, phone second) ----------------
+   A GRID, not the flex row .ota-tiles uses. With flex: 1 1 <basis> six cards
+   wrapping four-and-two stretches the last two to half the width each, and a
+   dashboard's top row has to be a row of equals. auto-fit + minmax gives
+   6-up on a laptop, 4-up, 3-up, then 2-up as the window narrows, every card
+   the same width at every step, with no media query for the middle sizes.
+
+   The left border carries the tone. It is always paired with a word in the
+   sub-line, because colour is never the only signal. */
+.ota-kpi {{
+    display: grid; gap: 12px; margin: 6px 0 4px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}}
+.ota-kpi-card {{
+    background: {CARD}; border: 1px solid {BORDER}; border-radius: 16px;
+    border-left: 4px solid transparent; padding: 14px 16px;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}}
+.ota-kpi-card:hover {{
+    border-color: {BORDER_STRONG}; box-shadow: 0 4px 14px rgba(11,122,84,.07);
+}}
+.ota-kpi-label {{ font-size: 0.75rem; font-weight: 800; color: {SECONDARY};
+                  text-transform: uppercase; letter-spacing: 0.06em; }}
+/* tabular-nums so a value does not jump sideways between reruns when a 1
+   becomes an 8 - the page re-renders on every interaction. */
+.ota-kpi-value {{ font-size: 1.9rem; font-weight: 800; color: {INK};
+                  line-height: 1.15; margin: 3px 0 1px;
+                  font-variant-numeric: tabular-nums; }}
+.ota-kpi-sub {{ font-size: 0.86rem; font-weight: 600; color: {SECONDARY};
+                line-height: 1.45; }}
+.ota-kpi-good  {{ border-left-color: {GREEN}; }}
+.ota-kpi-watch {{ border-left-color: {AMBER}; }}
+.ota-kpi-bad   {{ border-left-color: {RED}; }}
+
+/* ---------------- the dark band (the report's own object) ----------------
+   Deep navy rather than the app's green, so a results band reads as a page
+   torn out of a statement and not as another panel of the tab. */
+.ota-band {{ background: {BAND}; border-radius: 16px; padding: 22px 24px;
+             margin: 6px 0 14px; }}
+.ota-band-zones {{ display: flex; gap: 34px; flex-wrap: wrap; margin-top: 14px; }}
+.ota-band-zone {{ min-width: 170px; }}
+.ota-band-label {{ font-size: 0.8rem; font-weight: 800; color: {BAND_SUB};
+                   letter-spacing: 0.06em; text-transform: uppercase; }}
+.ota-band-hero {{ font-size: 2.6rem; font-weight: 800; color: {BAND_HERO};
+                  line-height: 1.1; font-variant-numeric: tabular-nums; }}
+.ota-band-value {{ font-size: 1.9rem; font-weight: 800; color: #FFFFFF;
+                   line-height: 1.15; font-variant-numeric: tabular-nums; }}
+.ota-band-sub {{ font-size: 0.9rem; font-weight: 600; color: {BAND_SUB}; }}
+.ota-band-title {{ font-size: 1.45rem; font-weight: 800; color: #FFFFFF; }}
+
+/* ---------------- the progress track (goal thermometer) ----------------
+   A CSS rail rather than a one-bar chart: a chart would cost 200px of height,
+   could not do the typography, and would need the axis-padding workaround the
+   layered charts need. The marker is where a steady plan would be today. */
+.ota-track {{ position: relative; margin: 16px 0 4px; }}
+.ota-track-rail {{ height: 22px; background: {TILE};
+                   border: 1px solid {BORDER_STRONG}; border-radius: 999px;
+                   overflow: hidden; }}
+.ota-track-fill {{ height: 100%; border-radius: 999px;
+                   background: linear-gradient(90deg, {ACCENT}, {ACCENT_BRIGHT}); }}
+.ota-track-marker {{ position: absolute; top: -7px; width: 2px; height: 36px;
+                     background: {INK}; }}
+.ota-track-flag {{ position: absolute; top: -30px; font-size: 0.78rem;
+                   font-weight: 800; color: {INK}; white-space: nowrap;
+                   transform: translateX(-50%); }}
+.ota-track-scale {{ display: flex; justify-content: space-between;
+                    margin-top: 7px; font-size: 0.84rem; font-weight: 700;
+                    color: {SECONDARY}; }}
+.ota-track-value {{ font-size: 1.05rem; font-weight: 800; color: {INK};
+                    font-variant-numeric: tabular-nums; }}
+
+/* ---------------- the faded-book legend ----------------
+   Wherever a chart draws the other account behind the real one, this says so
+   in words. A grey bar with no explanation is the fastest way to make her
+   think practice money is being counted. */
+.ota-legend {{ display: flex; gap: 10px; align-items: flex-start; margin: 8px 0 2px; }}
+.ota-legend-swatch {{ flex: 0 0 16px; width: 16px; height: 16px; margin-top: 3px;
+                      border-radius: 4px; background: {BORDER_STRONG}; opacity: .55; }}
+.ota-legend-text {{ font-size: 0.95rem; font-weight: 600; color: {CAPTION};
+                    line-height: 1.5; }}
+
 /* ---------------- market news (compact headline list) ---------------- */
 .ota-news {{ display: flex; flex-direction: column; gap: 2px; }}
 .ota-news-item {{ padding: 9px 0; border-bottom: 1px solid {BORDER}; }}
@@ -362,6 +450,27 @@ a {{ color: {ACCENT_DARK}; }}
     .ota-tile {{ flex: 1 1 42%; min-width: 42%; }}
     .ota-pulse-tile {{ flex: 1 1 30%; min-width: 30%; }}
     .ota-section-title {{ font-size: 1.35rem; }}
+    /* Two KPI cards a row rather than auto-fit's one: six numbers should still
+       be three swipes, not six. */
+    .ota-kpi {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+    .ota-kpi-card {{ padding: 11px 13px; }}
+    .ota-kpi-value {{ font-size: 1.45rem; }}
+    .ota-kpi-label {{ font-size: 0.7rem; }}
+    .ota-kpi-sub {{ font-size: 0.8rem; }}
+    .ota-band {{ padding: 16px 16px; }}
+    .ota-band-hero {{ font-size: 2.1rem; }}
+    .ota-band-value {{ font-size: 1.55rem; }}
+    .ota-band-zones {{ gap: 18px; }}
+    .ota-band-zone {{ min-width: 130px; }}
+    .ota-band-title {{ font-size: 1.2rem; }}
+    .ota-track-rail {{ height: 18px; }}
+    .ota-track-scale {{ font-size: 0.78rem; }}
+}}
+
+/* Small phones: two 200px cards no longer fit, so one to a row beats two
+   squeezed ones with the numbers wrapping mid-value. */
+@media (max-width: 400px) {{
+    .ota-kpi {{ grid-template-columns: 1fr; }}
 }}
 </style>
 """
@@ -416,3 +525,94 @@ def chip(text: str, tone: str = "neutral") -> str:
     """Inline pill badge HTML. tone: neutral | green | red | amber | indigo."""
     cls = f"ota-chip ota-chip-{tone}" if tone != "neutral" else "ota-chip"
     return f'<span class="{cls}">{text}</span>'
+
+
+# ---------------------------------------------------------------- dashboard
+# The pieces below build the My trades dashboard. They return HTML strings or
+# render directly, and all of them escape their input, because every one of
+# them is handed a strategy name or a note that came out of her own log.
+#
+# One rule they all share: a $ sign arriving in HTML must already be the &#36;
+# entity. A raw pair of them turns Streamlit's markdown into LaTeX and garbles
+# the line. Inside note() the escape is \\$ instead.
+_TONE_CLASS = {"good": "ota-kpi-good", "watch": "ota-kpi-watch",
+               "bad": "ota-kpi-bad", "behind": "ota-kpi-watch"}
+
+
+def _money_safe(text: str) -> str:
+    """Escape for HTML, then turn any surviving dollar sign into its entity."""
+    return _html.escape(str(text), quote=True).replace("$", "&#36;")
+
+
+def kpi_card(label: str, value: str, sub: str = "", tone: str = "neutral",
+             icon: str = "") -> str:
+    """One card of the dashboard's headline row.
+
+    tone sets the left border: good | watch | bad, anything else neutral. It is
+    never the only signal - the sub-line always says in words what the colour
+    is hinting, so the card still works for someone who cannot separate the
+    two greens.
+    """
+    cls = _TONE_CLASS.get(tone, "")
+    head = f"{_money_safe(icon)} " if icon else ""
+    return (
+        f'<div class="ota-kpi-card {cls}">'
+        f'<div class="ota-kpi-label">{head}{_money_safe(label)}</div>'
+        f'<div class="ota-kpi-value">{_money_safe(value)}</div>'
+        f'<div class="ota-kpi-sub">{_money_safe(sub)}</div></div>')
+
+
+def kpi_row(cards: list[str]) -> None:
+    """The cards in a responsive grid - six across on a laptop, two on a phone,
+    always equal width. See .ota-kpi for why this is a grid and not a flex row."""
+    st.markdown(f'<div class="ota-kpi">{"".join(cards)}</div>',
+                unsafe_allow_html=True)
+
+
+def track(value: float, start: float, goal: float, *,
+          marker: float | None = None, marker_label: str = "",
+          value_label: str = "", start_label: str = "",
+          goal_label: str = "") -> None:
+    """A progress track from `start` to `goal`, with an optional pace marker.
+
+    Used for the year-one balance: the rail runs $100,000 to $142,000, the fill
+    is where the account actually is, and the marker is where a steady plan
+    would have it today. Both fill and marker clamp to the rail, so an account
+    that beat the goal fills it rather than overflowing the page.
+    """
+    span = goal - start
+    def pct(x: float) -> float:
+        return 0.0 if span <= 0 else min(max((x - start) / span, 0.0), 1.0)
+
+    flag = ""
+    if marker is not None:
+        left = pct(marker) * 100
+        label = (f'<div class="ota-track-flag" style="left:{left:.2f}%;">'
+                 f'{_money_safe(marker_label)}</div>' if marker_label else "")
+        flag = label + f'<div class="ota-track-marker" style="left:{left:.2f}%;"></div>'
+
+    st.markdown(
+        f'<div class="ota-track">'
+        f'{flag}'
+        f'<div class="ota-track-rail">'
+        f'<div class="ota-track-fill" style="width:{pct(value) * 100:.2f}%;"></div>'
+        f'</div>'
+        f'<div class="ota-track-scale">'
+        f'<span>{_money_safe(start_label)}</span>'
+        f'<span class="ota-track-value">{_money_safe(value_label)}</span>'
+        f'<span>{_money_safe(goal_label)}</span>'
+        f'</div></div>',
+        unsafe_allow_html=True)
+
+
+def legend_note(body: str) -> None:
+    """A grey swatch and the sentence explaining it.
+
+    Every chart that draws the other account faded behind the real one gets
+    this underneath. An unexplained grey bar on an income chart is the fastest
+    way to make her think practice money is being counted.
+    """
+    st.markdown(
+        f'<div class="ota-legend"><span class="ota-legend-swatch"></span>'
+        f'<span class="ota-legend-text">{_money_safe(body)}</span></div>',
+        unsafe_allow_html=True)

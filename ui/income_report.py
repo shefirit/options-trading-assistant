@@ -35,11 +35,11 @@ from ui import theme
 SLOTS = ["#2a78d6", "#eb6834", "#0B7A54", "#7B4FBF", "#B45309", "#0E7490",
          "#9D174D", "#4E625A"]
 
-# The dark band at the top, lifted from the report style she liked. Deep navy
-# rather than the app's green so the report reads as its own object - a page
-# torn out of a monthly statement, not another panel of the tab.
-BAND = "#12294A"
-BAND_SUB = "#D8E6F7"
+# The dark band at the top, lifted from the report style she liked. It now
+# lives in the palette so the dashboard's band and this one cannot drift apart;
+# these two names stay because the band's inline styles read better with them.
+BAND = theme.BAND
+BAND_SUB = theme.BAND_SUB
 
 
 def _d(x: float, decimals: int = 0) -> str:
