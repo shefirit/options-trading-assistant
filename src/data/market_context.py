@@ -26,6 +26,11 @@ class StrategySuggestion(BaseModel):
     strategy_key: str
     name: str
     reason: str
+    # What put it in this position. Carried so the UI can show the reasoning
+    # rather than an order she has to take on trust.
+    score: float = 0.0
+    trend_points: float = 0.0
+    vol_points: float = 0.0
 
 
 class MarketContext(BaseModel):
@@ -34,6 +39,12 @@ class MarketContext(BaseModel):
     atm_iv: Optional[float] = None      # implied volatility of the near-the-money option
     vix: Optional[float] = None
     trend: str = "unknown"              # "up", "down", "sideways", "unknown"
+    # The gap between the 20- and 50-day averages, as a fraction, and the gap
+    # it has to clear. Shown on the page so an unchanged ranking reads as a
+    # fact about the market rather than as a stuck screen.
+    trend_spread: Optional[float] = None
+    trend_band: float = 0.01
+    below_200: bool = False
     vol_bucket: str = "unknown"         # "low", "normal", "high"
     volatility_read: str = ""           # plain-English note on IV / VIX
     summary: str = ""
@@ -81,41 +92,97 @@ _NAMES = {
 }
 
 
+# How much each condition moves a strategy up or down the list. Kept as data
+# rather than nested ifs so the reasoning can be PRINTED - the section used to
+# show an order with nothing behind it, which is why a correct answer that had
+# not changed for six weeks looked broken.
+#
+# The volatility half comes straight from her Notion hub's quick guide:
+# "calm / low VIX / range-bound -> Iron Condor". The code used to implement
+# only the range-bound half, so a VIX of 12 and a VIX of 28 gave the identical
+# ranking. An iron condor is the one shape here with BOTH sides exposed, so
+# calm should promote it and a swinging market should push it down the list.
+_TREND_POINTS = {
+    "up":       {"put_credit_spread": 2.0, "iron_condor": 0.0, "call_credit_spread": -2.0},
+    "down":     {"put_credit_spread": -2.0, "iron_condor": 0.0, "call_credit_spread": 2.0},
+    "sideways": {"put_credit_spread": 0.0, "iron_condor": 2.0, "call_credit_spread": 0.0},
+    "unknown":  {"put_credit_spread": 0.0, "iron_condor": 0.0, "call_credit_spread": 0.0},
+}
+_VOL_POINTS = {
+    "low":     {"iron_condor": 1.5, "put_credit_spread": 0.0, "call_credit_spread": 0.0},
+    "normal":  {"iron_condor": 0.0, "put_credit_spread": 0.0, "call_credit_spread": 0.0},
+    "high":    {"iron_condor": -2.0, "put_credit_spread": 0.5, "call_credit_spread": 0.5},
+    "unknown": {"iron_condor": 0.0, "put_credit_spread": 0.0, "call_credit_spread": 0.0},
+}
+# The tie-break when nothing separates them. Her SOP sells call spreads at a
+# stricter 0.10 delta precisely because markets drift up, so between the two
+# one-sided spreads the put side is the calmer default.
+_TIE_ORDER = ["put_credit_spread", "iron_condor", "call_credit_spread"]
+
+_BASE_REASON = {
+    "iron_condor":
+        "Range-bound market - you collect premium from both sides at once.",
+    "put_credit_spread":
+        "Neutral-to-bullish lean - you win as long as price does not fall hard.",
+    "call_credit_spread":
+        "Neutral-to-bearish lean - you win as long as price does not rise hard.",
+}
+# What the volatility read ADDS to a strategy's reason, so the ranking explains
+# the half of itself that used to be invisible.
+_VOL_REASON = {
+    ("iron_condor", "low"):
+        "The market is calm, which is exactly when a condor's two sides are "
+        "least likely to be breached.",
+    ("iron_condor", "high"):
+        "Fear is elevated, and a condor is the one shape with BOTH sides "
+        "exposed - big swings can breach either wing, so it drops down the list.",
+    ("put_credit_spread", "high"):
+        "Premiums are fat right now, and only one side of this is exposed.",
+    ("call_credit_spread", "high"):
+        "Premiums are fat right now, and only one side of this is exposed.",
+}
+
+
 def _rank_strategies(trend: str, vol_bucket: str) -> list[StrategySuggestion]:
-    """Order strategies best-first for the current conditions.
+    """Order the three index strategies best-first for current conditions.
 
-    The idea, in plain English:
-      - Sideways / calm market  -> Iron Condor (get paid on both sides).
-      - Leaning up (bullish)     -> Put Credit Spread (win while price stays up).
-      - Leaning down (bearish)   -> Call Credit Spread (win while price stays down).
-      - When direction is unclear, the neutral Iron Condor leads.
+    Two inputs, not one:
+      - TREND decides which direction you can lean. Up favours the put spread,
+        down the call spread, sideways the condor.
+      - VOLATILITY decides how safe it is to have two sides exposed. Calm
+        promotes the condor; a nervous market demotes it below the one-sided
+        spreads, whatever the trend is doing.
+
+    Every suggestion carries the points that put it where it is, so the UI can
+    show the arithmetic instead of asking her to trust an unexplained order.
     """
-    condor = StrategySuggestion(
-        strategy_key="iron_condor", name=_NAMES["iron_condor"],
-        reason="Calm, range-bound market - you collect premium from both sides at once.",
-    )
-    put_cs = StrategySuggestion(
-        strategy_key="put_credit_spread", name=_NAMES["put_credit_spread"],
-        reason="Neutral-to-bullish lean - you win as long as price does not fall hard.",
-    )
-    call_cs = StrategySuggestion(
-        strategy_key="call_credit_spread", name=_NAMES["call_credit_spread"],
-        reason="Neutral-to-bearish lean - you win as long as price does not rise hard.",
-    )
+    trend_pts = _TREND_POINTS.get(trend, _TREND_POINTS["unknown"])
+    vol_pts = _VOL_POINTS.get(vol_bucket, _VOL_POINTS["unknown"])
 
-    if trend == "up":
-        ordered = [put_cs, condor, call_cs]
-    elif trend == "down":
-        ordered = [call_cs, condor, put_cs]
-    else:  # sideways or unknown
-        ordered = [condor, put_cs, call_cs]
+    scored = []
+    for key in _TIE_ORDER:
+        score = trend_pts[key] + vol_pts[key]
+        reason = _BASE_REASON[key]
+        extra = _VOL_REASON.get((key, vol_bucket))
+        if extra:
+            reason = f"{reason} {extra}"
+        scored.append(StrategySuggestion(
+            strategy_key=key, name=_NAMES[key], reason=reason,
+            score=round(score, 2), trend_points=trend_pts[key],
+            vol_points=vol_pts[key]))
 
-    # In a high-volatility market, add a size caution to the top pick's reason.
+    # Highest score first; ties keep _TIE_ORDER, which sort() preserves because
+    # it is stable and `scored` was built in that order.
+    scored.sort(key=lambda s: -s.score)
+
+    # High volatility now REORDERS the list, but the size caution has to
+    # survive that - it is SOP guidance about how to trade whatever comes out
+    # on top, not a comment on the condor.
     if vol_bucket == "high":
-        ordered[0] = ordered[0].model_copy(update={
-            "reason": ordered[0].reason + " Volatility is high, so keep size small and deltas low."
-        })
-    return ordered
+        scored[0] = scored[0].model_copy(update={
+            "reason": scored[0].reason + " Volatility is high, so keep size "
+                                         "small and deltas low."})
+    return scored
 
 
 def build_context(
@@ -124,9 +191,16 @@ def build_context(
     vix: Optional[float] = None,
     trend: str = "unknown",
     atm_iv: Optional[float] = None,
+    trend_spread: Optional[float] = None,
+    below_200: bool = False,
 ) -> MarketContext:
     """Build the market read from lightweight inputs (no full option chain needed,
-    so the snapshot loads fast on real data)."""
+    so the snapshot loads fast on real data).
+
+    trend_spread is optional evidence: the gap between the 20- and 50-day
+    averages that produced `trend`. Callers that have it (the live path, via
+    trend_detail) pass it so the page can show its working.
+    """
     vol_bucket, vol_note = _volatility_read(vix, atm_iv)
     suggestions = _rank_strategies(trend, vol_bucket)
     best = suggestions[0]
@@ -144,6 +218,9 @@ def build_context(
         atm_iv=atm_iv,
         vix=vix,
         trend=trend,
+        trend_spread=trend_spread,
+        trend_band=TREND_BAND,
+        below_200=below_200,
         vol_bucket=vol_bucket,
         volatility_read=vol_note,
         summary=summary,
@@ -219,15 +296,47 @@ def trend_from_prices(prices: list[float]) -> str:
     recovering is still below its 200-day for months, and calling that a
     downtrend would throw away good candidates.
     """
+    return trend_detail(prices)["trend"]
+
+
+# How far apart the 20- and 50-day averages must be before it counts as a
+# direction rather than noise. On a broad index the two averages sit close
+# together for weeks at a time, which is why this section can honestly show the
+# same answer for over a month - the replay of the last year of SPX had runs of
+# 1 to 4 months. That is a trend signal behaving normally, not a stuck screen,
+# and the fix is to SHOW the number rather than to narrow the band until the
+# recommendation flip-flops.
+TREND_BAND = 0.01
+
+
+def trend_detail(prices: list[float]) -> dict:
+    """The trend, plus the numbers that produced it.
+
+    Split out from trend_from_prices so the Market tab can print its evidence:
+    "the 20-day average is 0.2% above the 50-day, and it takes 1% to call a
+    direction". Without that, an unchanged-but-correct answer is
+    indistinguishable from a broken one.
+
+    Returns trend plus sma20/sma50/spread/sma200/below_200 (None where there
+    is not enough history to compute them).
+    """
+    out = {"trend": "unknown", "sma20": None, "sma50": None, "spread": None,
+           "sma200": None, "below_200": False, "band": TREND_BAND,
+           "days": len(prices)}
     if len(prices) < 50:
-        return "unknown"
+        return out
+
     sma20 = sum(prices[-20:]) / 20
     sma50 = sum(prices[-50:]) / 50
-    spread = (sma20 - sma50) / sma50
-    short = "up" if spread > 0.01 else "down" if spread < -0.01 else "sideways"
+    spread = (sma20 - sma50) / sma50 if sma50 else 0.0
+    short = ("up" if spread > TREND_BAND
+             else "down" if spread < -TREND_BAND else "sideways")
+    out.update(sma20=sma20, sma50=sma50, spread=spread, trend=short)
 
     if len(prices) >= 200:
         sma200 = sum(prices[-200:]) / 200
+        out["sma200"] = sma200
         if sma200 > 0 and prices[-1] < sma200 * (1 - LONG_TREND_BAND):
-            return "sideways" if short == "up" else "down"
-    return short
+            out["below_200"] = True
+            out["trend"] = "sideways" if short == "up" else "down"
+    return out

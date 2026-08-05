@@ -28,6 +28,7 @@ from src.data.market_context import (
     MarketContext,
     build_context,
     context_from_chain,
+    trend_detail,
     trend_from_prices,
 )
 from src.data.schwab_client import SchwabClient
@@ -241,7 +242,14 @@ class DataProvider:
             vix = cache.get_or_fetch("vix", yfinance_client.get_vix, 120)
             closes = cache.get_or_fetch(f"hist:{underlying}",
                                         lambda: yfinance_client.get_history_closes(underlying), 300)
-            return build_context(underlying, price, vix=vix, trend=trend_from_prices(closes))
+            # trend_detail rather than trend_from_prices: the Market tab shows
+            # the 20-vs-50-day gap that produced the trend, so an unchanged
+            # ranking reads as a fact about the market and not a stuck screen.
+            detail = trend_detail(closes or [])
+            return build_context(underlying, price, vix=vix,
+                                 trend=detail["trend"],
+                                 trend_spread=detail["spread"],
+                                 below_200=detail["below_200"])
         if self.mode == "schwab":
             price = self._client.get_price(underlying) or 0.0
             return build_context(underlying, price, vix=self._client.get_price("VIX"))

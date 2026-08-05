@@ -273,12 +273,21 @@ def _soft(render, *args, what: str) -> None:
 
 
 def _market_fit_section(ctx, strategies) -> None:
-    """Every index strategy ranked against today's trend and volatility -
-    the old single 'best play' line, upgraded to show the reasoning."""
-    st.markdown("### 🧭 Strategy fit today")
-    theme.note("The app ranks your three index strategies against today's trend and "
-               "volatility. These are reasons, not instructions - you check the winner "
-               "in 🎯 Find a trade and you decide.")
+    """Every index strategy ranked on trend and volatility, with the numbers
+    that produced the order.
+
+    Rita asked why this "always shows the same". It was right - a 20-vs-50-day
+    trend read holds for weeks, and a replay of a year of SPX had runs of 1 to
+    4 months. But it showed an order with no evidence and a heading that said
+    "today", so a correct, unchanged answer looked broken. It now prints the
+    gap it measured and how big that gap has to be.
+    """
+    st.markdown("### 🧭 Which strategy fits the market now")
+    theme.note("Your three index strategies, ranked on **trend** (which way the "
+               "market is leaning) and **volatility** (how much it is swinging). "
+               "These are reasons, not instructions - you check the winner in "
+               "🎯 Find a trade and you decide.")
+    _market_fit_evidence(ctx)
     if ctx.suggestions:
         components.render_strategy_fit(ctx.suggestions)
     best_key = ctx.best_strategy_key or list(strategies.keys())[0]
@@ -288,6 +297,62 @@ def _market_fit_section(ctx, strategies) -> None:
         st.session_state["build_underlyings"] = ["SPX"]
         st.session_state["_prev_build_strategy"] = best_key
         st.success("Loaded into **🎯 Find a trade** - open that tab to scan it.")
+
+
+def _market_fit_evidence(ctx) -> None:
+    """The two numbers behind the ranking, said out loud.
+
+    "Sideways" with nothing behind it looks like the app gave up. "The 20-day
+    average is 0.2% above the 50-day, and it takes 1% to call a direction" is
+    the same answer with a reason attached, and it makes an unchanged ranking
+    read as steady rather than stuck.
+    """
+    band = ctx.trend_band * 100
+    if ctx.trend == "unknown":
+        # An unknown trend used to produce the SAME order as a genuine sideways
+        # read, so a failed price fetch was invisible. Now it says so.
+        st.warning(f"**{ctx.underlying}'s price history could not be loaded**, so the "
+                   "ranking below is on volatility alone and cannot see which way "
+                   "the market is leaning. Press ↻ Refresh, or try again in a "
+                   "few minutes.")
+        return
+
+    if ctx.trend_spread is None:
+        # The trend is known but the gap behind it is not - the Schwab and demo
+        # paths have no price history to measure. Say the read without pretending
+        # to numbers that were never computed.
+        read = ("its 20-day and 50-day averages are close enough together that "
+                "there is no direction to lean on"
+                if ctx.trend == "sideways" else
+                f"its short-term average has pulled {'above' if ctx.trend == 'up' else 'below'} "
+                "its 50-day average")
+    else:
+        gap = ctx.trend_spread * 100
+        side = "above" if gap >= 0 else "below"
+        if ctx.trend == "sideways":
+            read = (f"its 20-day average is only **{abs(gap):.1f}%** {side} its "
+                    f"50-day average, and it takes **{band:.0f}%** either way to "
+                    "call a direction. That is a real no-trend reading, not a "
+                    "missing number")
+        else:
+            read = (f"its 20-day average is **{abs(gap):.1f}%** {side} its 50-day "
+                    f"average, past the **{band:.0f}%** it takes to call a direction")
+
+    # "Market fear (VIX)", not "The fear gauge (VIX)" - that exact phrase is
+    # the heading of the retired fear-gauge chart section, and a smoke test
+    # guards against it coming back.
+    vix_bit = (f" Market fear (VIX) is **{ctx.vix:.0f}**, which counts as "
+               f"**{ctx.vol_bucket}**." if ctx.vix is not None else "")
+
+    theme.note(f"**{ctx.underlying} is {ctx.trend}** - {read}.{vix_bit}")
+    theme.note("This is a **multi-week** read, not a daily one - averages move "
+               "slowly, so the same answer for a month is normal and means "
+               "conditions have not changed. Over the past year this order "
+               "changed about seven times.")
+    if ctx.below_200:
+        theme.note("It is also trading **below its 200-day average**, which caps "
+                   "the read: a market under its long-term average does not get "
+                   "called an uptrend even when the short averages turn up.")
 
 
 def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:

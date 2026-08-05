@@ -116,8 +116,10 @@ def render_news(items: list) -> None:
 def render_strategy_fit(suggestions: list) -> None:
     """The ranked strategy board: every index strategy with a fit chip and the
     one-line reason - a vertical list, so it reads the same on a phone."""
-    fit_tags = [("green", "Best fit today"), ("indigo", "Also workable"),
-                ("amber", "Weaker fit today")]
+    # Not "today": this is a multi-week read off 20- and 50-day averages, and
+    # calling it daily is what made an unchanged-but-correct ranking look stuck.
+    fit_tags = [("green", "Best fit"), ("indigo", "Also workable"),
+                ("amber", "Weaker fit")]
     for i, s in enumerate(suggestions[:3]):
         tone, tag = fit_tags[i] if i < len(fit_tags) else ("neutral", "Also possible")
         st.markdown(

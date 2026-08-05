@@ -80,7 +80,14 @@ def test_market_tab_new_sections_render_in_demo(demo_app):
     assert not at.exception
     all_md = " ".join(str(m.value) for m in at.markdown)
     assert "Today's brief" in all_md
-    assert "Strategy fit today" in all_md
+    # Renamed from "Strategy fit today": the ranking is a multi-week read, so
+    # "today" made a correct, unchanged answer look stuck.
+    assert "Which strategy fits the market now" in all_md
+    # And it must show the reasoning behind the order, not just the order.
+    # (Demo has no price history, so it states the read without the numbers -
+    # the live path prints the measured gap.)
+    assert "20-day" in all_md and "50-day" in all_md
+    assert "multi-week" in all_md
     assert "What's coming" in all_md
     assert "Sector pulse" in all_md
     assert "Market news" in all_md

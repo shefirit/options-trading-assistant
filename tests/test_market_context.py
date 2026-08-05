@@ -47,6 +47,86 @@ def test_high_vol_adds_size_caution():
     assert "keep size small" in ctx.recommendation_reason.lower()
 
 
+# ---------------------------------------------- volatility drives the ranking
+# Rita: "in market tab - it always shows the same." It was right - a 20-vs-50
+# day trend read holds for weeks - but it also claimed to rank on "trend AND
+# volatility" while using trend alone, so a VIX of 12 and a VIX of 28 gave the
+# identical order. Her Notion guide says "calm / low VIX / range-bound -> Iron
+# Condor"; only the range-bound half was implemented.
+def test_a_nervous_market_pushes_the_condor_off_the_top():
+    """An iron condor is the one shape with BOTH sides exposed. When the market
+    is swinging, either wing can be breached, so it must not still be the top
+    pick just because there is no trend."""
+    calm = build_context("SPX", 5100, vix=12.0, trend="sideways")
+    nervous = build_context("SPX", 5100, vix=32.0, trend="sideways")
+    assert calm.best_strategy_key == "iron_condor"
+    assert nervous.best_strategy_key != "iron_condor"
+    assert nervous.suggestions[-1].strategy_key == "iron_condor"
+
+
+def test_volatility_changes_the_order_at_every_trend():
+    """The bug in one assertion: the same trend used to give the same order
+    whatever the VIX was."""
+    for trend in ("up", "sideways", "down"):
+        calm = [s.strategy_key for s in
+                build_context("SPX", 5100, vix=12.0, trend=trend).suggestions]
+        nervous = [s.strategy_key for s in
+                   build_context("SPX", 5100, vix=32.0, trend=trend).suggestions]
+        assert calm != nervous, f"volatility did nothing at trend={trend}"
+
+
+def test_a_real_trend_still_beats_a_calm_reading():
+    """Calm promotes the condor, but never past a strategy that leans WITH the
+    trend - that one has a side to hide behind and the condor does not."""
+    ctx = build_context("SPX", 5100, vix=12.0, trend="up")
+    assert ctx.best_strategy_key == "put_credit_spread"
+
+
+def test_every_suggestion_carries_the_points_that_placed_it():
+    """The section showed an order with nothing behind it, which is why an
+    unchanged-but-correct answer looked broken."""
+    ctx = build_context("SPX", 5100, vix=12.0, trend="sideways")
+    top = ctx.suggestions[0]
+    assert top.score == top.trend_points + top.vol_points
+    assert [s.score for s in ctx.suggestions] == sorted(
+        (s.score for s in ctx.suggestions), reverse=True)
+
+
+# ------------------------------------------------- unknown is not "sideways"
+def test_a_missing_trend_is_not_silently_treated_as_sideways():
+    """A failed price fetch used to produce the exact same ranking as a genuine
+    range-bound market, so there was nothing on screen to notice."""
+    unknown = build_context("SPX", 5100, vix=18.0, trend="unknown")
+    sideways = build_context("SPX", 5100, vix=18.0, trend="sideways")
+    assert unknown.trend == "unknown"
+    assert unknown.best_strategy_key != sideways.best_strategy_key
+
+
+# ------------------------------------------------------------- the evidence
+def test_the_trend_comes_with_the_numbers_that_produced_it():
+    from src.data.market_context import trend_detail
+
+    flat = [100.0 + (i % 3) * 0.05 for i in range(220)]
+    d = trend_detail(flat)
+    assert d["trend"] == "sideways"
+    assert abs(d["spread"]) < d["band"]      # inside the band is WHY
+    assert d["sma20"] and d["sma50"]
+
+
+def test_too_little_history_reports_unknown_with_no_numbers():
+    from src.data.market_context import trend_detail
+
+    d = trend_detail([1.0, 2.0, 3.0])
+    assert d["trend"] == "unknown" and d["spread"] is None
+
+
+def test_the_context_carries_the_gap_and_the_band_to_the_page():
+    ctx = build_context("SPX", 5100, vix=18.0, trend="sideways",
+                        trend_spread=0.002)
+    assert ctx.trend_spread == 0.002
+    assert ctx.trend_band == 0.01        # 0.2% measured against the 1% needed
+
+
 def test_high_vix_note_mentions_elevated():
     ctx = build_context("SPX", 5100, vix=30.0, trend="up")
     assert "elevated" in ctx.volatility_read.lower()
