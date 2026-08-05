@@ -870,6 +870,93 @@ def performance(positions: list[Position], today: Optional[date] = None) -> dict
     }
 
 
+def quality(positions: list[Position],
+            today: Optional[date] = None) -> dict[str, Any]:
+    """The measures that judge the PROCESS rather than the month.
+
+    performance() answers "how much". This answers "how well, and how
+    repeatably" - the numbers that say whether a good month was skill or luck,
+    and the ones a trading dashboard is expected to carry.
+
+    Two deliberate refusals to make a number up:
+
+    * profit_factor is None when nothing has lost yet. A beginner's first
+      months are routinely all winners, and dividing by zero losses gives
+      infinity, which is not a number to put on a card.
+    * confidence says out loud how much of this is noise. Under five closed
+      trades a profit factor is an anecdote, and the dashboard says so rather
+      than printing 3.4 in bold.
+
+    Drawdown is measured on the same running total the equity chart draws -
+    cash_events() - so the dip on the card and the dip in the picture are the
+    same event. The peak starts at zero, so the first losing trade of an
+    account's life is a real drawdown rather than a divide-by-nothing.
+
+    One book only: the caller passes the scoped list, exactly as
+    performance() does.
+    """
+    today = today or date.today()
+    closed = [p for p in closed_positions(positions) if p.realized_pl is not None]
+    events = cash_events(positions)
+
+    results = [p.realized_total for p in closed if p.realized_total is not None]
+    wins = [r for r in results if r > 0]
+    losses = [r for r in results if r <= 0]
+
+    gross_win = sum(wins)
+    gross_loss = abs(sum(losses))
+    banked = sum(e["amount"] for e in events)
+
+    # The equity curve, and how far under its own best day it has been.
+    peak = 0.0
+    running = 0.0
+    max_dd = 0.0
+    max_dd_peak = 0.0
+    for e in events:
+        running += e["amount"]
+        if running > peak:
+            peak = running
+        dip = running - peak
+        if dip < max_dd:
+            max_dd, max_dd_peak = dip, peak
+
+    # Wins and losses in the order they settled, so "three in a row" means the
+    # last three, not three somewhere in the history.
+    ordered = sorted((p for p in closed if p.closed_on is not None),
+                     key=lambda p: p.closed_on)
+    streak = 0
+    for p in reversed(ordered):
+        won = (p.realized_total or 0.0) > 0
+        if streak == 0:
+            streak = 1 if won else -1
+        elif won and streak > 0:
+            streak += 1
+        elif not won and streak < 0:
+            streak -= 1
+        else:
+            break
+
+    n = len(closed)
+    avg_win = (gross_win / len(wins)) if wins else None
+    avg_loss = (sum(losses) / len(losses)) if losses else None
+
+    return {
+        "closed_count": n,
+        "trade_count": len(positions),
+        "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else None,
+        "expectancy": (banked / n) if n else None,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "payoff_ratio": (avg_win / abs(avg_loss))
+                        if avg_win is not None and avg_loss else None,
+        "max_drawdown": round(max_dd, 2),
+        "max_drawdown_pct": (abs(max_dd) / max_dd_peak) if max_dd_peak > 0 else None,
+        "current_drawdown": round(min(running - peak, 0.0), 2),
+        "streak": streak,
+        "confidence": "thin" if n < 5 else "building" if n < 20 else "ok",
+    }
+
+
 # ------------------------------------------------------------------ month view
 # Close reasons that count as "followed your exit rules". The "21 dte" prefix
 # covers both SOP outcomes at that point - "21 DTE time exit" (closed) and

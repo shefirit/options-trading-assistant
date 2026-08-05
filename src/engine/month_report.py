@@ -336,6 +336,71 @@ def build(positions: list[Position], month: str = ALL_TIME,
     }
 
 
+def series(positions: list[Position], live_from: Optional[date] = None,
+           today: Optional[date] = None, mode: str = "real") -> list[dict[str, Any]]:
+    """One full report per month with activity, oldest first.
+
+    The by-month backbone. Everything the month view can show for one month, it
+    can now show for all of them, without the caller looping over build() and
+    guessing which months exist.
+    """
+    today = today or date.today()
+    scoped = split_by_mode(positions, live_from)[mode]
+    keys = [m["key"] for m in available_months(scoped, today)]
+    return [build(positions, month=k, live_from=live_from, today=today, mode=mode)
+            for k in sorted(keys)]
+
+
+def days(positions: list[Position], month: str,
+         live_from: Optional[date] = None, today: Optional[date] = None,
+         mode: str = "real") -> list[dict[str, Any]]:
+    """Every calendar day of one month, the empty ones included - the calendar
+    heatmap's data.
+
+    Empty days have to be in the list rather than missing from it: a month
+    drawn only on the days that earned is a scatter of green with no shape,
+    and the shape is the point. Whether her income clusters near expiry is a
+    question only a full grid can answer.
+
+    weekday is 0 for Monday, matching how her weekly target is counted.
+    week_index counts from the Monday of the week the 1st falls in, so the grid
+    has whole rows.
+    """
+    today = today or date.today()
+    if month == ALL_TIME:
+        return []
+    year, mon = (int(x) for x in month.split("-"))
+    first = date(year, mon, 1)
+    nxt = (date(year + 1, 1, 1) if mon == 12 else date(year, mon + 1, 1))
+    grid_start = _week_start(first)
+
+    scoped = split_by_mode(positions, live_from)[mode]
+    banked: dict[date, float] = {}
+    for e in cash_events(scoped):
+        if _in_month(e["date"], month):
+            banked[e["date"]] = banked.get(e["date"], 0.0) + e["amount"]
+    premium: dict[date, list[float]] = {}
+    for e in _premium_events(scoped, month):
+        premium.setdefault(e["date"], []).append(e["amount"])
+
+    out = []
+    d = first
+    while d < nxt:
+        sold = premium.get(d, [])
+        out.append({
+            "date": d,
+            "day": d.day,
+            "banked": round(banked.get(d, 0.0), 2),
+            "premium": round(sum(sold), 2),
+            "trades": len(sold),
+            "weekday": d.weekday(),
+            "week_index": (_week_start(d) - grid_start).days // 7,
+            "is_future": d > today,
+        })
+        d += timedelta(days=1)
+    return out
+
+
 def pace(report: dict[str, Any], monthly_goal: float,
          today: Optional[date] = None) -> Optional[dict[str, Any]]:
     """Is this month on track, judged on the days gone rather than the calendar?
@@ -347,12 +412,20 @@ def pace(report: dict[str, Any], monthly_goal: float,
     if not report["is_current"] or monthly_goal <= 0:
         return None
     today = today or date.today()
+    # Imported here rather than at module scope: goals.py builds on this
+    # module, so a top-level import would be a cycle.
+    from src.engine.goals import elapsed_target
+
     first = today.replace(day=1)
     nxt = (first.replace(year=first.year + 1, month=1) if first.month == 12
            else first.replace(month=first.month + 1))
     days_in_month = (nxt - first).days
     elapsed = today.day
-    expected = monthly_goal * (elapsed / days_in_month)
+    # One definition of "what should I have by now", shared with the pace
+    # marker on the bullet chart, the ramp on the cumulative chart and the
+    # all-time target. It used to be written out longhand here and nowhere
+    # else, which is why the all-time view had no target at all.
+    expected = elapsed_target(monthly_goal, first, today)
     banked = report["banked"]
     return {
         "days_elapsed": elapsed,
