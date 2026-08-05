@@ -84,6 +84,20 @@ def delta_missing(leg) -> bool:
     return leg.delta == 0.0
 
 
+def _tell_apart(value: float, limit: float, most: int = 5) -> str:
+    """Format `value` with just enough decimals to look different from `limit`.
+
+    A real SPX scan produced "has delta 0.250 - OVER your 0.25 limit", because
+    the delta was 0.2503 and three decimals round it onto the limit. The
+    verdict was right and the evidence beside it looked like a typo, which is
+    the fastest way to make her stop trusting the checklist.
+    """
+    for places in range(3, most + 1):
+        if f"{value:.{places}f}" != f"{limit:.{places}f}":
+            return f"{value:.{places}f}"
+    return f"{value:.{most}f}"
+
+
 def check_short_leg_delta_max(trade: Trade, max_delta: float) -> list[CheckResult]:
     """Every option you SELL must have delta at or under the limit (e.g. < 0.10)."""
     results: list[CheckResult] = []
@@ -105,18 +119,19 @@ def check_short_leg_delta_max(trade: Trade, max_delta: float) -> list[CheckResul
             ))
             continue
         ok = leg.abs_delta <= max_delta + 1e-9
+        shown = _tell_apart(leg.abs_delta, max_delta) if not ok else f"{leg.abs_delta:.3f}"
         results.append(
             CheckResult(
                 name=name,
                 status=CheckStatus.PASS if ok else CheckStatus.FAIL,
                 message=(
                     f"Short {leg.option_type.value} at strike {leg.strike:g} has delta "
-                    f"{leg.abs_delta:.3f} - "
+                    f"{shown} - "
                     + ("within your limit." if ok else f"OVER your {max_delta:.2f} limit. "
                        "This leg is too close to the money - move further out.")
                 ),
                 expected=f"<= {max_delta:.2f}",
-                actual=f"{leg.abs_delta:.3f}",
+                actual=shown,
             )
         )
     return results

@@ -398,3 +398,23 @@ def test_only_an_exact_zero_counts_as_missing():
                 strike=5000.0, delta=0.0, premium=8.0, dte=45)
     assert delta_missing(tiny) is False
     assert delta_missing(blank) is True
+
+
+def test_a_failing_delta_is_shown_precisely_enough_to_explain_the_failure():
+    """A real SPX scan printed "has delta 0.250 - OVER your 0.25 limit". The
+    verdict was right (0.2503) and the evidence beside it looked like a typo,
+    which is the fastest way to stop trusting the checklist."""
+    from src.engine.rules import _tell_apart
+
+    assert _tell_apart(0.2503, 0.25) == "0.2503"
+    assert _tell_apart(0.35, 0.25) == "0.350"      # already obviously different
+    assert _tell_apart(0.250001, 0.25) == "0.25000"  # never runs away with digits
+
+
+def test_the_checklist_message_no_longer_contradicts_itself():
+    trade = put_credit_spread(short_delta=-0.2503)
+    checks = _delta_checks(validate_trade(trade))
+    msg = " ".join(c.message for c in checks)
+    assert "OVER" in msg
+    assert "0.250 -" not in msg, "the shown delta must not read as equal to the limit"
+    assert "0.2503" in msg

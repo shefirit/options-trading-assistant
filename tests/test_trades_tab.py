@@ -213,13 +213,38 @@ def test_a_practice_close_never_lands_in_a_real_total(app_with_rows):
 
 
 # ---------------------------------------------------------- the trade card
-def test_the_card_answers_is_this_winning_without_a_click(app_with_one_pmcc):
-    """The card used to hide all eleven numbers behind "Show the numbers", so
-    answering "is this one winning?" cost a click on every trade."""
+def test_the_open_trades_are_a_table_not_a_stack_of_cards():
+    """Rita: "I want all trades organised nicely in table, not one by one
+    analysis." A card each meant scrolling past four trades to compare two,
+    and comparing is what a table is for."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "open_trades.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "dataframe"]
+    assert calls, "the open trades must render as a table"
+    kw = {k.arg: k for c in calls for k in c.keywords}
+    # Radio-style: exactly one row is always selected, so the detail panel
+    # below is never empty and the urgent trade is the one already open.
+    assert kw["selection_mode"].value.value == "single-row-required"
+    assert kw["on_select"].value.value == "rerun"
+
+
+def test_the_table_answers_is_this_winning_without_a_click(app_with_one_pmcc):
+    """Whether a trade is winning has to be readable off the list itself -
+    that was the point of moving the numbers out of a per-card strip."""
     at = app_with_one_pmcc.run()
-    page = _page(at)
-    for label in ("KEPT SO FAR", "DAYS LEFT", "DECIDE BY"):
-        assert label in page, f"missing from the always-visible strip: {label}"
+    # Every tab body renders, so the page carries several tables. Find ours by
+    # its columns rather than by position.
+    tables = [d.value for d in at.dataframe if "What to do" in list(d.value.columns)]
+    assert tables, "expected the open trades table"
+    cols = list(tables[0].columns)
+    for col in ("What to do", "Symbol", "Days left", "Decide by", "% kept", "P&L $"):
+        assert col in cols, f"missing from the table: {col}"
 
 
 def test_the_full_read_out_is_still_one_click_away(app_with_one_pmcc):

@@ -54,65 +54,32 @@ def _open_section(items, strategies, provider, priced_at) -> None:
                    "inside your rules.")
     theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
                "few minutes, or press ↻ Refresh at the top.")
-    # The four numbers on every card, explained once here rather than repeated
-    # under each one. "Decide by" is the only one that is not self-evident.
+
+    # One table, every trade, urgency first - and clicking a row opens that one
+    # underneath. Rita: "I want all trades organised nicely in table, not one
+    # by one analysis." A card each meant scrolling past four trades to compare
+    # two, and comparing is what a table is for.
+    #
+    # "single-row-required" rather than "single-row": exactly one row is always
+    # selected, radio-style, so the panel below is never empty and the trade
+    # that needs a decision today is the one already open.
+    event = st.dataframe(
+        components.positions_dataframe(ordered), width="stretch",
+        hide_index=True, key="open_trades_table",
+        on_select="rerun", selection_mode="single-row-required",
+        column_config=components.positions_column_config())
+
+    picked = 0
+    rows = getattr(getattr(event, "selection", None), "rows", None) or []
+    if rows and rows[0] < len(ordered):
+        picked = rows[0]
+
     theme.note(
-        "Each card shows four numbers without opening anything: what the stock "
-        "or index is trading at now, **kept so far** (how much of the credit "
-        "you collected is yours if you closed today - your SOP takes the win at "
-        "50%), days left until expiration, and **decide by** - the date your "
-        "21-day rule lands on, which is the day you close or roll rather than "
-        "just hold.")
-
-    for it in ordered:
-        _trade_card(it, strategies, provider)
-
-    # The table is still the best way to compare six trades side by side, so it
-    # stays - folded away, because it is no longer how she reads any ONE of
-    # them, and open it was most of the scrolling she complained about.
-    with st.expander("📋 See them all in one table"):
-        st.dataframe(components.positions_dataframe(items), width="stretch",
-                     hide_index=True,
-                     column_config=components.positions_column_config())
-
-
-def _glance_strip(p, live: dict, sig, strategies) -> None:
-    """The four numbers she should never have to click for.
-
-    The card used to hide all eleven behind "Show the numbers", so answering
-    "is this one winning?" cost a click on every trade. Four is the set that
-    answers it: what the underlying is doing, how much of the credit is hers so
-    far, how long is left, and the day her 21-day rule lands on. The other
-    seven are still one click away, which is where detail belongs.
-    """
-    px = live.get("underlying_price")
-    dte = p.dte_left()
-    target = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
-    time_exit = int(_exit_cfg_for(p, strategies).get("time_exit_dte", 21) or 21)
-
-    if sig.profit_pct is None or p.credit <= 0:
-        kept, kept_tone = "n/a", theme.SECONDARY
-    else:
-        kept = f"{sig.profit_pct:.0f}%"
-        kept_tone = (theme.GREEN if sig.profit_pct >= target
-                     else theme.RED if sig.profit_pct < 0 else theme.INK)
-
-    dte_tone = (theme.AMBER if dte is not None and dte <= time_exit
-                else theme.INK)
-    cells = [
-        (f"{p.underlying} NOW", f"${px:,.2f}" if px else "n/a", theme.INK),
-        ("KEPT SO FAR", kept, kept_tone),
-        ("DAYS LEFT", str(dte) if dte is not None else "n/a", dte_tone),
-        ("DECIDE BY", components._decide_by(p, time_exit), theme.INK),
-    ]
-    st.markdown(
-        '<div class="ota-tiles">' + "".join(
-            f'<div class="ota-tile">'
-            f'<div class="ota-tile-label">{_h_esc(label)}</div>'
-            f'<div class="ota-tile-value" style="color:{tone};">'
-            f'{_h_esc(value).replace("$", "&#36;")}</div></div>'
-            for label, value, tone in cells) + "</div>",
-        unsafe_allow_html=True)
+        "**Click any row** to open that trade below - what it is doing, and the "
+        "buttons to roll, close or record an assignment. The list is sorted so "
+        "whatever needs a decision today is at the top and already open.")
+    st.write("")
+    _trade_card(ordered[picked], strategies, provider)
 
 
 def _trade_card(it: dict, strategies, provider) -> None:
@@ -152,8 +119,6 @@ def _trade_card(it: dict, strategies, provider) -> None:
         theme.note(_first_sentence(sig.reason))
         for n in sig.notes:
             st.warning(components._esc(n))
-
-        _glance_strip(p, live, sig, strategies)
 
         if wheel_state is not None:
             _wheel_panel(p, px)

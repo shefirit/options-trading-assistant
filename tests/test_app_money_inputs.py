@@ -128,10 +128,15 @@ def test_each_open_trade_appears_once_with_its_own_buttons(app_with_one_pmcc):
 
 def test_the_numbers_are_folded_away_behind_the_summary(app_with_one_pmcc):
     """Eleven metrics per trade was most of the scrolling. They are still
-    there, one click away."""
+    there, one click away.
+
+    The all-trades table used to be an expander ("See them all in one table")
+    under a stack of cards. Rita asked for the table to BE the view, so it is
+    now rendered directly and the expander is gone - see test_trades_tab.py.
+    """
     at = app_with_one_pmcc.run()
     assert any("Show the numbers" in e.label for e in at.expander)
-    assert any("See them all in one table" in e.label for e in at.expander)
+    assert at.dataframe, "the open trades table must render"
 
 
 def test_the_card_leads_with_a_sentence_about_the_money(app_with_one_pmcc):
