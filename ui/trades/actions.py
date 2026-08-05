@@ -74,7 +74,7 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
     import datetime as dt
 
     with st.expander("➕ Sell a call against it (records the credit)",
-                     expanded=True):
+                     key=f"writewrap_{kp}_{p.trade_id}", expanded=True):
         theme.note("Sell it in thinkorswim first, then write the fill down "
                    "here. Your SOP's PMCC sells about 30 days out at delta "
                    "0.30. The credit is banked in this month's profit and the "
@@ -233,7 +233,9 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
     cost_now = live.get("cost_to_close")
     contracts = max(int(p.contracts or 1), 1)
 
-    with st.expander("🔄 Roll or close the short call"):
+    # Keyed so it stays open through a rerun. Recording anything on the card
+    # used to snap every expander shut and lose her place mid-form.
+    with st.expander("🔄 Roll or close the short call", key=f"roll_{kp}_{p.trade_id}"):
         # Where this call stands BEFORE she types anything. The first version
         # only worked out the finished call's result once every box was filled,
         # which put the explanation after the confusing part instead of before
@@ -375,7 +377,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                        "open **My fill shows two prices** below instead.")
         figs = roll_math.from_net(old_credit, cash, new_credit)
 
-        with st.expander("My fill shows two prices, not one"):
+        with st.expander("My fill shows two prices, not one",
+                         key=f"rolltwo_{kp}_{p.trade_id}"):
             theme.note("Use this if you closed the old call and sold the new "
                        "one as two separate orders - then you have two prices "
                        "rather than one. Some order-history screens also list a "
@@ -567,7 +570,8 @@ def _assign_form(p, kp: str = "detail") -> None:
     strike = strikes[0] if strikes else 0.0
     shares = 100 * max(int(p.contracts or 1), 1)
 
-    with st.expander("🎡 I was assigned - I own the shares now"):
+    with st.expander("🎡 I was assigned - I own the shares now",
+                     key=f"asg_{kp}_{p.trade_id}"):
         theme.note(
             f"On a wheel this is the plan, not a mistake. Recording it here "
             f"keeps everything on ONE trade, so the \\${p.credit:,.0f} you "
@@ -618,7 +622,9 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
     a trade that needs closing today should be closeable where she reads that,
     not only after finding it again in a dropdown further down.
     """
-    with st.expander(label):
+    # "closewrap_", not "close_" - the Record button below already owns that
+    # prefix, and two elements sharing a key is a hard Streamlit error.
+    with st.expander(label, key=f"closewrap_{kp}_{p.trade_id}"):
         theme.note("Close it in thinkorswim first, then record the fill here so "
                    "your results stay accurate.")
         default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \

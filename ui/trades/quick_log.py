@@ -25,9 +25,13 @@ def _quick_log_form(settings, strategies, provider) -> None:
 
     from src.engine import quick_log
 
-    # Stay open while a checked draft is waiting, otherwise the rerun after
-    # "Check it" would collapse the expander and hide the preview.
+    # Keyed, so it holds its own state through a rerun. It used to be forced
+    # open whenever a draft was waiting, because the rerun after "Check it"
+    # would otherwise collapse the expander and hide the preview she was meant
+    # to read. `expanded` still wins on that one case - a draft she cannot see
+    # is worse than an expander that opens itself.
     with st.expander("➕ Quick Log - a trade you already placed in thinkorswim",
+                     key="ql_wrap",
                      expanded=bool(st.session_state.get("ql_draft"))):
         theme.note("Place the trade in TOS first, then write it down here. Type only "
                    "what is on your fill - the app fills in the market details and "

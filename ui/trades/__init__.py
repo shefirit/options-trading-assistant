@@ -129,7 +129,8 @@ def render(settings, strategies, provider) -> None:
     st.divider()
     _results_section(all_pos, settings, bp_used, mode, every_pos)
     st.divider()
-    _records_section(settings, strategies, provider, closed, legacy, bp_used)
+    _records_section(settings, strategies, provider, closed, legacy, bp_used,
+                     open_pos)
 
 
 def _median_bp(positions) -> float:

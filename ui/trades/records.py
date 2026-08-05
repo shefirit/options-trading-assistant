@@ -15,14 +15,6 @@ from ui.trades.quick_log import _quick_log_form
 from ui.trades.widgets import _fill_price_input, money
 
 
-def _keep_fix_open() -> None:
-    """Every widget in the fix panel calls this. Streamlit re-renders an expander
-    closed unless told otherwise, so without it the panel snapped shut the moment
-    she picked a trade or typed a number - which is what "editing closed trades
-    is not working" meant. Touch anything, it stays open."""
-    st.session_state["fix_open"] = True
-
-
 def _fix_close_form(closed: list, labels: list[str]) -> None:
     """Correct a close recorded with the wrong fill price.
 
@@ -37,17 +29,21 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
 
     Top level, never nested inside another expander: this used to live inside
     "All closed trades", and an expander two deep collapses on every rerun.
+
+    Keyed, which is what keeps it open. Every widget in here used to call a
+    _keep_fix_open callback that set a session flag, because Streamlit re-drew
+    an expander closed on every rerun - so the panel snapped shut the moment
+    she picked a trade or typed a number. A keyed expander tracks its own state
+    now, and the whole workaround is gone.
     """
     if not closed:
         return
-    with st.expander("✏️ Fix a close I typed wrong",
-                     expanded=bool(st.session_state.get("fix_open"))):
+    with st.expander("✏️ Fix a close I typed wrong", key="fix_close"):
         theme.note("Recorded a close with the wrong fill price? Put the right number "
                    "in here. Nothing is deleted - the app writes a correction that "
                    "replaces the old figure, and you can correct it again if needed.")
         i = st.selectbox("Which close", range(len(closed)),
-                         format_func=lambda n: labels[n], key="fix_close_pick",
-                         on_change=_keep_fix_open)
+                         format_func=lambda n: labels[n], key="fix_close_pick")
         p = closed[int(i)]
         was_result = float(p.realized_pl or 0.0)
         pays_to_close = p.is_debit
@@ -82,8 +78,8 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
         else:
             theme.note(f"New result would be **\\${realized:,.0f}** - a change of "
                        f"**{'+' if delta >= 0 else '-'}\\${abs(delta):,.0f}**.")
-        why = st.text_input("What was wrong (optional)", key=f"fix_why_{p.trade_id}",
-                            on_change=_keep_fix_open,
+        why = st.text_input("What was wrong (optional)",
+                            key=f"fix_why_{p.trade_id}",
                             placeholder="e.g. typed the wrong fill price")
 
         if st.button("Save the correction", type="primary", key="fix_go",
@@ -104,7 +100,9 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
                 st.error(f"Could not save the correction: {e}")
                 return
             st.session_state.pop("trades_rows", None)
-            for k in ("fix_open", f"fix_cost_{p.trade_id}", f"fix_why_{p.trade_id}"):
+            # "fix_close" closes the panel now the correction has landed; the
+            # other two clear the boxes so a second correction starts blank.
+            for k in ("fix_close", f"fix_cost_{p.trade_id}", f"fix_why_{p.trade_id}"):
                 st.session_state.pop(k, None)
             st.session_state["ql_flash"] = (
                 f"✏️ {p.underlying} corrected: result is now ${realized:,.0f} "
@@ -113,12 +111,18 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
-def _records_section(settings, strategies, provider, closed, legacy, bp_used) -> None:
+def _records_section(settings, strategies, provider, closed, legacy, bp_used,
+                     open_pos=()) -> None:
     """The bookkeeping, in one place instead of scattered up and down the tab.
 
     Logging a trade, correcting a fill and deleting a mistake are the same kind
     of job, done occasionally. They used to sit ABOVE the alert saying a trade
     needs closing today, which put the rarest task first.
+
+    Deleting an OPEN trade lives here too now. It used to be an expander on
+    every card, which cost a row per trade and put the one irreversible button
+    in the app on the screen she looks at daily. It is a rare, careful job, and
+    this is where the rare, careful jobs are.
     """
     theme.section("Log, correct, and look back", "Records")
     _quick_log_form(settings, strategies, provider)
@@ -131,7 +135,8 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used) ->
             f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
 
     if closed:
-        with st.expander(f"📓 All closed trades ({len(closed)})"):
+        with st.expander(f"📓 All closed trades ({len(closed)})",
+                         key="closed_table"):
             st.dataframe(components.closed_dataframe(closed), width="stretch",
                          hide_index=True)
             if fixable:
@@ -148,6 +153,24 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used) ->
                                    format_func=lambda i: labels[i], key="del_closed_pick")
                 cp = fixable[int(idx)]
                 _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
+
+    deletable = [p for p in open_pos if p.trade_id]
+    if deletable:
+        with st.expander("🗑️ Delete an open trade (logged by mistake / just testing)",
+                         key="del_open_wrap"):
+            theme.note("This is for a row that should never have been logged. "
+                       "If you actually placed the trade and it is finished, "
+                       "**close** it on its card instead, so your results stay "
+                       "honest.")
+            labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
+                      f"opened {components.fmt_date(p.opened)}"
+                      for i, p in enumerate(deletable)]
+            idx = st.selectbox("Open trade to delete", range(len(deletable)),
+                               format_func=lambda i: labels[i],
+                               key="del_open_pick")
+            op = deletable[int(idx)]
+            _delete_control(op.trade_id, labels[int(idx)],
+                            key=f"open_{op.trade_id}")
 
     if legacy:
         with st.expander(f"🗄️ Trades logged before tracking existed ({len(legacy)})"):

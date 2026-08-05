@@ -12,7 +12,6 @@ from ui import components, theme
 from ui.trades.actions import (
     _assign_form,
     _close_form,
-    _delete_control,
     _roll_form,
     _wheel_panel,
     _write_call_form,
@@ -68,10 +67,48 @@ def _open_section(items, strategies, provider, priced_at) -> None:
                      column_config=components.positions_column_config())
 
 
+def _glance_strip(p, live: dict, sig, strategies) -> None:
+    """The four numbers she should never have to click for.
+
+    The card used to hide all eleven behind "Show the numbers", so answering
+    "is this one winning?" cost a click on every trade. Four is the set that
+    answers it: what the underlying is doing, how much of the credit is hers so
+    far, how long is left, and the day her 21-day rule lands on. The other
+    seven are still one click away, which is where detail belongs.
+    """
+    px = live.get("underlying_price")
+    dte = p.dte_left()
+    target = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
+    time_exit = int(_exit_cfg_for(p, strategies).get("time_exit_dte", 21) or 21)
+
+    if sig.profit_pct is None or p.credit <= 0:
+        kept, kept_tone = "n/a", theme.SECONDARY
+    else:
+        kept = f"{sig.profit_pct:.0f}%"
+        kept_tone = (theme.GREEN if sig.profit_pct >= target
+                     else theme.RED if sig.profit_pct < 0 else theme.INK)
+
+    dte_tone = (theme.AMBER if dte is not None and dte <= time_exit
+                else theme.INK)
+    cells = [
+        (f"{p.underlying} NOW", f"${px:,.2f}" if px else "n/a", theme.INK),
+        ("KEPT SO FAR", kept, kept_tone),
+        ("DAYS LEFT", str(dte) if dte is not None else "n/a", dte_tone),
+        ("DECIDE BY", components._decide_by(p, time_exit), theme.INK),
+    ]
+    st.markdown(
+        '<div class="ota-tiles">' + "".join(
+            f'<div class="ota-tile">'
+            f'<div class="ota-tile-label">{_h_esc(label)}</div>'
+            f'<div class="ota-tile-value" style="color:{tone};">'
+            f'{_h_esc(value).replace("$", "&#36;")}</div></div>'
+            for label, value, tone in cells) + "</div>",
+        unsafe_allow_html=True)
+
+
 def _trade_card(it: dict, strategies, provider) -> None:
     """One open trade: what it is doing, then what she can do about it."""
     from src.engine import glance
-    from src.engine import positions as pos_mod
     from src.engine import wheel
 
     p, live, sig = it["position"], it["live"], it["signal"]
@@ -83,14 +120,18 @@ def _trade_card(it: dict, strategies, provider) -> None:
         head = (f"{p.underlying} · {components.short_strategy(p.strategy_name)}"
                 + (f" · {dte} day{'s' if dte != 1 else ''} left"
                    if dte is not None else ""))
-        tone = {"red": theme.RED, "amber": theme.AMBER,
-                "green": theme.GREEN}.get(sig.tone, theme.INK)
+        # The instruction rides on the same line as the name now. Stacked, the
+        # signal word pushed the money sentence below the fold on a phone.
+        chip_tone = {"red": "red", "amber": "amber", "green": "green"}.get(
+            sig.tone, "neutral")
         st.markdown(
-            f"<div style='font-size:1.05rem;font-weight:800;color:{theme.INK};'>"
-            f"{_h_esc(head)}</div>"
-            f"<div style='font-size:1.2rem;font-weight:800;color:{tone};"
-            f"margin:2px 0 4px;'>"
-            f"{components._SIGNAL_WORD.get(sig.action, sig.action)}</div>",
+            f"<div style='display:flex;align-items:center;gap:12px;"
+            f"flex-wrap:wrap;margin-bottom:6px;'>"
+            f"<span style='font-size:1.12rem;font-weight:800;color:{theme.INK};'>"
+            f"{_h_esc(head)}</span>"
+            + theme.chip(components._SIGNAL_WORD.get(sig.action, sig.action),
+                         chip_tone)
+            + "</div>",
             unsafe_allow_html=True)
 
         # The line she was previously left to assemble herself.
@@ -103,10 +144,14 @@ def _trade_card(it: dict, strategies, provider) -> None:
         for n in sig.notes:
             st.warning(components._esc(n))
 
+        _glance_strip(p, live, sig, strategies)
+
         if wheel_state is not None:
             _wheel_panel(p, px)
 
-        with st.expander("🔢 Show the numbers"):
+        # Keyed, so it survives a rerun. Without a key, recording anything on
+        # this card snapped every expander shut and she lost her place.
+        with st.expander("🔢 Show the numbers", key=f"num_{p.trade_id}"):
             _trade_numbers(p, live, sig, strategies, px)
 
         if p.is_uncovered:
@@ -115,12 +160,6 @@ def _trade_card(it: dict, strategies, provider) -> None:
             _roll_form(p, live, provider)
         _assign_form(p)
         _close_form(p, live)
-
-        with st.expander("🗑️ Delete this trade (logged by mistake / just testing)"):
-            _delete_control(p.trade_id,
-                            f"{p.underlying} {p.strategy_name} opened "
-                            f"{components.fmt_date(p.opened)}",
-                            key=f"open_{p.trade_id}")
 
 
 def _trade_numbers(p, live: dict, sig, strategies, px) -> None:

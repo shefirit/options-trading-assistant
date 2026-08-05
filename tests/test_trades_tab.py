@@ -206,6 +206,70 @@ def test_a_practice_close_never_lands_in_a_real_total(app_with_rows):
     assert "$1,000" not in _page(at)
 
 
+# ---------------------------------------------------------- the trade card
+def test_the_card_answers_is_this_winning_without_a_click(app_with_one_pmcc):
+    """The card used to hide all eleven numbers behind "Show the numbers", so
+    answering "is this one winning?" cost a click on every trade."""
+    at = app_with_one_pmcc.run()
+    page = _page(at)
+    for label in ("KEPT SO FAR", "DAYS LEFT", "DECIDE BY"):
+        assert label in page, f"missing from the always-visible strip: {label}"
+
+
+def test_the_full_read_out_is_still_one_click_away(app_with_one_pmcc):
+    """Four numbers on the card, seven behind it. Detail belongs behind a
+    click; deciding does not."""
+    at = app_with_one_pmcc.run()
+    assert any("Show the numbers" in e.label for e in at.expander)
+
+
+def test_every_expander_holding_a_form_is_keyed():
+    """Recording anything on a card used to snap every expander shut and lose
+    her place mid-form. Streamlit 1.58 keyed expanders track their own state,
+    which is what replaced the _keep_fix_open callback.
+
+    Checked against the SOURCE, not the rendered page: AppTest exposes neither
+    an expander's key nor its open state, and an unkeyed expander only reveals
+    itself on the second interaction, which is exactly the bug. A read-only
+    expander may go unkeyed - collapsing a table costs nothing. One with an
+    input in it may not.
+    """
+    import ast
+    from pathlib import Path
+
+    INPUTS = {"text_input", "number_input", "selectbox", "date_input",
+              "checkbox", "button", "form", "radio", "text_area"}
+    offenders = []
+    for path in sorted((Path(__file__).parent.parent / "ui" / "trades").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            for item in node.items:
+                call = item.context_expr
+                if not (isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "expander"):
+                    continue
+                has_key = any(k.arg == "key" for k in call.keywords)
+                has_input = any(
+                    isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in INPUTS for n in ast.walk(node))
+                if has_input and not has_key:
+                    offenders.append(f"{path.name}:{call.lineno}")
+    assert not offenders, ("these expanders hold inputs but have no key, so "
+                           f"they collapse on every rerun: {offenders}")
+
+
+def test_the_delete_button_is_off_the_daily_screen(app_with_one_pmcc):
+    """The one irreversible button in the app used to sit on every card. It is
+    a rare, careful job, so it lives with the other rare, careful jobs."""
+    at = app_with_one_pmcc.run()
+    labels = [e.label or "" for e in at.expander]
+    assert not any("Delete this trade" in l for l in labels)
+    assert any("Delete an open trade" in l for l in labels)
+
+
 # --------------------------------------------------------- it always renders
 @pytest.mark.parametrize("rows,label", [
     ([], "an empty log"),
