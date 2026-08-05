@@ -97,9 +97,16 @@ def _render(chart, height: int, labels: Optional[list[str]] = None) -> None:
 
 
 # ------------------------------------------------------------------- the band
-def render_band(report: dict, goal: float) -> None:
+def render_band(report: dict, goal: float, goal_label: str = "",
+                title: str = "") -> None:
     """The headline: which month, real or practice, and the three numbers that
-    describe it in one line."""
+    describe it in one line.
+
+    goal_label exists because this band is used at two scopes. For a month,
+    "of your $3,500 goal" is right. For an all-time span it is a category
+    error - it compares a run of months to one month's target - so the span
+    view passes the target the span actually had instead.
+    """
     real = report["mode"] == "real"
     tag = "REAL MONEY" if real else "PRACTICE (PaperMoney)"
     tag_bg = "#0B7A54" if real else "#B45309"
@@ -107,6 +114,8 @@ def render_band(report: dict, goal: float) -> None:
     pct = (banked / goal) if goal else 0.0
     closed = report["trades_closed"]
     opened = report["trades_opened"]
+    heading = title or f"{_esc(report['label'])} Income Report"
+    under = goal_label or f"{_pct(pct)} of your {_d(goal)} goal"
 
     st.markdown(
         f"""
@@ -116,7 +125,7 @@ def render_band(report: dict, goal: float) -> None:
                       align-items:baseline;flex-wrap:wrap;gap:10px;">
             <div style="color:#FFFFFF;font-size:1.45rem;font-weight:800;
                         letter-spacing:.01em;">
-              {_esc(report['label'])} Income Report
+              {heading}
             </div>
             <span style="background:{tag_bg};color:#FFFFFF;font-size:.78rem;
                          font-weight:800;letter-spacing:.06em;padding:5px 12px;
@@ -129,7 +138,7 @@ def render_band(report: dict, goal: float) -> None:
               <div style="color:#7DE8B0;font-size:2.6rem;font-weight:800;
                           line-height:1.1;">{_d(banked)}</div>
               <div style="color:{BAND_SUB};font-size:.9rem;font-weight:600;">
-                {_pct(pct)} of your {_d(goal)} goal</div>
+                {under}</div>
             </div>
             <div style="min-width:150px;">
               <div style="color:{BAND_SUB};font-size:.8rem;font-weight:700;
@@ -168,44 +177,6 @@ def _tile(label: str, value: str, sub: str, tone: str = theme.INK,
         f"line-height:1.2;margin:2px 0;'>{value}</div>"
         f"<div style='font-size:.85rem;font-weight:600;color:{theme.SECONDARY};"
         f"line-height:1.45;'>{sub}</div></div>")
-
-
-def render_goals(report: dict, settings: dict) -> None:
-    """Her plan on the page: the goal, the budget, and where this month sits
-    against both. The report is meaningless without the numbers it is being
-    measured against, and those numbers used to live only in a config file."""
-    goal = float(settings["targets"]["monthly"])
-    weekly_goal = float(settings["targets"]["weekly"])
-    capital = float(settings["account"]["starting_capital"])
-    bp_limit = float(settings["risk_limits"]["monthly_bp_limit"])
-
-    banked, bp = report["banked"], report["bp_opened"]
-    to_go = max(goal - banked, 0.0)
-    bp_share = (bp / bp_limit) if bp_limit else 0.0
-    bp_tone = (theme.RED if bp_share >= 1 else theme.AMBER
-               if bp_share >= 0.8 else theme.GREEN)
-    goal_tone = theme.GREEN if banked >= goal else theme.INK
-
-    tiles = [
-        _tile("CAPITAL", _d(capital), "what the account holds",
-              theme.INK, "🏦"),
-        _tile("MONTHLY GOAL", _d(goal),
-              (f"met - {_d(banked - goal)} past it" if banked >= goal
-               else f"{_d(to_go)} still to go"), goal_tone, "🎯"),
-        _tile("WEEKLY GOAL", _d(weekly_goal),
-              "the pace that gets you there", theme.INK, "📅"),
-        _tile("BUYING-POWER BUDGET", _d(bp_limit),
-              f"{_d(bp)} committed &middot; {_pct(bp_share)} used",
-              bp_tone, "🧮"),
-    ]
-    st.markdown(
-        f"<div style='display:flex;gap:12px;flex-wrap:wrap;'>{''.join(tiles)}</div>",
-        unsafe_allow_html=True)
-    st.write("")
-    st.progress(min(max(banked / goal, 0.0), 1.0) if goal else 0.0)
-    theme.note("Change any of these four in **⚙️ Settings → Your goals and budget**. "
-               "They drive this whole page, so the report follows the moment you "
-               "save.")
 
 
 def render_tiles(report: dict, goal: float, bp_limit: float) -> None:
@@ -258,11 +229,16 @@ def render_tiles(report: dict, goal: float, bp_limit: float) -> None:
 
 def render_pace(pace: Optional[dict], goal: float) -> None:
     """Only for the month in progress: on pace, or behind, judged on days gone
-    rather than on the calendar flipping over."""
+    rather than on the calendar flipping over.
+
+    Prose only. This used to open with a progress bar, which was the third
+    drawing of the same number on one page - the headline strip and the goals
+    panel had already shown it. The goal is now drawn once, as the dashboard's
+    bullet chart, and this says the part a bar cannot say.
+    """
     if pace is None:
         return
     st.write("")
-    st.progress(min(max(pace["pct_of_goal"], 0.0), 1.0))
     if pace["still_needed"] <= 0:
         # The goal is already met. "$0 left with 0 days to do it" is technically
         # true and reads like a warning, which is the wrong feeling entirely.
@@ -618,17 +594,24 @@ def render_management(report: dict) -> None:
 
 # ------------------------------------------------------------------ the page
 def render(report: dict, settings: dict, pace: Optional[dict] = None,
-           empty_note: str = "") -> None:
+           empty_note: str = "", show_band: bool = True) -> None:
     """The whole report, top to bottom.
 
     empty_note replaces the generic "nothing logged yet" line when the caller
     knows something more useful - most importantly that the month DOES have
     trades, they are just practice ones sitting behind the account switch.
+
+    show_band=False for the month in progress. The dashboard at the top of the
+    tab already opens with that month's banked total against that month's goal,
+    so drawing the band again a screen later is the same number twice on one
+    page - exactly the duplication this page was rebuilt to remove. What is
+    below the band is not duplicated at all, which is why only the band goes.
     """
     goal = float(settings["targets"]["monthly"])
     weekly_goal = float(settings["targets"]["weekly"])
 
-    render_band(report, goal)
+    if show_band:
+        render_band(report, goal)
 
     if not report["has_activity"]:
         theme.note(empty_note or (
@@ -641,9 +624,10 @@ def render(report: dict, settings: dict, pace: Optional[dict] = None,
     render_tiles(report, goal, float(settings["risk_limits"]["monthly_bp_limit"]))
     render_pace(pace, goal)
 
-    st.divider()
-    theme.section("What you are aiming at", "Goals and budget")
-    render_goals(report, settings)
+    # No goals-and-budget panel here any more. Her capital, targets and budget
+    # are the same four numbers every month, so printing them inside each one
+    # meant reading her own plan three times to scroll through three months.
+    # They are on the dashboard, once, above everything they measure.
     st.divider()
     render_weeks(report, weekly_goal)
     st.divider()

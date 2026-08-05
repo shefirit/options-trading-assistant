@@ -126,7 +126,8 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used) ->
     fixable = [p for p in closed if p.trade_id]
     if fixable:
         _fix_close_form(fixable, [
-            f"{p.underlying}  ·  {p.strategy_name}  ·  closed {p.closed_on}"
+            f"{p.underlying}  ·  {p.strategy_name}  ·  "
+            f"closed {components.fmt_date(p.closed_on)}"
             f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
 
     if closed:
@@ -140,7 +141,8 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used) ->
                 # dictionary key, and deleting the visible one would have
                 # removed the wrong row.
                 labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
-                          f"closed {p.closed_on}  ·  result ${(p.realized_pl or 0):,.0f}"
+                          f"closed {components.fmt_date(p.closed_on)}  ·  "
+                          f"result ${(p.realized_pl or 0):,.0f}"
                           for i, p in enumerate(fixable)]
                 idx = st.selectbox("Closed trade to delete", range(len(fixable)),
                                    format_func=lambda i: labels[i], key="del_closed_pick")

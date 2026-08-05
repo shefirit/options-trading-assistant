@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ui import components, theme
-from ui.trades.account import _account_switch, mr_split
-from ui.trades.data import _load_trade_log, _price_positions
+from ui import theme
+from ui.trades import dashboard
+from ui.trades.account import _account_switch, live_from as account_live_from, mr_split
+from ui.trades.data import ACTION_SIGNALS, _load_trade_log, _price_positions
 from ui.trades.history import _results_section
 from ui.trades.open_trades import _open_section
 from ui.trades.records import _records_section
@@ -87,28 +88,60 @@ def render(settings, strategies, provider) -> None:
                    "everywhere, connect your Google Sheet in the **⚙️ Settings** "
                    "tab (one-time, ~2 minutes).")
 
-    # Her numbers first, always on screen. They used to live only inside the
-    # Results block - below the open trades and behind a month picker - so "how
-    # am I doing" took three scrolls to answer.
-    import datetime as _dt
-
-    perf = pos_mod.performance(all_pos)
-    # Match on the actual month rather than taking the newest entry: a trade
-    # mistyped with a future date would otherwise become "this month".
-    key_now = f"{_dt.date.today():%Y-%m}"
-    this_month = next((m for m in pos_mod.monthly_summary(all_pos)
-                       if m["month"] == key_now), None)
-    rules = (f"{this_month['rules_followed']} of {this_month['closed_count']}"
-             if this_month and this_month["closed_count"] else "")
-    components.render_headline_stats(perf, settings["targets"], rules)
-
+    # Prices first: the band says whether anything needs a decision today, and
+    # that answer comes out of the same pricing pass the cards below use.
     items, priced_at = ([], None)
     if open_pos:
         items, priced_at = _price_positions(open_pos, provider, strategies)
+    needs = sum(1 for it in items if it["signal"].action in ACTION_SIGNALS)
+
+    import datetime as _dt
+
+    from src.engine import goals
+    from src.engine import month_report as mr
+
+    today = _dt.date.today()
+    live_from = account_live_from(settings)
+    targets = goals.targets_from(settings)
+
+    # all_pos is already one book; passing it back through the same split with
+    # the same live_from is idempotent, so build() gets the right totals and
+    # keeps its own guarantee that the two books never mix.
+    this_month = mr.build(all_pos, month=mr.month_key(today),
+                          live_from=live_from, today=today, mode=mode)
+    pace = mr.pace(this_month, targets["monthly"], today)
+    quality = pos_mod.quality(all_pos, today)
+    perf = pos_mod.performance(all_pos, today)
+
+    dashboard.band(this_month, pace, targets["monthly"], targets["weekly"],
+                   perf["week_pl"], needs, len(items), priced_at, mode)
+    dashboard.health_row(this_month, quality, pace, targets["monthly"])
 
     st.divider()
     _open_section(items, strategies, provider, priced_at)
     st.divider()
-    _results_section(all_pos, settings, bp_used, mode)
+    # every_pos, not all_pos: the goals block draws the OTHER book faded behind
+    # this one, so it needs both. It splits them itself and never adds them.
+    dashboard.goals_block(every_pos, settings, live_from, mode, today)
+    st.divider()
+    dashboard.process_row(this_month, quality, bp_used, targets["bp_limit"],
+                          _median_bp(all_pos))
+    st.divider()
+    _results_section(all_pos, settings, bp_used, mode, every_pos)
     st.divider()
     _records_section(settings, strategies, provider, closed, legacy, bp_used)
+
+
+def _median_bp(positions) -> float:
+    """Her usual position size, in buying power.
+
+    Used to say roughly how many trades her monthly budget fits. The median
+    rather than the mean because one PMCC with a $12,000 LEAPS in it would drag
+    an average far away from what she actually does most weeks.
+    """
+    sizes = sorted(p.bp_effect for p in positions if p.bp_effect > 0)
+    if not sizes:
+        return 0.0
+    mid = len(sizes) // 2
+    return (sizes[mid] if len(sizes) % 2
+            else (sizes[mid - 1] + sizes[mid]) / 2)
