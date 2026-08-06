@@ -361,3 +361,54 @@ def test_two_forms_never_share_a_money_box_label_without_distinct_keys():
                 if len(node.args) >= 2 and node.func.__class__ is ast.Name:
                     keys.append(ast.dump(node.args[1]))
     assert len(keys) == len(set(keys)), "two money boxes share a key template"
+
+
+# ===========================================================================
+# The Quick Log DRAFT PREVIEW - the branch that shipped a NameError.
+#
+# Pressing "Check it" stages a draft and renders a preview card outside the
+# form. Nothing tested that branch, so when the ui/trades extraction rewrote
+# _bp_effect_input -> components.bp_effect_input in app.py but not in the
+# modules it had just moved out, the crash only appeared on Rita's screen:
+#
+#   NameError: name '_bp_effect_input' is not defined
+#
+# One test that presses the button would have caught it.
+# ===========================================================================
+def _check_it(at):
+    """Fill the minimum Quick Log needs and press Check it.
+
+    EVERY strike box, not just the first: the default strategy is a put credit
+    spread, and with a leg missing the form shows a warning instead of staging
+    a draft - so a one-strike version of this silently tested nothing.
+    """
+    for n in at.number_input:
+        if (n.key or "").startswith("ql_strike_"):
+            n.set_value(6250.0 if "long" in n.key else 6300.0)
+    next(n for n in at.number_input
+         if (n.key or "").startswith("ql_credit_")).set_value(2.80)
+    return next(b for b in at.button if b.label == "Check it").click().run()
+
+
+def test_pressing_check_it_renders_the_preview_without_crashing(app_with_rows):
+    at = app_with_rows([]).run()
+    at = _check_it(at)
+    assert not at.exception
+    snags = [e for e in at.error if "unexpected snag" in str(e.value)]
+    assert not snags, f"the draft preview crashed: {[str(e.value) for e in snags]}"
+
+
+def test_the_preview_offers_the_thinkorswim_buying_power_box(app_with_rows):
+    """The box the crash was in: she is logging a trade that is already on her
+    TOS screen, so the real BP Effect is right there to copy."""
+    at = _check_it(app_with_rows([]).run())
+    assert any("Buying power effect from thinkorswim" in (n.label or "")
+               for n in at.number_input)
+
+
+def test_the_preview_reads_back_what_she_typed_before_saving(app_with_rows):
+    """Saving is the second click, never the first."""
+    at = _check_it(app_with_rows([]).run())
+    page = _page(at)
+    assert "Ready to save" in page
+    assert any("Save to my log" in (b.label or "") for b in at.button)

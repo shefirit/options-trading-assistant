@@ -152,7 +152,6 @@ def health_row(report: dict, quality: dict, pace: Optional[dict],
     row says so underneath, rather than printing 3.4 in bold off two trades.
     """
     banked = report["banked"]
-    pct = (banked / goal) if goal else 0.0
     if pace is None:
         month_sub = f"of your {_m(goal)} goal"
         month_tone = "good" if goal and banked >= goal else "neutral"

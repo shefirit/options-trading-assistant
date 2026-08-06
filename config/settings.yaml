@@ -23,6 +23,18 @@ targets:
   monthly: 3500
   year_one_end_balance: 142000
 
+# Which strategy the pickers open on, in Quick Log and in Find a trade.
+#
+# The strategies list below stays in your course's order - Model 1, Model 2,
+# Model 3, then the spreads - because that is the order you learned them in and
+# the order you read them in. This only changes which one is already SELECTED,
+# so the one you trade most is not four clicks down every time.
+#
+# Set it to any key from config/strategies.yaml. Leave it blank to go back to
+# whichever strategy is first in that file.
+defaults:
+  strategy: cash_secured_put
+
 # Hard risk limits the app will warn you about.
 risk_limits:
   monthly_bp_limit: 50000       # do not use more than this in buying power per month

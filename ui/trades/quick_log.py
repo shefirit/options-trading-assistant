@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from src.engine.config_loader import allowed_underlyings_for
+from src.engine.config_loader import (
+    allowed_underlyings_for,
+    default_strategy_key,
+)
 from src.engine.models import CheckStatus, Trade
 from src.engine.validator import validate_trade
 from ui import components, theme
@@ -38,9 +41,12 @@ def _quick_log_form(settings, strategies, provider) -> None:
                    "starts watching your exit rules for it.")
 
         keys = list(strategies.keys())
+        # Opens on the strategy she actually trades most, from
+        # config/settings.yaml `defaults.strategy`, without reordering the list.
         top = st.columns([3, 2])
         strategy_key = top[0].selectbox(
             "Strategy", keys, key="ql_strategy",
+            index=keys.index(default_strategy_key(settings, keys)),
             format_func=lambda k: strategies[k]["name"])
         strat = strategies[strategy_key]
         if st.session_state.get("_prev_ql_strategy") != strategy_key:
@@ -294,7 +300,7 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 theme.note(n)
             # She is logging a trade that is already on her TOS screen, so the
             # real BP Effect is right there to copy.
-            _bp_effect_input(draft["sizing"], "ql")
+            components.bp_effect_input(draft["sizing"], "ql")
             # Defaulted from the date the trade was PLACED, not today, so
             # back-logging an older paper trade does not land it in the real book.
             account = _account_choice(settings, "ql", draft["opened_on"])

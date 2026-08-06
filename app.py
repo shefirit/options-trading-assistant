@@ -39,6 +39,7 @@ from src.data.provider import DataProvider
 from src.engine import scanner
 from src.engine.config_loader import (
     allowed_underlyings_for,
+    default_strategy_key,
     load_settings,
     load_strategies,
     underlying_fits_style,
@@ -1808,7 +1809,11 @@ def _width_sanity_note(names: tuple, width) -> None:
 def _tab_build(settings, strategies, provider) -> None:
     from src.data import stock_universe
     keys = list(strategies.keys())
-    st.session_state.setdefault("build_strategy", keys[0])
+    # The strategy she trades most, not whichever happens to be first in
+    # config/strategies.yaml. A handoff from Market, Picks or Analyze still
+    # overrides it - those set build_strategy before this runs.
+    st.session_state.setdefault("build_strategy",
+                                default_strategy_key(settings, keys))
 
     top = st.columns([2, 2])
     strategy_key = top[0].selectbox("Strategy", keys, key="build_strategy",

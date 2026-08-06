@@ -177,3 +177,22 @@ def clear_cache() -> None:
     """Call after editing a YAML file so the new values are picked up."""
     load_settings.cache_clear()
     load_strategies.cache_clear()
+
+
+def default_strategy_key(settings: dict[str, Any],
+                         keys: "list[str]") -> str:
+    """Which strategy a picker should open on.
+
+    The strategies list keeps her course's order - Model 1, Model 2, Model 3,
+    then the spreads - so reordering the file to change the default would
+    reorder every dropdown in the app with it. This picks the SELECTED one
+    instead, from config/settings.yaml `defaults.strategy`.
+
+    Falls back to the first key when the setting is missing or names a strategy
+    that no longer exists, so a typo in the config makes the pickers ordinary
+    rather than broken.
+    """
+    if not keys:
+        return ""
+    wanted = str((settings.get("defaults") or {}).get("strategy") or "").strip()
+    return wanted if wanted in keys else keys[0]

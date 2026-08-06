@@ -138,3 +138,39 @@ def test_the_real_settings_file_has_the_shape_this_module_assumes():
     text = ps.SETTINGS_PATH.read_text(encoding="utf-8")
     for _field, (key, _label) in ps.FIELDS.items():
         assert ps._replace_scalar(text, key, 1) != text
+
+
+# ---------------------------------------------------------------- the default
+def test_the_pickers_open_on_the_strategy_she_actually_trades():
+    """Rita: "make cash secure put at default." It was fourth in the list, so
+    every Quick Log started on a put credit spread she then had to change."""
+    from src.engine.config_loader import (
+        default_strategy_key, load_settings, load_strategies)
+
+    settings, strategies = load_settings(), load_strategies()
+    keys = list(strategies.keys())
+    assert default_strategy_key(settings, keys) == "cash_secured_put"
+
+
+def test_the_list_keeps_her_course_order():
+    """Reordering strategies.yaml would have been the quick way to change the
+    default, and it would have reordered every dropdown in the app with it.
+    The default is a separate setting precisely so the list can stay put."""
+    from src.engine.config_loader import load_strategies
+
+    keys = list(load_strategies().keys())
+    assert keys[0] == "put_credit_spread", "the list order must not have moved"
+    assert keys.index("cash_secured_put") > 0
+
+
+def test_a_missing_or_wrong_default_falls_back_instead_of_breaking():
+    """A typo in the config should make the pickers ordinary, not broken."""
+    from src.engine.config_loader import default_strategy_key
+
+    keys = ["put_credit_spread", "cash_secured_put"]
+    assert default_strategy_key({}, keys) == "put_credit_spread"
+    assert default_strategy_key({"defaults": {"strategy": "nope"}}, keys) == \
+        "put_credit_spread"
+    assert default_strategy_key({"defaults": {"strategy": ""}}, keys) == \
+        "put_credit_spread"
+    assert default_strategy_key(load_nothing := {}, []) == ""

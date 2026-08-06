@@ -11,6 +11,8 @@ use &#36; (or income_report._d); inside theme.note() use \\$.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import streamlit as st
 
 from ui import theme
