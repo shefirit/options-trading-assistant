@@ -17,6 +17,7 @@ from ui.trades.account import _account_switch, live_from as account_live_from, m
 from ui.trades.data import ACTION_SIGNALS, _load_trade_log, _price_positions
 from ui.trades.history import _results_section
 from ui.trades.open_trades import _open_section
+from ui.trades.quick_log import _quick_log_form
 from ui.trades.records import _records_section
 
 
@@ -50,6 +51,16 @@ def render(settings, strategies, provider) -> None:
     mode = _account_switch(settings, every_pos)
     all_pos = mr_split(every_pos, settings)[mode]
 
+    # Recording a trade she has just placed is the most frequent thing she does
+    # on this tab, and it used to sit five screens down inside Records, behind
+    # the dashboard, the open trades, the goals and the history. Collapsed it
+    # costs one line here and is always in reach.
+    #
+    # Above the band on purpose: the band is where she looks to see how the
+    # month is going, which is a thing she READS. This is a thing she DOES, and
+    # the doing should not be further away than the reading.
+    _quick_log_form(settings, strategies, provider)
+
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)
     legacy = [p for p in all_pos if p.status == "legacy"]
@@ -62,7 +73,8 @@ def render(settings, strategies, provider) -> None:
     if not all_pos:
         book = ("real-money book" if mode == "real" else "practice book")
         theme.note(f"Nothing in your **{book}** yet. Two ways to log a trade: "
-                   "**Quick Log** below for one you already placed in thinkorswim, or "
+                   "**➕ Quick Log** at the top of this tab for one you already placed in "
+                   "thinkorswim, or "
                    "**Log this trade** in 🎯 Find a trade when the app finds the setup "
                    "for you. Both ask which account the trade is in. Either way it "
                    "lands here and the app starts watching your exit rules: take the "

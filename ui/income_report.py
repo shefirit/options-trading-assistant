@@ -618,7 +618,7 @@ def render(report: dict, settings: dict, pace: Optional[dict] = None,
             f"**Nothing logged in {report['label']} yet.** Once you log your "
             "first trade this page fills in on its own - there is nothing "
             "extra to type. Log a trade you already placed with **Quick Log** "
-            "in Records below, or build one in 🎯 Find a trade."))
+            "at the top of this tab, or build one in 🎯 Find a trade."))
         return
 
     render_tiles(report, goal, float(settings["risk_limits"]["monthly_bp_limit"]))

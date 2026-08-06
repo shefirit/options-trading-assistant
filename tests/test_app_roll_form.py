@@ -56,11 +56,16 @@ def _fill_the_net_way(at, net_price: float, sold_price: float):
     Prices go in the way thinkorswim prints them (per share); the form does the
     x100. On one contract 2.00 means $200.
     """
-    next(n for n in at.number_input if n.label == "Strike").set_value(560.0).run()
-    next(n for n in at.number_input
-         if "Credit price on your fill" in n.label).set_value(net_price).run()
+    # Selected by KEY, not by label. Quick Log carries a box labelled "Credit
+    # price on your fill" too, and once it moved to the top of the tab a
+    # label match found ITS box instead of the roll form's.
+    def box(prefix):
+        return next(n for n in at.number_input if (n.key or "").startswith(prefix))
+
+    box("roll_strike_").set_value(560.0).run()
+    box("roll_cash_").set_value(net_price).run()
     return next(n for n in at.number_input
-                if "sold for by itself" in n.label).set_value(sold_price).run()
+                if "sold for by itself" in (n.label or "")).set_value(sold_price).run()
 
 
 def test_my_trades_renders_the_roll_form_for_an_open_pmcc(app_with_one_pmcc):

@@ -60,8 +60,10 @@ def test_the_sell_a_call_form_takes_a_price(app_with_uncovered_pmcc):
     assert any("Credit price on your fill" == l for l in labels), \
         f"boxes were {labels}"
 
+    # By KEY: Quick Log carries a box with this exact label too, and since it
+    # moved to the top of the tab a label match finds ITS box first.
     box = next(n for n in at.number_input
-               if n.label == "Credit price on your fill")
+               if (n.key or "").startswith("write_credit_"))
     at = box.set_value(3.00).run()
     assert not at.exception
     body = " ".join(str(m.value) for m in at.markdown)

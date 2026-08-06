@@ -37,8 +37,8 @@ def _open_section(items, strategies, provider, priced_at) -> None:
 
     theme.section("Your open trades", "Open trades")
     if not items:
-        st.success("No open trades right now. Record one with **Quick Log** in Records "
-                   "below, or build one in 🎯 Find a trade.")
+        st.success("No open trades right now. Record one with **➕ Quick Log** at the "
+                   "top of this tab, or build one in 🎯 Find a trade.")
         return
 
     ordered = sorted(items, key=lambda it: glance.priority(it["signal"],

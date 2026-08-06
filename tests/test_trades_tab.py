@@ -109,7 +109,10 @@ def test_all_time_is_never_measured_against_a_one_month_goal(app_with_rows):
     at = app_with_rows(_closed_row(realized=600.0)).run()
     at = at.selectbox(key="trades_month_pick").set_value("All time").run()
     page = _page(at)
-    assert "a steady plan would have produced in 6 days" in page
+    # No hardcoded day count - this asserted "in 6 days" and broke the moment
+    # the date rolled over. The regression is the SHAPE of the sentence: a span
+    # target measured over the days elapsed, not a month's goal.
+    assert re.search(r"a steady\s+plan would have produced in \d+ day", page)
     assert "Since you started you have banked" in page
     # The dashboard's own band says it once, about THIS MONTH, which is right.
     # A second one would be the all-time total wearing a monthly target.
@@ -313,3 +316,48 @@ def test_the_tab_renders_without_an_error_box(app_with_rows, rows, label):
     # _guard turns a crash inside a tab into this message rather than a blank
     # page, so its absence is the real assertion.
     assert not any("unexpected snag" in e.value for e in at.error), label
+
+
+def test_quick_log_is_at_the_top_not_buried_in_records():
+    """Rita: "entering new trades will be not hidden down. it should be
+    accessible." Recording a trade she just placed is the most frequent thing
+    she does on this tab, and it sat five screens down inside Records."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "__init__.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    render = next(n for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == "render")
+    order = [n.func.id if isinstance(n.func, ast.Name) else n.func.attr
+             for n in ast.walk(render) if isinstance(n, ast.Call)
+             and isinstance(n.func, (ast.Name, ast.Attribute))]
+    called = [c for c in order if c in
+              ("_quick_log_form", "band", "_open_section", "_records_section")]
+    assert called.index("_quick_log_form") < called.index("band")
+    assert called.index("_quick_log_form") < called.index("_open_section")
+
+
+def test_two_forms_never_share_a_money_box_label_without_distinct_keys():
+    """Quick Log and the roll form both label a box "Credit price on your fill".
+    That is fine on screen - they are screens apart - but only because their
+    KEYS differ. Tests that match on label find whichever renders first, which
+    is what moving Quick Log to the top quietly broke."""
+    import ast
+    from pathlib import Path
+
+    keys = []
+    for name in ("quick_log.py", "actions.py"):
+        src = (Path(__file__).parent.parent / "ui" / "trades"
+               / name).read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(src)):
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "attr", getattr(node.func, "id", ""))
+                    in ("number_input", "_fill_price_input")):
+                for kw in node.keywords:
+                    if kw.arg == "key":
+                        keys.append(ast.dump(kw.value))
+                if len(node.args) >= 2 and node.func.__class__ is ast.Name:
+                    keys.append(ast.dump(node.args[1]))
+    assert len(keys) == len(set(keys)), "two money boxes share a key template"

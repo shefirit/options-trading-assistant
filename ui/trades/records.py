@@ -123,9 +123,14 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
     every card, which cost a row per trade and put the one irreversible button
     in the app on the screen she looks at daily. It is a rare, careful job, and
     this is where the rare, careful jobs are.
+
+    Quick Log is NOT here any more. Recording a trade she just placed is the
+    most frequent thing she does on this tab, and it sat five screens down
+    behind everything else - see ui/trades/__init__.py, which now renders it at
+    the top. What is left here is genuinely occasional: correcting a fill,
+    reading back the closed trades, deleting a mistake.
     """
-    theme.section("Log, correct, and look back", "Records")
-    _quick_log_form(settings, strategies, provider)
+    theme.section("Correct and look back", "Records")
 
     fixable = [p for p in closed if p.trade_id]
     if fixable:
