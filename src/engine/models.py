@@ -46,6 +46,11 @@ class Leg(BaseModel):
     premium: float = 0.0
     quantity: int = 1                 # contracts of THIS leg per 1 unit of the position
     dte: Optional[int] = None         # days to expiration for this leg
+    # How many contracts are open at this strike. Carried only where a rule
+    # reads it - the LEAPS long call, whose SOP wants 250+ before entering,
+    # because a thin far-dated contract is expensive to get back out of.
+    # None means "not captured", which is different from zero.
+    open_interest: Optional[int] = None
 
     @property
     def abs_delta(self) -> float:

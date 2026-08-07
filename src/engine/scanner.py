@@ -19,7 +19,7 @@ from src.engine.validator import validate_trade
 # Families the multi-candidate scan() supports (credit spreads + cash secured puts).
 SCANNABLE_FAMILIES = {"credit_spread", "single_leg"}
 # Families the focused scan_setups() supports - adds covered calls and PMCC.
-SETUP_FAMILIES = SCANNABLE_FAMILIES | {"covered_call", "diagonal"}
+SETUP_FAMILIES = SCANNABLE_FAMILIES | {"covered_call", "diagonal", "long_call"}
 
 # Ignore far-out strikes that are almost worthless (avoids junk candidates).
 MIN_SHORT_DELTA = 0.03
@@ -65,6 +65,7 @@ def _leg(role: str, action: Action, c: OptionContract) -> Leg:
     return Leg(
         role=role, action=action, option_type=c.option_type,
         strike=c.strike, delta=c.delta, premium=c.mid, dte=c.dte,
+        open_interest=c.open_interest,
     )
 
 
@@ -364,6 +365,28 @@ def _pick_target_short(options: list[OptionContract], target: float) -> Optional
     return min(band, key=lambda o: abs(o.abs_delta - target))
 
 
+def _pick_long_call(options: list[OptionContract], strategy: dict) -> Optional[OptionContract]:
+    """The call to BUY for a LEAPS long call: closest to the SOP's target delta
+    and strictly inside the allowed band.
+
+    A hard band, unlike the short-strike picker's forgiving one. The whole case
+    for this trade rests on delta: at 0.70 and up the option is mostly intrinsic
+    value, so it tracks the stock and implied volatility barely touches it. Drift
+    down to 0.50 and you are buying mostly time premium, which is a different
+    (worse) trade wearing the same name. Better to skip an expiration than to
+    quietly hand back the property the strategy depends on.
+    """
+    entry = strategy.get("entry", {})
+    lo = float(entry.get("long_leg_delta_min", 0.70))
+    hi = float(entry.get("long_leg_delta_max", 0.80))
+    target = float(entry.get("long_leg_delta_target", (lo + hi) / 2))
+    band = [o for o in options
+            if lo - 1e-9 <= o.abs_delta <= hi + 1e-9 and o.mid > 0]
+    if not band:
+        return None
+    return min(band, key=lambda o: abs(o.abs_delta - target))
+
+
 def _sample_evenly(values: list[int], k: int) -> list[int]:
     """Up to k values spread across a sorted list (e.g. 21, 28, 35, 44)."""
     if len(values) <= k:
@@ -391,6 +414,18 @@ def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float
         trade = Trade(strategy_key=strategy_key, underlying=chain.underlying, contracts=contracts,
                       underlying_price=chain.underlying_price,
                       legs=[_leg("short_call", Action.SELL, short)])
+        return _make_candidate(trade, strategy, delta_limit=None)
+
+    # LEAPS long call: one bought call, nothing sold. The only setup here with
+    # no short leg at all, so there is no delta LIMIT to check - the band is
+    # enforced by the picker instead.
+    if family == "long_call":
+        long_call = _pick_long_call(chain.by(OptionType.CALL, dte), strategy)
+        if not long_call:
+            return None
+        trade = Trade(strategy_key=strategy_key, underlying=chain.underlying, contracts=contracts,
+                      underlying_price=chain.underlying_price,
+                      legs=[_leg("long_call_leaps", Action.BUY, long_call)])
         return _make_candidate(trade, strategy, delta_limit=None)
 
     # PMCC: a deep in-the-money LEAPS (stock stand-in) plus a short call for income.
@@ -469,13 +504,18 @@ def scan_setups(
     """A short list of the best setups: one trade per sampled expiration, each at
     the SOP-target delta. Sorted soonest-expiry first.
 
-    leaps_chain: a far-dated chain (~7 months out) needed for PMCC's long LEAPS.
+    leaps_chain: a far-dated chain needed for PMCC's long LEAPS, and the ONLY
+    chain a LEAPS long call is scanned against - its expirations are a year or
+    more out, so the near-dated chain every other strategy uses holds nothing
+    it can trade.
     """
     strategy = get_strategy(strategy_key)
     if strategy.get("family") not in SETUP_FAMILIES:
         raise ValueError(
             f"'{strategy.get('name', strategy_key)}' is not scannable yet - "
             "use the checklist to validate a trade you build yourself.")
+    if strategy.get("family") == "long_call" and leaps_chain is not None:
+        chain = leaps_chain
     w = width if width is not None else _auto_width(chain.underlying_price, chain.underlying)
     target = _target_short_delta(strategy)
     lo, hi = strategy_dte_window(strategy, chain.underlying, dte_min, dte_max)

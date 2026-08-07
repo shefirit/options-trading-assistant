@@ -111,6 +111,15 @@ def estimate(trade: Trade, strategy: dict[str, Any],
         capital = leaps if leaps > 0 else debit_risk(trade)
         max_loss = max(capital - credit, 0.0)       # LEAPS can expire worthless
         buying_power = 0.0
+    elif basis == "long_premium":
+        # A bought call on its own. There is no credit to collect and nothing to
+        # net against: what you paid is exactly what you can lose, and every
+        # cent of it really can go. This is the only strategy here where
+        # max_loss equals capital equals 100% of the position - which is why the
+        # dashboards must never call this number "worst case" and move on.
+        credit = 0.0
+        capital = max_loss = _long_call_cost(trade) or debit_risk(trade)
+        buying_power = 0.0                          # cash, not margin
     else:
         max_loss = vertical_max_loss(trade)
         capital = buying_power = max_loss

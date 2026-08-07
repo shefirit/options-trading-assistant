@@ -27,11 +27,16 @@ from src.engine.models import (
 def validate_trade(
     trade: Trade,
     existing_month_bp: float = 0.0,
+    open_leaps_capital: float = 0.0,
 ) -> ValidationReport:
     """Check a proposed trade against its strategy SOP.
 
     existing_month_bp: buying power you have already committed this month, so
     the monthly-limit check is realistic. Defaults to 0 if you are not tracking it.
+
+    open_leaps_capital: premium already tied up in other open LEAPS long calls.
+    That cap is on the TOTAL, so a per-trade check alone would wave through
+    three positions that add up to a quarter of the account.
     """
     strategy = get_strategy(trade.strategy_key)
     settings = load_settings()
@@ -59,7 +64,14 @@ def validate_trade(
         r = rules.check_short_call_target_delta(trade, float(entry["short_call_delta"]))
         if r:
             results.append(r)
-    if "long_leg_delta_min" in entry:
+    if strategy.get("family") == "long_call" and "long_leg_delta_min" in entry:
+        # Same floor as the PMCC's but a different message: here the risk being
+        # guarded against is buying an out-of-the-money lottery ticket, not
+        # failing to cover a short call.
+        r = rules.check_bought_call_delta(trade, float(entry["long_leg_delta_min"]))
+        if r:
+            results.append(r)
+    elif "long_leg_delta_min" in entry:
         r = rules.check_long_leaps_delta(trade, float(entry["long_leg_delta_min"]))
         if r:
             results.append(r)
@@ -111,6 +123,24 @@ def validate_trade(
     results.append(
         rules.check_monthly_bp(size["buying_power"], existing_month_bp, float(risk["monthly_bp_limit"]))
     )
+
+    # 5b. Bought premium is capped by the SIZE of the bet, because it is the only
+    # thing that still works when a long option gaps to worthless. The monthly
+    # buying-power check above cannot catch this - a bought call uses cash, not
+    # buying power, so it reports zero and always passes.
+    sizing_cfg = strategy.get("sizing", {})
+    if sizing_cfg.get("max_loss_basis") == "long_premium":
+        debit = rules.check_debit_size(
+            size["capital"], float(settings["account"]["starting_capital"]),
+            float(sizing_cfg.get("max_pct_of_account", 10)),
+            open_leaps_capital=open_leaps_capital,
+            target_positions=int(sizing_cfg.get("target_positions", 3)))
+        if debit:
+            results.append(debit)
+        if "min_open_interest" in entry:
+            oi = rules.check_open_interest(trade, int(entry["min_open_interest"]))
+            if oi:
+                results.append(oi)
 
     # 6. Position delta red flag.
     results.append(rules.check_position_delta(trade, float(risk["position_delta_red_flag"])))

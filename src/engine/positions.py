@@ -113,6 +113,16 @@ class Position(BaseModel):
             return None
         return (self.expiration - (today or date.today())).days
 
+    def days_held(self, today: Optional[date] = None) -> Optional[int]:
+        """Calendar days since it was opened. None on a row with no open date.
+
+        The LEAPS long call's "took 20% in under two weeks" rule needs this;
+        every other strategy here counts down to expiration instead.
+        """
+        if self.opened is None:
+            return None
+        return max((today or date.today()) - self.opened, timedelta(0)).days
+
     @property
     def short_strikes(self) -> list[float]:
         return [leg.strike for leg in self.legs if leg.action == Action.SELL]
@@ -181,6 +191,17 @@ class Position(BaseModel):
         return round(self.realized_pl + self.roll_income, 2)
 
     @property
+    def is_long_premium(self) -> bool:
+        """A trade that is nothing but bought options - the LEAPS long call.
+
+        Distinct from `is_uncovered`, which it would otherwise look exactly like.
+        A PMCC between short calls is TEMPORARILY not earning and wants its next
+        call written; this one has no short leg by design and never will. They
+        need opposite advice, so the strategy key decides rather than the shape.
+        """
+        return self.strategy_key == "long_call_leaps"
+
+    @property
     def is_uncovered(self) -> bool:
         """A PMCC or covered call with no short call written against it today.
 
@@ -190,9 +211,9 @@ class Position(BaseModel):
         long side is exposed both ways, so the card says so instead of running
         exit rules against a call that isn't there.
         """
-        return self.is_debit and not any(
+        return (self.is_debit and not self.is_long_premium and not any(
             leg.action == Action.SELL and leg.option_type == OptionType.CALL
-            for leg in self.legs)
+            for leg in self.legs))
 
     @property
     def far_legs(self) -> list[Leg]:

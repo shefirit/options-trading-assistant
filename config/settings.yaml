@@ -39,6 +39,11 @@ defaults:
 risk_limits:
   monthly_bp_limit: 50000       # do not use more than this in buying power per month
   position_delta_red_flag: 90   # if a position's net delta passes this, it is a red flag
+  # Only bought-premium trades (the LEAPS long call) use this. Every other
+  # strategy here sells premium and can be stopped out partway; a long call has
+  # no stop that works if the stock gaps, so the cap has to be the size of the
+  # bet itself. 5% of the account is a real position that cannot ruin a month.
+  max_debit_pct_of_account: 5
 
 # The "Picks" tab's market screen - the bar a name must clear before the app
 # spends an option-chain fetch on it. Your bar: credible, LARGE, liquid.

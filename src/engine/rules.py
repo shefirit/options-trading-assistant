@@ -169,6 +169,103 @@ def check_short_call_target_delta(trade: Trade, target: float) -> Optional[Check
     )
 
 
+def check_bought_call_delta(trade: Trade, min_delta: float) -> Optional[CheckResult]:
+    """LEAPS long call: the bought call must be at least this deep.
+
+    A FLOOR, not a band. Deeper is never the mistake here - it is more like the
+    stock, which is the whole point. The mistake is going shallower: an
+    out-of-the-money call is nearly all time premium, so it swings violently,
+    gets crushed when implied volatility falls, and expires worthless if the
+    stock merely drifts. At 0.70 you capture about 70 cents of every dollar the
+    stock moves, on a much smoother ride.
+    """
+    long_calls = [leg for leg in trade.legs
+                  if leg.action == Action.BUY and leg.option_type == OptionType.CALL]
+    if not long_calls:
+        return None
+    leg = max(long_calls, key=lambda l: l.abs_delta)
+    name = f"Bought call delta at least {min_delta:.2f}"
+    if delta_missing(leg):
+        return CheckResult(
+            name=name, status=CheckStatus.WARN,
+            message=(f"No delta came through for the {leg.strike:g} call, so this could "
+                     f"not be checked. Your SOP wants {min_delta:.2f} or deeper."),
+            expected=f">= {min_delta:.2f}", actual="not available")
+
+    d = leg.abs_delta
+    ok = d >= min_delta - 1e-9
+    message = (
+        f"Delta is {d:.3f}, at or below your {min_delta:.2f} floor. Most of what you "
+        "would pay here is time premium, which swings hard and goes to zero if the "
+        "stock only drifts. Choose a lower strike, deeper in the money."
+        if not ok else
+        f"Delta is {d:.3f}. Most of the price is real (intrinsic) value, so it tracks "
+        "the stock closely and time decay stays slow.")
+    return CheckResult(
+        name=name, status=CheckStatus.PASS if ok else CheckStatus.FAIL,
+        message=message, expected=f">= {min_delta:.2f}", actual=f"{d:.3f}")
+
+
+def check_open_interest(trade: Trade, minimum: int) -> Optional[CheckResult]:
+    """Enough people trade this contract that you can get back OUT of it.
+
+    Liquidity matters more on a LEAPS than anywhere else in this book. You are
+    holding one contract for months and the exit is a single sale - if only a
+    handful trade, the gap between bid and ask eats the move you were right
+    about. Worth paying up for a further expiration to get it.
+    """
+    quoted = [leg for leg in trade.legs if leg.open_interest is not None]
+    if not quoted:
+        return None
+    leg = min(quoted, key=lambda l: l.open_interest or 0)
+    oi = leg.open_interest or 0
+    ok = oi >= minimum
+    return CheckResult(
+        name=f"Open interest at least {minimum}",
+        status=CheckStatus.PASS if ok else CheckStatus.WARN,
+        message=(
+            f"The {leg.strike:g} contract has {oi:,} open contracts."
+            + ("" if ok else f" Your SOP wants {minimum}+. Thin contracts have a wide "
+                             "bid-ask gap, so getting out costs more than it should - "
+                             "try a further expiration, which often trades better.")),
+        expected=f">= {minimum}", actual=f"{oi:,}")
+
+
+def check_debit_size(capital: float, account_size: float, max_pct: float,
+                     open_leaps_capital: float = 0.0,
+                     target_positions: int = 3) -> Optional[CheckResult]:
+    """Bought premium only: is this bet small enough to survive losing all of it?
+
+    This strategy has NO stop loss on purpose, so size at entry is the entire
+    risk control - there is no second line of defence further down. The cap is
+    on ALL open LEAPS together, not on one trade, because three separate 8%
+    positions is a 24% bet on one idea wearing three tickers.
+
+    open_leaps_capital: premium already committed to other open LEAPS.
+    """
+    if capital <= 0 or account_size <= 0:
+        return None
+    total = capital + max(open_leaps_capital, 0.0)
+    pct = total / account_size * 100
+    ok = pct <= max_pct + 1e-9
+    share = max_pct / max(target_positions, 1)
+    held = (f" You already hold ${open_leaps_capital:,.0f} of LEAPS, so this would take "
+            f"the total to ${total:,.0f}." if open_leaps_capital > 0 else "")
+    return CheckResult(
+        name=f"All LEAPS together under {max_pct:g}% of the account",
+        status=CheckStatus.PASS if ok else CheckStatus.FAIL,
+        message=(
+            f"You would pay ${capital:,.0f}, which puts {pct:.1f}% of your "
+            f"${account_size:,.0f} account into bought calls.{held} Every cent of that "
+            "can be lost, and this strategy has no stop to catch it - the size IS the "
+            "risk control."
+            + ("" if ok else f" Your SOP caps all LEAPS at {max_pct:g}% together, spread "
+                             f"across about {target_positions} names - roughly "
+                             f"{share:.1f}% each. Buy fewer contracts, or pick a cheaper "
+                             "stock.")),
+        expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
+
+
 def check_long_leaps_delta(trade: Trade, min_delta: float) -> Optional[CheckResult]:
     """PMCC: the long LEAPS call should be deep in the money (delta >= ~0.80)."""
     long_calls = [

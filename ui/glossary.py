@@ -241,6 +241,20 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "short calls against it. Far less cash up front than owning the stock."),
         ("LEAPS",
          "An option expiring a year or more out. Used as a stand-in for owning shares."),
+        ("LEAPS call (long call)",
+         "You BUY a call a year or more out and sell it later for a gain. It costs about "
+         "a third of what 100 shares would and can never lose more than you paid. It is "
+         "the one strategy here that needs the stock to actually RISE - the others make "
+         "money while it sits still."),
+        ("Debit vs credit",
+         "A credit means money comes IN when you open the trade (almost everything you "
+         "do). A debit means money goes OUT - you are buying, not selling, and time is "
+         "working against you instead of for you."),
+        ("Intrinsic and extrinsic value",
+         "Intrinsic is the part of an option's price that is already real: how far in "
+         "the money it is. Extrinsic is the rest - what you pay for time and for the "
+         "chance it moves further. Only extrinsic value decays away, which is why a "
+         "deep in-the-money LEAPS call loses value so slowly."),
     ]),
     ("Market words the app uses", [
         ("VIX",

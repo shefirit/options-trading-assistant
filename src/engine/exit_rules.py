@@ -87,6 +87,97 @@ def _strike_notes(position: Position, underlying_price: float,
     return notes
 
 
+def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
+                         current_value: Optional[float],
+                         underlying_price: Optional[float],
+                         dte_left: Optional[int],
+                         today: Optional[date]) -> ExitSignal:
+    """The exit reading for a bought call, where the arithmetic runs backwards.
+
+    On every other strategy she collects a credit and profits by buying it back
+    for less, so "cost to close" falling is good news. Here she PAID, and
+    profits by selling for more - the same number rising is the good news. Wire
+    this into the credit path and a winning trade reads as a loser.
+
+    Priority: a fast gain is taken (it is the one this strategy is most likely
+    to give back), then the profit target, then the stop, then the theta clock.
+    """
+    paid = abs(position.open_cash)
+    notes: list[str] = []
+
+    if dte_left is not None and dte_left <= int(exit_cfg.get("roll_forward_dte", 180)):
+        notes.append(
+            f"Only {dte_left} days left. Under six months a long call starts losing "
+            "its time value quickly, and that loss accelerates all the way down. "
+            "Roll it further out or close it - do not ride it into expiration.")
+
+    if current_value is None or paid <= 0:
+        return ExitSignal(
+            action="hold", tone="neutral",
+            headline="Holding - no live price",
+            reason=(f"You paid ${paid:,.0f} for this call. Today's value could not be "
+                    "fetched, so there is no profit or loss to judge yet. The rules "
+                    "still stand: take 10-20% if it comes inside a week, or 20-40% "
+                    "inside four weeks."),
+            notes=notes)
+
+    pl = current_value - paid
+    pct = pl / paid * 100
+    held = position.days_held(today)
+    money = (f"It is worth about ${current_value:,.0f} against the ${paid:,.0f} you "
+             f"paid, so you are {'up' if pl >= 0 else 'down'} ${abs(pl):,.0f} "
+             f"({pct:+.0f}%).")
+
+    fast_pct = float(exit_cfg.get("fast_profit_pct", 10))
+    fast_days = int(exit_cfg.get("fast_profit_days", 7))
+    quick_pct = float(exit_cfg.get("quick_profit_pct", 20))
+    quick_days = int(exit_cfg.get("quick_profit_days", 28))
+
+    # Both windows say "take it". The lesson behind them is that a LEAPS up big
+    # and fast is pressed against the upper Bollinger band, and that reverts:
+    # the cautionary trade was +30% in two weeks, held for more, and spent the
+    # next four months at -50% before scraping out at +20%.
+    if held is not None and held <= fast_days and pct >= fast_pct:
+        return ExitSignal(
+            action="close", tone="green",
+            headline=f"Take it - up {pct:.0f}% in {held} days",
+            reason=(f"{money} Your SOP closes a bought call that makes {fast_pct:g}% or "
+                    f"more inside {fast_days} days. A jump this fast usually means the "
+                    "stock is stretched against the top of its range, and it tends to "
+                    "come back. Take it and wait for the next pullback."),
+            notes=notes)
+
+    if held is not None and held <= quick_days and pct >= quick_pct:
+        return ExitSignal(
+            action="close", tone="green",
+            headline=f"Take it - up {pct:.0f}% in {held} days",
+            reason=(f"{money} Your SOP closes a bought call that makes {quick_pct:g}% or "
+                    f"more inside {quick_days} days. Holding out for more is exactly how "
+                    "a winner turns into months of waiting to get back to even."),
+            notes=notes)
+
+    # No stop, deliberately. Size and time are the risk control, so a loss here
+    # is a hold - but say plainly how bad it is rather than a bare "hold".
+    if pct <= -25:
+        return ExitSignal(
+            action="watch", tone="amber",
+            headline=f"Down {abs(pct):.0f}% - holding by design",
+            reason=(f"{money} This strategy has no stop, on purpose: you bought a year "
+                    "or more of time so a pullback can recover, and cutting here locks "
+                    "in the loss right before the bounce you paid for. That only works "
+                    "if the position was small enough to sit through - which is what the "
+                    "10% cap is for. If the reason you bought it has actually broken "
+                    "(bad earnings, bad guidance), that is a different decision."),
+            notes=notes)
+
+    return ExitSignal(
+        action="hold", tone="neutral",
+        headline=f"Hold - {pct:+.0f}%",
+        reason=(f"{money} Not at a take-it level ({fast_pct:g}% inside {fast_days} days, "
+                f"or {quick_pct:g}% inside {quick_days}), so there is nothing to do."),
+        notes=notes)
+
+
 def evaluate(
     position: Position,
     exit_cfg: dict[str, Any],
@@ -104,6 +195,19 @@ def evaluate(
     """
     credit = position.credit
     dte_left = position.dte_left(today)
+
+    # ---- 0a. Bought premium: every rule below is written around a CREDIT she
+    # collected and buys back cheaper. This one is the mirror image - she paid,
+    # and she wants to sell it for more - so it gets its own reading entirely.
+    if position.is_long_premium:
+        # Sign flip, deliberately in one place. `current_cost` is what it costs
+        # to CLOSE, and closing a position you only ever bought PAYS you - so
+        # the chain math returns it negative. Negating turns it back into what
+        # the call is worth today. Get this backwards and a call that doubled
+        # reports as a total loss.
+        value = None if current_cost is None else -current_cost
+        return _long_premium_signal(position, exit_cfg, value,
+                                    underlying_price, dte_left, today)
 
     # ---- 0. Nothing sold: none of the exit rules have anything to measure.
     if position.is_uncovered:

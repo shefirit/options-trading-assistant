@@ -1,5 +1,5 @@
 # ============================================================
-#  Your 8 strategies - the single source of truth for the rules.
+#  Your strategies - the single source of truth for the rules.
 #  This mirrors your Notion SOP. When a rule changes (say you
 #  tighten the short-leg delta to 0.08), change it HERE only.
 #  The scanner and the checklist both read from this file.
@@ -177,6 +177,66 @@ strategies:
       accepts_assignment: true    # no stop_loss_multiple, no time_exit_dte - deliberate
     sizing:
       max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
+
+  # ---------------- LEAPS LONG CALL ----------------
+  # The ONLY strategy in this book that is a pure directional BET. Every other
+  # one sells premium and wins on time; this one BUYS premium and needs the
+  # stock to actually move. Time is the enemy here, not the ally.
+  #
+  # Not to be confused with the PMCC, which also buys a LEAPS. Different job:
+  #   PMCC        - the LEAPS is a STOCK SUBSTITUTE you rent out by selling
+  #                 calls against it. Held long-term, wanted cheap, delta 0.80+.
+  #   This        - the LEAPS is the whole trade. Bought on a dip, sold for a
+  #                 20-50% gain in weeks or months. Delta 0.70-0.80.
+  # Their entry rules differ on purpose. Do not copy one into the other.
+  long_call_leaps:
+    name: "LEAPS Call (Long Call)"
+    family: long_call
+    market_outlook: "Bullish"
+    difficulty: "Intermediate"
+    underlying_style: us
+    plain_english: "You BUY a call option a year or more out on a quality stock that has pulled back with the market. It costs a fraction of what 100 shares would, your loss can never exceed what you paid, and your upside is uncapped. The catch is that you are paying for time - if the stock goes nowhere, you lose money that owning the shares would not have cost you."
+    stock_criteria:
+      - "Chart trending UP over the past year and a half, recovering from every dip"
+      - "PE ratio positive - the company actually earns a profit"
+      - "If PE is over 100, it should hold enough cash to cover its debts at least once"
+      - "LEAPS open interest of 250+ contracts, so you can get out easily"
+      - "The pullback must be the MARKET falling, never bad earnings or bad guidance"
+    tos_hint: "Long call shows as +1 (far expiration). This is a DEBIT - money leaves your account when you open it."
+    notion_url: "https://app.notion.com/p/3b503e90e03281a699eec79a1b2ae123"
+    legs:
+      - role: long_call_leaps
+        action: buy
+        option_type: call
+    entry:
+      long_leg_delta_min: 0.70    # 70 delta or DEEPER. Never out of the money.
+      long_leg_delta_target: 0.72
+      dte_min: 365                # a LEAP is 365+ days by definition
+      dte_max: 800                # roughly the furthest LEAPS actually listed
+      dte_target: 400             # 400+ preferred: room to be wrong through a crash
+      min_open_interest: 250      # thin LEAPS cost more to get out of than they pay
+      # Entry TIMING. Buy fear, not comfort - all of these point the same way.
+      vix_min: 15.0               # below 15 the market is greedy and a shock is due
+      bollinger_band_max: 0.50    # 0 = lower band, 1 = upper. Lower half only.
+      rsi_max: 45                 # heading toward oversold (30), not bouncing off 70
+    exit:
+      # Two windows, both "take it and look for the next one". There is no
+      # profit target beyond these on purpose: the whole lesson is that a LEAPS
+      # up big and fast is hugging the upper band and tends to revert.
+      fast_profit_pct: 10         # 10-20% inside a week -> close
+      fast_profit_days: 7
+      quick_profit_pct: 20        # 20-40% inside four weeks -> close
+      quick_profit_days: 28
+      roll_forward_dte: 180       # under 6 months theta bites; roll or close
+      # NO STOP LOSS, deliberately. Risk is controlled at entry by SIZE (10% of
+      # the account across at most 3 names) and by TIME (400+ days), not by a
+      # stop. A long call gaps straight through stops anyway, and cutting at a
+      # fixed loss guarantees you miss the recovery the extra time was bought
+      # for. This demands real tolerance - see the SOP page.
+    sizing:
+      max_loss_basis: long_premium   # the debit paid, full stop - it can go to zero
+      max_pct_of_account: 10         # ALL open LEAPS together, not per trade
+      target_positions: 3            # spread that 10% across about 3 names
 
   # ---------------- POOR MAN'S COVERED CALL ----------------
   poor_mans_covered_call:

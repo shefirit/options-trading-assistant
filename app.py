@@ -1986,9 +1986,16 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
         help="Auto-filled from trades you opened this month in My trades - adjust if you "
              "also have positions the app doesn't know about.")
     is_pmcc = strat.get("family") == "diagonal"
-    theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
-               "each at the delta your SOP calls for."
-               + (" (PMCC also picks a deep-in-the-money LEAPS.)" if is_pmcc else ""))
+    is_long_call = strat.get("family") == "long_call"
+    if is_long_call:
+        theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration a year or "
+                   "more out, each at the 0.70-0.80 delta your SOP calls for. This one BUYS "
+                   "an option, so every setup is a debit: the money leaves your account and "
+                   "the whole of it is at risk.")
+    else:
+        theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
+                   "each at the delta your SOP calls for."
+                   + (" (PMCC also picks a deep-in-the-money LEAPS.)" if is_pmcc else ""))
 
     if st.button("🔎 Scan the market now", type="primary"):
         from yfinance.exceptions import YFRateLimitError
@@ -2002,7 +2009,15 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                 # both faster and much less likely to trip their rate limit.
                 lo, hi = scanner.strategy_dte_window(strat, u)
                 chain = provider.get_chain(u, dte_min=max(lo - 7, 0), dte_max=hi + 7)
-                leaps = provider.get_leaps_chain(u) if is_pmcc else None
+                # A LEAPS long call lives entirely in the far-dated chain, so it
+                # needs one aimed past a year - not PMCC's ~7-month default,
+                # which would come back with nothing at 365+ DTE.
+                if is_long_call:
+                    leaps = provider.get_leaps_chain(u, target_dte=420)
+                elif is_pmcc:
+                    leaps = provider.get_leaps_chain(u)
+                else:
+                    leaps = None
                 found.extend(scanner.scan_setups(key, chain, width=width,
                                                  contracts=int(contracts), max_setups=10,
                                                  leaps_chain=leaps))

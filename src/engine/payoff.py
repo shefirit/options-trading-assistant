@@ -51,6 +51,16 @@ def _grid(trade: Trade, points: int) -> list[float]:
     anchor = [s for s in strikes]
     if trade.underlying_price:
         anchor.append(trade.underlying_price)
+    # Where each leg on its own would break even. Without these the window is
+    # drawn from the strikes and the spot alone, and a BOUGHT option breaks even
+    # at strike + premium - which on a deep in-the-money LEAPS sits far above
+    # both. A $185 call costing $39 breaks even at $224 while that grid stopped
+    # at $215, so the chart showed a position that never turns green and
+    # reported no breakeven at all.
+    for leg in trade.legs:
+        if leg.strike > 0 and leg.premium:
+            reach = leg.premium if leg.option_type == OptionType.CALL else -leg.premium
+            anchor.append(leg.strike + reach)
     if not anchor:
         return []
     lo_a, hi_a = min(anchor), max(anchor)

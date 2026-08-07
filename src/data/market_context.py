@@ -153,6 +153,23 @@ _PROFILES: dict[str, _Profile] = {
         name="Call Credit Spread", instrument="index", traded_on=_INDEX_ON,
         requires="cash to cover the gap between your two strikes",
         reason="Neutral-to-bearish lean - you win as long as price does not rise hard."),
+    "long_call_leaps": _Profile(
+        lean=1.4, range_pref=0.0, vol_pref=-0.5,
+        name="LEAPS Call (Long Call)", instrument="us_style", traded_on=_US_ON,
+        requires="cash for the premium, all of which is at risk",
+        reason="The one trade here that BUYS instead of sells. You need the stock to "
+               "actually rise - sideways loses money, which is the opposite of every "
+               "other strategy in your book.",
+        # The strongest directional appetite on the board (lean 1.4) and no
+        # tolerance for a range at all: this is the only strategy that LOSES on
+        # a flat market rather than merely earning less.
+        #
+        # vol_pref is only mildly negative, not strongly so like the PMCC's. A
+        # 0.70-0.80 delta call is mostly INTRINSIC value, and implied volatility
+        # cannot inflate intrinsic value - only the smaller extrinsic slice. So
+        # high fear stings here far less than it does on a low-delta call, and
+        # the dip it usually comes with is the entry this strategy waits for.
+        handicap=0.4),
     "cash_secured_put": _Profile(
         lean=0.8, range_pref=0.4, vol_pref=0.6,
         name="Cash Secured Put", instrument="us_style", traded_on=_US_ON,
