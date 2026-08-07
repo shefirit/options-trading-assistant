@@ -1471,24 +1471,29 @@ def _research_leaps(settings, provider, sym) -> None:
 
     st.markdown("#### Is a long-dated call worth buying here?")
     theme.note(
-        "A LEAP is a call a year or more out, bought instead of the shares. Far less cash "
-        "up front and you can never lose more than you paid - but you are paying for time, "
-        "and if the stock just sits still you lose all of it. Shares that go nowhere cost "
-        "you nothing. Everything below exists to weigh that trade-off honestly.")
+        "This scores a name against your **LEAPS Call** SOP - the one strategy in your book "
+        "that BUYS an option instead of selling one. Far less cash up front than the shares "
+        "and you can never lose more than you paid, but you are paying for time: if the "
+        "stock just sits still you lose all of it, where shares that go nowhere cost you "
+        "nothing. Everything below weighs that honestly.")
+    _leaps_sop_reminder(provider)
 
     mode = st.radio("How do you want to look?",
                     ["Check one stock", "Scan for candidates"],
                     horizontal=True, key="leaps_mode")
 
     if mode == "Check one stock":
+        floor = leaps.target_delta()
         target_delta = st.select_slider(
-            "How deep in the money?", options=[0.60, 0.65, 0.70, 0.75, 0.80, 0.85],
-            value=0.75, key="leaps_delta",
+            "How deep in the money?", options=[0.70, 0.75, 0.80, 0.85, 0.90],
+            value=0.70, key="leaps_delta",
             format_func=lambda d: f"{d:.2f} delta")
         theme.note(
-            "Delta is how much of the stock's move the option captures. Around 0.75 is the "
-            "usual stock-replacement zone - deep enough to track the shares closely, "
-            "shallow enough that you are not tying up nearly the full share price.")
+            f"Delta is how much of the stock's move the option captures. Your SOP's floor is "
+            f"**{floor:.2f}** - at that level most of the price is real (intrinsic) value, so "
+            "it tracks the shares closely and decays slowly. Deeper is fine. Shallower is the "
+            "mistake, and out-of-the-money is banned outright: those are nearly all time "
+            "value, so they swing hard and expire worthless if the stock only drifts.")
         if not _research_ready(provider, sym, "The LEAPS check"):
             return
         with st.spinner(f"Pricing {sym} LEAPS and checking its history..."):
@@ -1561,12 +1566,57 @@ def _research_leaps(settings, provider, sym) -> None:
                           key="leaps_pick")
     if picked and st.button(f"Score {picked} in full ▸", key="leaps_full_btn"):
         with st.spinner(f"Pricing {picked} LEAPS..."):
-            candidate = provider.get_leaps_candidate(picked, 0.75)
+            candidate = provider.get_leaps_candidate(picked, leaps.target_delta())
         if candidate is None:
             st.info(f"No long-dated option data came back for {picked}.")
         else:
             st.divider()
             research.render_leaps_detail(candidate)
+
+
+def _leaps_sop_reminder(provider) -> None:
+    """The two SOP rules this tab cannot score from price history alone.
+
+    The VIX gate is the one that was missing entirely. It is a hard "do not
+    enter" in her SOP, it has nothing to do with the individual stock, and a
+    tab that scored a name 88/100 while the market sat at VIX 12 was quietly
+    contradicting the strategy page. It is checked here, once, up front.
+    """
+    from src.research import leaps
+
+    floor = leaps.vix_min()
+    vix = None
+    try:
+        vix = provider.get_market_context(MARKET_READ_SYMBOL).vix
+    except Exception:
+        pass
+
+    if vix is None:
+        theme.note(f"**Before you buy:** your SOP does not enter a LEAPS call while VIX is "
+                   f"below **{floor:.0f}** - a calm market means nothing is on sale and any "
+                   "shock lands while you hold. Today's VIX could not be read; check it on "
+                   "the Market tab.")
+        return
+
+    # Enough decimals that the reading cannot look identical to the floor it
+    # missed. At VIX 14.84 the rounded version read "VIX is 15 - below your 15
+    # floor", which is a correct answer that looks like a bug. Same principle as
+    # rules._tell_apart does for a delta sitting just over its limit.
+    shown = f"{vix:.0f}" if round(vix) != round(floor) else f"{vix:.2f}"
+    if vix >= floor:
+        st.markdown(theme.chip(f"✅  VIX is {shown} - above your {floor:.0f} floor",
+                               "green"), unsafe_allow_html=True)
+    else:
+        st.markdown(theme.chip(f"🛑  VIX is {shown} - below your {floor:.0f} floor",
+                               "red"), unsafe_allow_html=True)
+        theme.note(
+            f"Your SOP does not open a LEAPS call below VIX {floor:.0f}. Under that the "
+            "market is complacent, nothing has sold off, and you would be buying near the "
+            "highs with any bad news still ahead of you. A name can score well below and "
+            "still be a wait - the score reads the stock, this reads the market.")
+    theme.note("The other rule no chart can check for you: the pullback must be the MARKET "
+               "falling, **never** bad earnings or cut guidance. A market dip recovers with "
+               "the market; a broken story may not come back at all.")
 
 
 def _leaps_universe(key: str, settings) -> list:

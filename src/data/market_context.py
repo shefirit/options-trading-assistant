@@ -154,7 +154,7 @@ _PROFILES: dict[str, _Profile] = {
         requires="cash to cover the gap between your two strikes",
         reason="Neutral-to-bearish lean - you win as long as price does not rise hard."),
     "long_call_leaps": _Profile(
-        lean=1.4, range_pref=0.0, vol_pref=-0.5,
+        lean=1.4, range_pref=0.0, vol_pref=0.8,
         name="LEAPS Call (Long Call)", instrument="us_style", traded_on=_US_ON,
         requires="cash for the premium, all of which is at risk",
         reason="The one trade here that BUYS instead of sells. You need the stock to "
@@ -164,11 +164,14 @@ _PROFILES: dict[str, _Profile] = {
         # tolerance for a range at all: this is the only strategy that LOSES on
         # a flat market rather than merely earning less.
         #
-        # vol_pref is only mildly negative, not strongly so like the PMCC's. A
-        # 0.70-0.80 delta call is mostly INTRINSIC value, and implied volatility
-        # cannot inflate intrinsic value - only the smaller extrinsic slice. So
-        # high fear stings here far less than it does on a low-delta call, and
-        # the dip it usually comes with is the entry this strategy waits for.
+        # vol_pref is POSITIVE, which looks wrong for a strategy that buys
+        # options and is the one number here most likely to get "corrected"
+        # back. It follows her SOP, which will not enter below VIX 15 at all:
+        # fear means the stock has sold off, and that discount is the entry.
+        # At 0.70 delta most of the price is intrinsic value, which implied
+        # volatility cannot inflate - only the smaller time-value slice gets
+        # dearer, and the fall in the stock outweighs it. A calm market is the
+        # bad one here: nothing is on sale and any shock arrives while you hold.
         handicap=0.4),
     "cash_secured_put": _Profile(
         lean=0.8, range_pref=0.4, vol_pref=0.6,

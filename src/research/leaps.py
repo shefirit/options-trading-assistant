@@ -56,12 +56,70 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 }
 
 TRADING_DAYS_YEAR = 252
-# What we treat as a LEAP: at least this many days to expiration.
-MIN_LEAP_DTE = 300
-# The strike we default to. 0.70-0.80 delta is the usual stock-replacement zone:
-# deep enough that the option moves nearly like the shares, shallow enough that
-# you are not tying up almost the whole share price.
-DEFAULT_TARGET_DELTA = 0.75
+# Her SOP judges the trend over a year and a HALF, not a year - long enough to
+# contain a real drawdown and show whether the name climbs back out of it.
+EIGHTEEN_MONTHS = 378
+
+
+# ---------------------------------------------------------------- the SOP
+# This module used to carry its own numbers - a 300-day LEAP floor, a 0.75
+# delta default, 100 open interest. They were sensible generic defaults and
+# they no longer matter, because the LEAPS long call is a STRATEGY now with
+# rules in config/strategies.yaml. Rita's rule for this whole app is that her
+# numbers live in config and the code follows, so the Finder reads them too.
+# Otherwise the Analyze tab scores a name against one standard while Find a
+# trade validates it against another.
+def sop() -> dict:
+    """The LEAPS long call's entry rules, straight from strategies.yaml."""
+    from src.engine.config_loader import get_strategy
+    try:
+        return get_strategy("long_call_leaps").get("entry", {}) or {}
+    except Exception:
+        return {}
+
+
+def _rule(name: str, fallback: float) -> float:
+    value = sop().get(name)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def min_leap_dte() -> int:
+    """A LEAP is 365+ days by her SOP - not the 300 this module once used."""
+    return int(_rule("dte_min", 365))
+
+
+def target_dte() -> int:
+    return int(_rule("dte_target", 400))
+
+
+def target_delta() -> float:
+    """The SOP floor. Deeper is fine; shallower is the mistake."""
+    return _rule("long_leg_delta_min", 0.70)
+
+
+def min_open_interest() -> int:
+    return int(_rule("min_open_interest", 250))
+
+
+def vix_min() -> float:
+    return _rule("vix_min", 15.0)
+
+
+def band_max() -> float:
+    """How far up the Bollinger range she will still buy. 0 = lower band."""
+    return _rule("bollinger_band_max", 0.50)
+
+
+def rsi_max() -> float:
+    return _rule("rsi_max", 45.0)
+
+
+# Kept as module names because callers import them; both now follow the SOP.
+MIN_LEAP_DTE = min_leap_dte()
+DEFAULT_TARGET_DELTA = target_delta()
 
 
 # ---------------------------------------------------------------- data models
@@ -196,9 +254,11 @@ class Filters(BaseModel):
     tighter on the things that actually decide a LEAP's outcome."""
     min_market_cap_b: float = 10.0
     min_avg_volume_m: float = 1.0
-    min_open_interest: int = 100
+    # Her SOP's floor, not the generic 100 this used to carry. A LEAPS is exited
+    # in one sale, so a thin contract costs more to leave than it pays.
+    min_open_interest: int = Field(default_factory=min_open_interest)
     sector: str = "All sectors"
-    profitable_only: bool = True
+    profitable_only: bool = True      # SOP: PE must be positive
 
     require_above_200dma: bool = True
     require_above_50dma: bool = False
@@ -603,10 +663,31 @@ def score_trend(closes: list[float]) -> Pillar:
     if len(closes) >= TRADING_DAYS_YEAR:
         year_return = (price / closes[-TRADING_DAYS_YEAR] - 1) * 100
         if year_return > 0:
-            points += 10
+            points += 5
             p.factors.append(f"Up {year_return:+.0f}% over the past year.")
         else:
             p.factors.append(f"Down {year_return:+.0f}% over the past year.")
+
+    # Eighteen months, which is the window her SOP actually names. A year is the
+    # conventional momentum lookback and it was the only one measured here, but
+    # the extra six months is the point: it reaches back far enough to include a
+    # real drawdown and show whether this name RECOVERS from one. That is what
+    # the SOP is asking for, and it is the whole reason the trade can sit through
+    # a crash without a stop.
+    if len(closes) >= EIGHTEEN_MONTHS:
+        long_return = (price / closes[-EIGHTEEN_MONTHS] - 1) * 100
+        if long_return > 0:
+            points += 10
+            p.factors.append(
+                f"Up {long_return:+.0f}% over the past 18 months - your SOP's window, "
+                "long enough to show it recovers from a real dip.")
+        else:
+            p.factors.append(
+                f"Down {long_return:+.0f}% over the past 18 months. Your SOP wants an "
+                "18-month uptrend, so this one does not qualify.")
+    elif len(closes) >= TRADING_DAYS_YEAR:
+        p.factors.append("Less than 18 months of history, so your SOP's full trend "
+                         "window could not be checked.")
 
     p.score = min(100.0, points)
     p.status = "good" if p.score >= 70 else "ok" if p.score >= 45 else "watch"
@@ -616,84 +697,149 @@ def score_trend(closes: list[float]) -> Pillar:
     return p
 
 
+def band_position(closes: list[float]) -> Optional[float]:
+    """Where price sits across the Bollinger range: 0.0 = lower band, 1.0 = upper.
+
+    Daily closes, 20-period, 2 standard deviations - the settings her SOP names.
+    Values outside 0-1 are real: price does break the bands about 5% of the
+    time, and a reading below 0 is the strongest buy signal this strategy has.
+    """
+    from src.engine import indicators
+
+    if len(closes) < 20:
+        return None
+    upper, _mid, lower = indicators.bollinger(closes, length=20, mult=2.0)
+    hi, lo = upper[-1], lower[-1]
+    if hi is None or lo is None or hi <= lo:
+        return None
+    return (closes[-1] - lo) / (hi - lo)
+
+
+def macd_turning_up(closes: list[float]) -> Optional[bool]:
+    """True when the MACD line is at or above its signal, or flattening toward
+    it - her SOP's "lines beginning to flatten out" confirmation."""
+    from src.engine import indicators
+
+    if len(closes) < 40:
+        return None
+    line, signal, _hist = indicators.macd(closes)
+    if line[-1] is None or signal[-1] is None or line[-2] is None or signal[-2] is None:
+        return None
+    gap_now = line[-1] - signal[-1]
+    gap_before = line[-2] - signal[-2]
+    return gap_now >= 0 or gap_now > gap_before      # crossed up, or closing the gap
+
+
 def score_entry(closes: list[float], highs: Optional[list[float]] = None,
                 lows: Optional[list[float]] = None) -> Pillar:
-    """Is this a decent spot to buy, or are you chasing?"""
+    """Is this a decent spot to buy, judged by HER SOP?
+
+    Rewritten to follow the LEAPS long call SOP rather than generic practice,
+    and the two disagree in the one place that matters most. The old version
+    gave its best score to RSI 45-70 ("healthy, not stretched") and its worst
+    to oversold, calling that "catching a falling knife". Her SOP buys exactly
+    what that penalised: the stock pressed against its LOWER Bollinger band
+    with RSI heading toward oversold. Scoring it the old way meant the Analyze
+    tab talked her out of the entry Find a trade was built to check.
+
+    Ranked by what the SOP actually weighs:
+      Bollinger band position - the primary signal, so it carries most points
+      RSI                     - confirmation, wants high 30s to low 40s
+      MACD                    - confirmation, wants flattening or crossing up
+    """
     p = Pillar(key="entry", label="Entry timing", weight=DEFAULT_WEIGHTS["entry"])
     if len(closes) < 60:
         p.measured, p.read = False, "Not enough price history to judge the entry."
         return p
 
+    points = 0.0
+    ceiling = band_max()
+
+    pos = band_position(closes)
+    if pos is None:
+        p.factors.append("Bollinger bands could not be computed for this name.")
+    elif pos <= 0.0:
+        points += 55
+        p.factors.append(
+            "Price has pushed BELOW its lower Bollinger band - the roughly 5% "
+            "outlier your SOP waits for. This is the ideal entry.")
+    elif pos <= 0.25:
+        points += 50
+        p.factors.append(
+            f"Sitting at the lower Bollinger band ({pos * 100:.0f}% up the range). "
+            "This is the entry your SOP calls ideal.")
+    elif pos <= ceiling:
+        points += 32
+        p.factors.append(
+            f"{pos * 100:.0f}% up the Bollinger range - in the lower half, so an "
+            "acceptable entry. Accept that it may still fall to the lower band.")
+    elif pos <= 0.75:
+        points += 10
+        p.factors.append(
+            f"{pos * 100:.0f}% up the Bollinger range - above the halfway line your "
+            "SOP allows. Waiting for a pullback costs nothing.")
+    else:
+        p.factors.append(
+            f"{pos * 100:.0f}% up the Bollinger range, near the UPPER band. Your SOP "
+            "treats this as where you EXIT, not where you buy.")
+
+    value = rsi(closes)
+    limit = rsi_max()
+    if value is not None:
+        if value <= 30:
+            points += 25
+            p.factors.append(
+                f"RSI {value:.0f} - fully oversold. Cheap, though a knife this sharp "
+                "usually wants a day or two to steady.")
+        elif value <= limit:
+            points += 30
+            p.factors.append(
+                f"RSI {value:.0f} - heading toward oversold, under your {limit:.0f} "
+                "ceiling. Exactly the zone your SOP buys in.")
+        elif value < 70:
+            points += 8
+            p.factors.append(
+                f"RSI {value:.0f} - above your {limit:.0f} ceiling. Not stretched, but "
+                "not the pullback this strategy waits for either.")
+        else:
+            p.factors.append(f"RSI {value:.0f} - overbought. Your SOP does not buy here.")
+
+    turning = macd_turning_up(closes)
+    if turning is True:
+        points += 15
+        p.factors.append("MACD is flattening or crossing upward - the confirmation "
+                         "your SOP looks for.")
+    elif turning is False:
+        p.factors.append("MACD is still falling away from its signal line. Your SOP "
+                         "waits for it to flatten first.")
+
+    # How far it has fallen, which the band position alone cannot tell you. A
+    # stock 45% off its high is pinned to its lower band too, and reads as a
+    # textbook entry on the signals above - but her SOP's fourth criterion says
+    # the drop must be the MARKET falling, never a broken story. Nothing in the
+    # price series proves which it is, so a collapse is penalised and named
+    # rather than scored as a bargain.
     price = closes[-1]
     window = closes[-TRADING_DAYS_YEAR:] if len(closes) >= TRADING_DAYS_YEAR else closes
     high52 = max(window)
-    off_high = (price / high52 - 1) * 100 if high52 > 0 else 0.0
-    points = 0.0
+    drop = abs((price / high52 - 1) * 100) if high52 > 0 else 0.0
+    if drop > 35:
+        points -= 45
+        p.factors.append(
+            f"Down {drop:.0f}% from its 52-week high. That is not a pullback, it is a "
+            "broken chart - and your SOP wants a name that RECOVERS from every dip. "
+            "Check what actually happened before going near it.")
+    elif drop > 25:
+        points -= 20
+        p.factors.append(
+            f"Down {drop:.0f}% from its 52-week high - a deep fall. Fine if the whole "
+            "market fell with it, a warning sign if this name fell alone.")
 
-    # A shallow pullback in an uptrend is the sweet spot. At the very highs you
-    # are paying up; far below them the trend is usually already broken.
-    drop = abs(off_high)
-    if drop <= 2:
-        points += 22
-        p.factors.append(f"Sitting right at its 52-week high ({off_high:.0f}%) - "
-                         "buying strength, but you are paying full price.")
-    elif drop <= 12:
-        points += 40
-        p.factors.append(f"{drop:.0f}% below the 52-week high - a shallow pullback "
-                         "inside an uptrend, the classic spot.")
-    elif drop <= 20:
-        points += 28
-        p.factors.append(f"{drop:.0f}% below the high - a deeper dip. Fine if the "
-                         "trend holds, riskier if it does not.")
-    elif drop <= 30:
-        points += 12
-        p.factors.append(f"{drop:.0f}% below the high - the chart has taken real damage.")
-    else:
-        p.factors.append(f"{drop:.0f}% below the high - this is a broken chart, not a dip.")
-
-    value = rsi(closes)
-    if value is not None:
-        if value >= 80:
-            p.factors.append(f"RSI {value:.0f} - very overbought. Poor spot to start a position.")
-        elif value >= 70:
-            points += 10
-            p.factors.append(f"RSI {value:.0f} - overbought but that can persist in a strong trend.")
-        elif value >= 45:
-            points += 25
-            p.factors.append(f"RSI {value:.0f} - healthy, not stretched either way.")
-        elif value >= 30:
-            points += 18
-            p.factors.append(f"RSI {value:.0f} - soft. Wait for it to turn up if you can.")
-        else:
-            points += 8
-            p.factors.append(f"RSI {value:.0f} - deeply oversold. Cheap, but catching a "
-                             "falling knife with a time limit attached.")
-
-    weekly = weekly_closes(closes)
-    wk, wd = stochastic(weekly, weekly_closes(highs) if highs else None,
-                        weekly_closes(lows) if lows else None)
-    if wk is not None and wd is not None:
-        if 30 <= wk <= 80 and wk > wd:
-            points += 35
-            p.factors.append(f"Weekly stochastic {wk:.0f} and turning up through its "
-                             "signal line - momentum is rebuilding.")
-        elif wk > wd:
-            points += 24
-            p.factors.append(f"Weekly stochastic {wk:.0f}, above its signal line.")
-        elif wk >= 85:
-            points += 8
-            p.factors.append(f"Weekly stochastic {wk:.0f} - near the top of its range "
-                             "and rolling over.")
-        else:
-            points += 12
-            p.factors.append(f"Weekly stochastic {wk:.0f}, below its signal line - "
-                             "momentum still falling.")
-
-    p.score = min(100.0, points)
+    p.score = max(0.0, min(100.0, points))
     p.status = "good" if p.score >= 70 else "ok" if p.score >= 45 else "watch"
-    p.read = ("Good spot to start a position." if p.score >= 70 else
-              "Workable entry, not ideal." if p.score >= 45 else
-              "Poor entry - either stretched or already broken.")
+    p.read = ("Textbook entry by your SOP - low in the range and turning." if p.score >= 70
+              else "Workable entry, not the ideal one." if p.score >= 45 else
+              "Not an entry your SOP would take - too high in the range, or still falling.")
     return p
 
 

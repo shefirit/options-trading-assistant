@@ -238,10 +238,71 @@ def test_it_is_not_mistaken_for_a_pmcc_between_short_calls(exit_cfg):
 
 
 # -------------------------------------------------------------- the scan
-def test_the_scanner_picks_inside_the_band_or_not_at_all():
-    """Skipping an expiration beats handing back the delta the whole strategy
-    rests on."""
-    from src.data.chain import OptionChain
+# ------------------------------------- the Analyze tab must obey the same SOP
+# The LEAPS Finder predates the strategy and carried its OWN numbers: a 300-day
+# floor, 0.75 delta, 100 open interest, and an entry score that rewarded RSI
+# 45-70 while calling oversold "catching a falling knife". Her SOP buys exactly
+# what that penalised, so the Analyze tab was talking her out of the entry Find
+# a trade was built to check.
+def test_the_finder_reads_its_numbers_from_the_sop(strategy):
+    from src.research import leaps as finder
+
+    entry = strategy["entry"]
+    assert finder.min_leap_dte() == entry["dte_min"] == 365
+    assert finder.target_delta() == entry["long_leg_delta_min"] == 0.70
+    assert finder.min_open_interest() == entry["min_open_interest"] == 250
+    assert finder.vix_min() == entry["vix_min"]
+    assert finder.rsi_max() == entry["rsi_max"]
+    assert finder.Filters().min_open_interest == 250
+
+
+def test_the_finder_scores_the_sop_entry_higher_than_the_opposite():
+    """A stock at the LOWER band with soft RSI must beat one pressed against the
+    upper band. This is the assertion that would have caught the old scoring."""
+    from src.research import leaps as finder
+
+    base = [50.0 + i * 0.25 for i in range(400)]
+    pulled_back = base + [base[-1] * (1 - 0.012 * i) for i in range(1, 13)]
+    stretched = base + [base[-1] * (1 + 0.012 * i) for i in range(1, 13)]
+
+    assert finder.score_entry(pulled_back).score > finder.score_entry(stretched).score
+    assert finder.band_position(pulled_back) < finder.band_position(stretched)
+
+
+def test_a_collapse_is_not_scored_as_a_bargain():
+    """SOP criterion 4: the drop must be the MARKET falling, never a broken
+    story. A name 45% off its high is pinned to its lower band too, and would
+    otherwise read as a textbook entry."""
+    from src.research import leaps as finder
+
+    base = [50.0 + i * 0.25 for i in range(400)]
+    dip = base + [base[-1] * 0.94]
+    collapse = base + [base[-1] * 0.55]
+    assert finder.score_entry(dip).score > finder.score_entry(collapse).score
+    assert any("broken chart" in f for f in finder.score_entry(collapse).factors)
+
+
+def test_the_market_board_treats_fear_as_the_buy_signal(strategy):
+    """The sign most likely to get "corrected" back. This strategy will not
+    enter below VIX 15 at all - fear means the stock is on sale - so a calm
+    market must score it LOWER, not higher, unlike every option-buying
+    strategy's usual vega logic."""
+    from src.data.market_context import build_context
+
+    calm = {s.strategy_key: s.score for s in
+            build_context("SPX", 5100, vix=12.0, trend="up", trend_spread=0.02).board}
+    fearful = {s.strategy_key: s.score for s in
+               build_context("SPX", 5100, vix=26.0, trend="up", trend_spread=0.02).board}
+    assert fearful["long_call_leaps"] > calm["long_call_leaps"]
+    # ...and it moves the OPPOSITE way to the PMCC, which buys its LEAPS to hold.
+    assert fearful["poor_mans_covered_call"] < calm["poor_mans_covered_call"]
+
+
+def test_the_scanner_respects_a_floor_not_a_band():
+    """Deeper than target is valid - it just behaves more like the shares. A
+    band would have silently skipped a 0.90 contract. Below the floor there is
+    no candidate at all: skipping an expiration beats handing back the delta the
+    whole strategy rests on."""
     from src.data.chain import OptionContract
 
     def contract(strike, delta, mid):
@@ -250,7 +311,14 @@ def test_the_scanner_picks_inside_the_band_or_not_at_all():
                               ask=mid + 0.5, delta=delta, iv=0.30, open_interest=500)
 
     strategy = get_strategy("long_call_leaps")
-    inside = [contract(230, 0.35, 12.0), contract(185, 0.74, 39.0)]
-    assert scanner._pick_long_call(inside, strategy).strike == 185
-    only_outside = [contract(230, 0.35, 12.0), contract(120, 0.96, 82.0)]
-    assert scanner._pick_long_call(only_outside, strategy) is None
+
+    # Nearest the 0.72 target wins.
+    mixed = [contract(230, 0.35, 12.0), contract(185, 0.74, 39.0), contract(120, 0.93, 82.0)]
+    assert scanner._pick_long_call(mixed, strategy).strike == 185
+
+    # Deeper than target is still eligible when it is all that is on offer.
+    deep_only = [contract(230, 0.35, 12.0), contract(120, 0.93, 82.0)]
+    assert scanner._pick_long_call(deep_only, strategy).strike == 120
+
+    # Everything below the floor -> no candidate.
+    assert scanner._pick_long_call([contract(230, 0.35, 12.0)], strategy) is None

@@ -366,25 +366,26 @@ def _pick_target_short(options: list[OptionContract], target: float) -> Optional
 
 
 def _pick_long_call(options: list[OptionContract], strategy: dict) -> Optional[OptionContract]:
-    """The call to BUY for a LEAPS long call: closest to the SOP's target delta
-    and strictly inside the allowed band.
+    """The call to BUY for a LEAPS long call: at or below the SOP's delta floor,
+    preferring the one nearest the target.
 
-    A hard band, unlike the short-strike picker's forgiving one. The whole case
-    for this trade rests on delta: at 0.70 and up the option is mostly intrinsic
-    value, so it tracks the stock and implied volatility barely touches it. Drift
-    down to 0.50 and you are buying mostly time premium, which is a different
-    (worse) trade wearing the same name. Better to skip an expiration than to
-    quietly hand back the property the strategy depends on.
+    A FLOOR, not a band. Her SOP says "0.70 delta or deeper" and bans
+    out-of-the-money outright, so a 0.85 contract is perfectly valid - it simply
+    behaves more like the shares. Capping at 0.80 would silently skip it.
+
+    Nothing above the floor means no candidate at all for that expiration. That
+    is deliberate: the entire case for this trade is that at 0.70+ the option is
+    mostly intrinsic value, so it tracks the stock and implied volatility barely
+    touches it. Drop to 0.50 and you are buying mostly time premium, which is a
+    different and worse trade wearing the same name.
     """
     entry = strategy.get("entry", {})
-    lo = float(entry.get("long_leg_delta_min", 0.70))
-    hi = float(entry.get("long_leg_delta_max", 0.80))
-    target = float(entry.get("long_leg_delta_target", (lo + hi) / 2))
-    band = [o for o in options
-            if lo - 1e-9 <= o.abs_delta <= hi + 1e-9 and o.mid > 0]
-    if not band:
+    floor = float(entry.get("long_leg_delta_min", 0.70))
+    target = float(entry.get("long_leg_delta_target", floor))
+    eligible = [o for o in options if o.abs_delta >= floor - 1e-9 and o.mid > 0]
+    if not eligible:
         return None
-    return min(band, key=lambda o: abs(o.abs_delta - target))
+    return min(eligible, key=lambda o: abs(o.abs_delta - target))
 
 
 def _sample_evenly(values: list[int], k: int) -> list[int]:

@@ -512,10 +512,18 @@ class DataProvider:
 
         return cache.get_or_fetch(f"optview:{symbol}:{target_dte}", _fetch, 300)
 
-    def get_leaps_candidate(self, symbol: str, target_delta: float = 0.75):
+    def get_leaps_candidate(self, symbol: str, target_delta: Optional[float] = None):
         """The full LEAPS scorecard for one stock: chart, quality, the real
-        contract's economics, and the odds from its own history."""
+        contract's economics, and the odds from its own history.
+
+        target_delta defaults to the SOP's floor rather than a number pinned
+        here, so the Analyze tab and Find a trade cannot price different
+        contracts for the same name.
+        """
         symbol = symbol.upper()
+        if target_delta is None:
+            from src.research import leaps as _leaps
+            target_delta = _leaps.target_delta()
 
         def _fetch():
             from src.research import leaps
