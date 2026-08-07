@@ -116,20 +116,70 @@ def render_news(items: list) -> None:
     st.markdown(f"<div class='ota-news'>{''.join(rows)}</div>", unsafe_allow_html=True)
 
 
-def render_strategy_fit(suggestions: list) -> None:
-    """The ranked strategy board: every index strategy with a fit chip and the
-    one-line reason - a vertical list, so it reads the same on a phone."""
+def _fit_chip(score: float, rank: int) -> str:
+    """The fit label for one strategy, from its SCORE rather than its position.
+
+    Position alone was misleading: in a ranking of nine, third place could be a
+    genuinely good fit or the least-bad of a bad bunch, and the old fixed
+    "1/2/3 · Best/Also workable/Weaker" chips could not tell those apart. A
+    score-based band can, and it also means the chips visibly change as
+    conditions move even when the ORDER happens to hold.
+    """
+    if score >= 1.5:
+        tone, tag = "green", "Strong fit"
+    elif score >= 0.5:
+        tone, tag = "indigo", "Workable"
+    elif score >= -0.5:
+        tone, tag = "amber", "Weak fit"
+    else:
+        tone, tag = "red", "Fighting conditions"
+    return theme.chip(f"{rank} · {tag}", tone)
+
+
+def render_strategy_fit(suggestions: list, show_instrument: bool = False) -> None:
+    """The ranked strategy board: each strategy with a fit chip and the one-line
+    reason - a vertical list, so it reads the same on a phone.
+
+    show_instrument adds what you would trade it on and what you need to already
+    have, which the whole-SOP board needs and the index-only list does not.
+    """
     # Not "today": this is a multi-week read off 20- and 50-day averages, and
     # calling it daily is what made an unchanged-but-correct ranking look stuck.
-    fit_tags = [("green", "Best fit"), ("indigo", "Also workable"),
-                ("amber", "Weaker fit")]
-    for i, s in enumerate(suggestions[:3]):
-        tone, tag = fit_tags[i] if i < len(fit_tags) else ("neutral", "Also possible")
+    for i, s in enumerate(suggestions):
+        # The advanced flag rides next to the fit chip, not buried in the
+        # reason - a good fit score on a strategy that can run away from you
+        # must not read as a simple green light.
+        flag = theme.chip("Advanced", "red") if getattr(s, "advanced", False) else ""
         st.markdown(
-            theme.chip(f"{i + 1} · {tag}", tone)
-            + f" <b>{_htmllib.escape(s.name)}</b>",
+            _fit_chip(getattr(s, "score", 0.0), i + 1)
+            + f" <b>{_htmllib.escape(s.name)}</b> {flag}",
             unsafe_allow_html=True)
         theme.note(s.reason)
+        if show_instrument and getattr(s, "requires", ""):
+            theme.note(f"Needs: {s.requires}.")
+
+
+def render_strategy_board(board: list) -> None:
+    """The whole SOP ranked, split by what you can actually trade it on.
+
+    Split rather than one long list because the two halves answer different
+    questions. The index strategies are the ones you can open today with cash
+    alone; the US-style ones mostly need you to already own something, so a
+    covered call sitting at the top of a single merged list would read as
+    "do this now" when the honest answer is "if you hold 100 shares".
+    """
+    index_side = [s for s in board if s.instrument == "index"]
+    us_side = [s for s in board if s.instrument != "index"]
+
+    if index_side:
+        st.markdown("**On the index (SPX, NDX, RUT, XSP)** - cash-settled, no shares "
+                    "involved, and no early assignment.")
+        render_strategy_fit(index_side)
+    if us_side:
+        st.write("")
+        st.markdown("**On stocks and ETFs** - ranked on the same overall market read. "
+                    "The individual name still has to pass its own check in 💰 Picks.")
+        render_strategy_fit(us_side, show_instrument=True)
 
 
 def render_pulse_grid(rows: list[dict], market_open: bool = True) -> None:

@@ -250,7 +250,12 @@ def _tab_market(settings, provider, strategies) -> None:
     st.divider()
     _soft(_market_brief_section, changes, ctx, pulse_rows, events, settings, what="market brief")
     st.divider()
-    _soft(_market_fit_section, ctx, strategies, what="strategy board")
+    # The same cached series the trend read already used, so this is free.
+    try:
+        fit_closes = provider.get_history_closes(MARKET_READ_SYMBOL)
+    except Exception:
+        fit_closes = []
+    _soft(_market_fit_section, ctx, strategies, fit_closes, what="strategy board")
     st.divider()
     _soft(_market_radar_section, events, what="economic radar")
     st.divider()
@@ -273,24 +278,28 @@ def _soft(render, *args, what: str) -> None:
                    "works. Try again in a minute.")
 
 
-def _market_fit_section(ctx, strategies) -> None:
-    """Every index strategy ranked on trend and volatility, with the numbers
+def _market_fit_section(ctx, strategies, closes=None) -> None:
+    """Every strategy in the SOP ranked on trend and volatility, with the numbers
     that produced the order.
 
-    Rita asked why this "always shows the same". It was right - a 20-vs-50-day
-    trend read holds for weeks, and a replay of a year of SPX had runs of 1 to
-    4 months. But it showed an order with no evidence and a heading that said
-    "today", so a correct, unchanged answer looked broken. It now prints the
-    gap it measured and how big that gap has to be.
+    Rita asked twice why this "always shows the same". Both halves of that were
+    fair. It only ever listed the THREE index strategies, so the other six in
+    her book had no home on this tab. And it scored trend and volatility in
+    coarse buckets - VIX 15 and VIX 24 both landed in "normal" and scored zero -
+    so in practice only the up/down/sideways label moved anything, and that
+    label is a multi-week read. Both inputs are continuous now, and the board
+    covers the whole SOP.
     """
     st.markdown("### 🧭 Which strategy fits the market now")
-    theme.note("Your three index strategies, ranked on **trend** (which way the "
-               "market is leaning) and **volatility** (how much it is swinging). "
-               "These are reasons, not instructions - you check the winner in "
-               "🎯 Find a trade and you decide.")
-    _market_fit_evidence(ctx)
-    if ctx.suggestions:
-        components.render_strategy_fit(ctx.suggestions)
+    theme.note("Your whole strategy book, ranked on **trend** (which way the "
+               "market is leaning, and how hard) and **volatility** (how much it "
+               "is swinging). These are reasons, not instructions - you check the "
+               "winner in 🎯 Find a trade and you decide.")
+    _market_fit_evidence(ctx, closes)
+    board = getattr(ctx, "board", None) or ctx.suggestions
+    if board:
+        components.render_strategy_board(board)
+    st.write("")
     best_key = ctx.best_strategy_key or list(strategies.keys())[0]
     best_name = ctx.best_strategy_name or strategies[best_key]["name"]
     if st.button(f"Set up {best_name} in Find a trade ▸", type="primary", key="mkt_to_build"):
@@ -300,7 +309,7 @@ def _market_fit_section(ctx, strategies) -> None:
         st.success("Loaded into **🎯 Find a trade** - open that tab to scan it.")
 
 
-def _market_fit_evidence(ctx) -> None:
+def _market_fit_evidence(ctx, closes=None) -> None:
     """The two numbers behind the ranking, said out loud.
 
     "Sideways" with nothing behind it looks like the app gave up. "The 20-day
@@ -348,12 +357,37 @@ def _market_fit_evidence(ctx) -> None:
     theme.note(f"**{ctx.underlying} is {ctx.trend}** - {read}.{vix_bit}")
     theme.note("This is a **multi-week** read, not a daily one - averages move "
                "slowly, so the same answer for a month is normal and means "
-               "conditions have not changed. Over the past year this order "
-               "changed about seven times.")
+               "conditions have not changed.")
+    _market_fit_track_record(ctx, closes)
     if ctx.below_200:
         theme.note("It is also trading **below its 200-day average**, which caps "
                    "the read: a market under its long-term average does not get "
                    "called an uptrend even when the short averages turn up.")
+
+
+def _market_fit_track_record(ctx, closes) -> None:
+    """How often this read has ACTUALLY changed, measured from her own history.
+
+    This line used to be fixed text ("changed about seven times") that nothing
+    checked. It is the one number that answers "why is this always the same",
+    so it has to be real - and "it has held this read for 34 trading days" says
+    far more than any explanation of why an unchanged answer is fine.
+    """
+    from src.data.market_context import trend_history
+
+    if not closes:
+        return
+    hist = trend_history(list(closes))
+    if not hist["enough"]:
+        return
+
+    weeks = hist["run"] / 5      # trading days, so a week is 5
+    held = (f"about {weeks:.0f} weeks" if weeks >= 2
+            else f"{hist['run']} trading day" + ("s" if hist["run"] != 1 else ""))
+    theme.note(f"Measured from {ctx.underlying}'s own price history: the trend read "
+               f"changed **{hist['changes']} times** over the last "
+               f"**{hist['days']} trading days**, and it has been "
+               f"**{hist['trend']}** for {held}.")
 
 
 def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:
