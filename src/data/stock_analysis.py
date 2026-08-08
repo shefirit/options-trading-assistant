@@ -62,20 +62,25 @@ def sma(closes: list[float], n: int) -> Optional[float]:
 
 
 def rsi(closes: list[float], period: int = 14) -> Optional[float]:
-    """Relative Strength Index - 0 to 100. Over 70 is 'overbought', under 30 'oversold'."""
-    if len(closes) < period + 1:
-        return None
-    gains, losses = [], []
-    for i in range(-period, 0):
-        change = closes[i] - closes[i - 1]
-        gains.append(max(change, 0.0))
-        losses.append(max(-change, 0.0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 1)
+    """Relative Strength Index - 0 to 100. Over 70 is 'overbought', under 30 'oversold'.
+
+    Delegates to indicators.rsi, which is Wilder's method - the one thinkorswim
+    and TradingView use. This function used to average the last 14 gains and
+    losses on its own, which is NOT RSI: real RSI seeds from the first 14 bars
+    and then smooths forward across the whole series, so every earlier bar still
+    counts. The difference is not cosmetic. On AAPL the two read 47.6 and 40.8,
+    which straddles the line between "healthy" and "getting oversold".
+
+    Worse, the app had three copies of this - a correct one behind the chart and
+    naive ones behind the Overview, LEAPS and Screener tabs - so the same stock
+    showed different momentum depending on which tab she opened. One
+    implementation now, and it is the right one.
+    """
+    from src.engine import indicators
+
+    series = indicators.rsi(closes, period)
+    value = series[-1] if series else None
+    return None if value is None else round(value, 1)
 
 
 def _fmt_big(n: Optional[float]) -> str:

@@ -281,30 +281,34 @@ def sma(values: list[float], length: int) -> Optional[float]:
 
 
 def rsi(values: list[float], period: int = 14) -> Optional[float]:
-    if len(values) < period + 1:
-        return None
-    gains, losses = [], []
-    for i in range(-period, 0):
-        change = values[i] - values[i - 1]
-        gains.append(max(change, 0.0))
-        losses.append(max(-change, 0.0))
-    avg_gain, avg_loss = sum(gains) / period, sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 1)
+    """Wilder's RSI, the last value - one shared implementation.
+
+    This was its own naive average of the last 14 bars, which disagreed with
+    both the chart and thinkorswim. See stock_analysis.rsi for the full note.
+    """
+    from src.data.stock_analysis import rsi as _rsi
+
+    return _rsi(values, period)
 
 
 def weekly_closes(closes: list[float]) -> list[float]:
-    """Squash daily closes into weekly ones (every 5th trading day, last first).
+    """Squash daily closes into weekly ones: every 5th trading day, oldest first.
 
-    Good enough for a weekly oscillator and it means the whole-market scan can
-    run off the same batched daily download rather than a second request.
+    Counted back from the NEWEST bar, which matters. Grouping forward from the
+    oldest bar meant the week boundaries moved whenever the history length
+    changed, so the same latest price produced a different weekly reading
+    depending on how far back the data happened to reach - on AAPL the weekly
+    %K ranged from 67.5 to 75.0 across five one-day shifts of the start date.
+    An indicator has to answer to recent prices, not to how much history a
+    given tab asked for.
+
+    Still an approximation of real calendar weeks (it cannot see holidays), but
+    a stable one, and it lets the whole-market scan run off the same batched
+    daily download rather than a second request.
     """
     if not closes:
         return []
-    weeks = [closes[i:i + 5] for i in range(0, len(closes), 5)]
-    return [w[-1] for w in weeks if w]
+    return [closes[i] for i in range(len(closes) - 1, -1, -5)][::-1]
 
 
 def stochastic(closes: list[float], highs: Optional[list[float]] = None,
@@ -338,14 +342,28 @@ def stochastic(closes: list[float], highs: Optional[list[float]] = None,
 
 
 def realized_vol(closes: list[float], lookback: int = TRADING_DAYS_YEAR) -> Optional[float]:
-    """Annualized realized volatility from daily closes, as a decimal (0.28)."""
-    series = closes[-(lookback + 1):]
+    """Annualized realized volatility from daily closes, as a decimal (0.28).
+
+    Non-finite closes are dropped FIRST, the same as premium_finder does. Yahoo
+    returns the odd NaN close (a holiday boundary, a row with no print) and a
+    single one used to poison the whole calculation there: the standard
+    deviation came out NaN, the IV/HV ratio came out NaN, and every name in the
+    Picks scan was graded "Thin" premium and silently dropped. This copy had the
+    same hole - the LEAPS cost pillar is scored off this number, so one bad row
+    could quietly hand a name an unmeasurable cost score.
+
+    Note the LOOKBACK differs from premium_finder's on purpose: that one reads
+    30 days (near-term volatility, for judging whether option premium is rich),
+    this one reads a year (the horizon a LEAPS is actually held over). Same
+    maths, different question - so the two are expected to disagree.
+    """
+    clean = [c for c in closes
+             if isinstance(c, (int, float)) and math.isfinite(c) and c > 0]
+    series = clean[-(lookback + 1):]
     if len(series) < 30:
         return None
-    rets = []
-    for i in range(1, len(series)):
-        if series[i - 1] > 0:
-            rets.append(math.log(series[i] / series[i - 1]))
+    rets = [math.log(series[i] / series[i - 1]) for i in range(1, len(series))
+            if series[i - 1] > 0]
     if len(rets) < 20:
         return None
     mean = sum(rets) / len(rets)

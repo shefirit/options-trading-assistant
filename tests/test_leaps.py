@@ -45,7 +45,16 @@ STRONG_INFO = {
 
 # ---------- indicators ----------
 def test_weekly_closes_takes_the_last_day_of_each_week():
-    assert leaps.weekly_closes([1, 2, 3, 4, 5, 6, 7]) == [5, 7]
+    """Counted back from the NEWEST bar, so any partial week is the oldest one.
+
+    This deliberately reverses what the function used to do. Grouping forward
+    from the oldest bar (which gave [5, 7] here) left the partial week at the
+    RECENT end and moved every boundary whenever the history length changed -
+    so the same latest price produced a different weekly reading depending on
+    how much history a tab had asked for. See test_indicator_accuracy.py.
+    """
+    assert leaps.weekly_closes([1, 2, 3, 4, 5, 6, 7]) == [2, 7]
+    assert leaps.weekly_closes([1, 2, 3, 4, 5]) == [5]
     assert leaps.weekly_closes([]) == []
 
 
