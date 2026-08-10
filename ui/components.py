@@ -1556,9 +1556,19 @@ def render_story(position, steps: list[dict]) -> None:
                 unsafe_allow_html=True)
 
     if closed:
+        # The opening line covers every leg she opened with, which thinkorswim
+        # may well show as two or three separate fills seconds apart. Without
+        # this she counts 7 rows there against 6 here and goes looking for a
+        # missing fill that was never missing - the exact worry this panel is
+        # meant to settle.
+        multi = len(position.open_legs or position.legs) > 1
+        extra = (" Your opening line here covers every leg you opened with, so "
+                 "thinkorswim may list it as two or three fills seconds apart."
+                 if multi else "")
         theme.note("Those lines are every fill on this trade. Put them next to "
                    "the same trade in thinkorswim - if a line is missing or an "
-                   "amount is different, that is why your result does not match.")
+                   "amount is different, that is why your result does not "
+                   "match." + extra)
     else:
         theme.note("Every fill so far. The last line is money in minus money "
                    "out - on a trade where you bought a long leg it stays "
