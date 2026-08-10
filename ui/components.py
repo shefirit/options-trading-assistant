@@ -7,6 +7,7 @@ yellow means allowed but pay attention, blue is a reminder.
 from __future__ import annotations
 
 import html as _htmllib
+from datetime import date
 
 import altair as alt
 import pandas as pd
@@ -1425,15 +1426,28 @@ def render_protection_read(position, read: dict) -> None:
     theme.note(line)
 
 
+_EARLIEST = date(1900, 1, 1)
+
+
+def by_closed_date(closed: list) -> list:
+    """Closed trades, most recently closed first."""
+    return sorted(closed, key=lambda p: (p.closed_on or p.opened or _EARLIEST),
+                  reverse=True)
+
+
+def by_opened_date(open_pos: list) -> list:
+    """Open trades, most recently opened first."""
+    return sorted(open_pos, key=lambda p: (p.opened or _EARLIEST), reverse=True)
+
+
 def closed_dataframe(closed: list) -> pd.DataFrame:
     rows = []
-    for p in sorted(closed, key=lambda p: (p.closed_on or p.opened or pd.Timestamp.min.date()),
-                    reverse=True):
+    for p in by_closed_date(closed):
         rows.append({
             "Closed": p.closed_on,
+            "Opened": p.opened,
             "Symbol": p.underlying,
             "Strategy": p.strategy_name,
-            "Opened": p.opened,
             "Credit $": p.credit,
             "Rolls $": p.roll_income or None,
             "Cash back $": p.close_cash if p.is_debit else None,
@@ -1442,6 +1456,77 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
             "Why closed": p.exit_reason,
         })
     return pd.DataFrame(rows)
+
+
+def closed_column_config():
+    """The dates as she writes them, and the money without stray decimals.
+
+    This table went out with no column_config at all, so the two date columns
+    rendered as raw timestamps - the one thing on the page she reads by shape
+    rather than by parsing.
+    """
+    return {
+        "Closed": st.column_config.DateColumn(format=DATE_FMT,
+            help="The day you closed it."),
+        "Opened": st.column_config.DateColumn(format=DATE_FMT),
+        "Credit $": st.column_config.NumberColumn(format="$%.0f",
+            help="Premium collected for the short leg at the open. On a PMCC "
+                 "or covered call that is the call only."),
+        "Rolls $": st.column_config.NumberColumn(format="$%.0f",
+            help="Everything the rolls banked over the life of the trade, "
+                 "netted. Blank if you never rolled it."),
+        "Cash back $": st.column_config.NumberColumn(format="$%.0f",
+            help="What closing PAID you - selling the long leg back on a PMCC "
+                 "or covered call."),
+        "Exit cost $": st.column_config.NumberColumn(format="$%.0f",
+            help="What closing COST you - buying a spread or condor back."),
+        "Result $": st.column_config.NumberColumn(format="$%.0f",
+            help="The whole trade, start to finish, roll credits included."),
+        "Why closed": st.column_config.TextColumn(
+            help="The exit rule (or reason) recorded at close."),
+    }
+
+
+def open_dataframe(open_pos: list, today: date | None = None) -> pd.DataFrame:
+    """The open book as a record, newest first.
+
+    Deliberately not a second copy of the open-trades cards above: those answer
+    "what needs doing today" and are priced live. This answers "what is on the
+    books and since when", which is the question the rest of Records is about.
+    """
+    today = today or date.today()
+    rows = []
+    for p in by_opened_date(open_pos):
+        left = p.dte_left(today)
+        rows.append({
+            "Opened": p.opened,
+            "Expires": p.expiration,
+            "Days left": left,
+            "Symbol": p.underlying,
+            "Strategy": p.strategy_name,
+            "Contracts": p.contracts,
+            "Credit $": p.credit,
+            "Banked so far $": p.realized_total,
+        })
+    return pd.DataFrame(rows)
+
+
+def open_column_config():
+    return {
+        "Opened": st.column_config.DateColumn(format=DATE_FMT,
+            help="The day you placed it."),
+        "Expires": st.column_config.DateColumn(format=DATE_FMT,
+            help="When the nearest leg expires. A roll moves this out."),
+        "Days left": st.column_config.NumberColumn(format="%d",
+            help="Calendar days to that expiration. Your SOP closes or rolls "
+                 "at 21."),
+        "Credit $": st.column_config.NumberColumn(format="$%.0f",
+            help="Premium collected for the short leg you hold right now."),
+        "Banked so far $": st.column_config.NumberColumn(format="$%.0f",
+            help="Roll credits already banked on this trade. That money is "
+                 "yours whatever the trade does from here. Blank until you "
+                 "roll it the first time."),
+    }
 
 
 # ============================================================ the whole story

@@ -141,7 +141,27 @@ def _pick(positions: list, labels: list[str], key: str, prompt: str):
     return by_id.get(chosen)
 
 
-def _story_panel(tracked: list, labels: list[str]) -> None:
+def _open_label(p) -> str:
+    """Date first, because these lists are read as a diary.
+
+    Leading with the symbol meant scanning a column of tickers to find "the one
+    from the end of July"; leading with the date puts the lists in the order
+    she thinks in, and the picker is already sorted that way.
+    """
+    return (f"{components.fmt_date(p.opened)}  ·  {p.underlying}  ·  "
+            f"{components.short_strategy(p.strategy_name)}"
+            + (f"  ·  banked ${p.realized_total:,.0f} so far"
+               if p.realized_total else ""))
+
+
+def _closed_label(p) -> str:
+    return (f"{components.fmt_date(p.closed_on)}  ·  {p.underlying}  ·  "
+            f"{components.short_strategy(p.strategy_name)}"
+            f"  ·  {'+' if (p.realized_total or 0) >= 0 else '-'}"
+            f"${abs(p.realized_total or 0):,.0f}")
+
+
+def _story_panel(open_pos: list, closed: list) -> None:
     """One trade, told move by move, from the opening fill to the closing one.
 
     "All closed trades" gives one line per trade, and on anything she rolled
@@ -149,15 +169,40 @@ def _story_panel(tracked: list, labels: list[str]) -> None:
     three fills that had never been logged and a fourth logged at half its
     size, and the one-line view could not have shown any of them.
 
+    Open and closed are picked separately. In one mixed list the two kinds
+    answer different questions - "how is this going" against "how did this end"
+    - and a trade opened in June sorted in among trades closed in August, which
+    is not an order anything reads in. Each list is now newest first on its own
+    date: opened for the open book, closed for the closed one.
+
     Top level, not nested inside the closed-trades expander: an expander two
     deep collapses on every rerun. Keyed for the same reason.
     """
-    if not tracked:
+    open_pos = [p for p in components.by_opened_date(open_pos) if p.trade_id]
+    closed = [p for p in components.by_closed_date(closed) if p.trade_id]
+    if not open_pos and not closed:
         return
+
     with st.expander("📖 See one trade from start to finish", key="trade_story"):
         theme.note("Pick a trade and see every move you made on it, in order, "
-                   "with what each one paid you or cost you.")
-        p = _pick(tracked, labels, "story_pick", "Which trade")
+                   "with what each one paid you or cost you. Newest first.")
+
+        choices = []
+        if open_pos:
+            choices.append(f"Still open ({len(open_pos)})")
+        if closed:
+            choices.append(f"Closed ({len(closed)})")
+        which = (st.radio("Which book", choices, horizontal=True,
+                          key="story_side", label_visibility="collapsed")
+                 if len(choices) > 1 else choices[0])
+
+        if which.startswith("Still open"):
+            p = _pick(open_pos, [_open_label(x) for x in open_pos],
+                      "story_pick_open", "Which open trade")
+        else:
+            p = _pick(closed, [_closed_label(x) for x in closed],
+                      "story_pick_closed", "Which closed trade")
+
         if p is not None:
             from src.engine import positions as pos_mod
             components.render_story(p, pos_mod.story(p))
@@ -184,39 +229,38 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
     """
     theme.section("Correct and look back", "Records")
 
-    fixable = [p for p in closed if p.trade_id]
-    tracked = [p for p in list(open_pos) + list(closed) if p.trade_id]
-    if tracked:
-        _story_panel(tracked, [
-            f"{p.underlying}  ·  {p.strategy_name}  ·  "
-            + (f"closed {components.fmt_date(p.closed_on)}"
-               if p.status == "closed"
-               else f"opened {components.fmt_date(p.opened)} · still open")
-            + (f"  ·  result ${p.realized_total:,.0f}"
-               if p.realized_total is not None else "")
-            for p in tracked])
+    fixable = components.by_closed_date([p for p in closed if p.trade_id])
+    _story_panel(open_pos, closed)
 
     if fixable:
-        _fix_close_form(fixable, [
-            f"{p.underlying}  ·  {p.strategy_name}  ·  "
-            f"closed {components.fmt_date(p.closed_on)}"
-            f"  ·  result ${(p.realized_total or 0):,.0f}" for p in fixable])
+        _fix_close_form(fixable, [_closed_label(p) for p in fixable])
+
+    if open_pos:
+        with st.expander(f"📂 All open trades ({len(open_pos)})",
+                         key="open_table"):
+            theme.note("Everything still on the books, most recently opened "
+                       "first. What each one is doing right now, and what needs "
+                       "a decision today, is in **Your open trades** further up "
+                       "the tab - this is the record of what you hold and since "
+                       "when.")
+            st.dataframe(components.open_dataframe(open_pos), width="stretch",
+                         hide_index=True,
+                         column_config=components.open_column_config())
 
     if closed:
         with st.expander(f"📓 All closed trades ({len(closed)})",
                          key="closed_table"):
+            theme.note("Every finished trade, most recently closed first.")
             st.dataframe(components.closed_dataframe(closed), width="stretch",
-                         hide_index=True)
+                         hide_index=True,
+                         column_config=components.closed_column_config())
             if fixable:
                 st.divider()
                 theme.note("Delete a closed trade you only entered as a test:")
                 # Two closes matching on every field would have shared one
                 # dictionary key, and deleting the visible one would have
                 # removed the wrong row.
-                labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
-                          f"closed {components.fmt_date(p.closed_on)}  ·  "
-                          f"result ${(p.realized_total or 0):,.0f}"
-                          for i, p in enumerate(fixable)]
+                labels = [_closed_label(p) for p in fixable]
                 cp = _pick(fixable, labels, "del_closed_pick",
                            "Closed trade to delete")
                 if cp is not None:
@@ -224,7 +268,7 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                                     labels[fixable.index(cp)],
                                     key=f"closed_{cp.trade_id}")
 
-    deletable = [p for p in open_pos if p.trade_id]
+    deletable = components.by_opened_date([p for p in open_pos if p.trade_id])
     if deletable:
         with st.expander("🗑️ Delete an open trade (logged by mistake / just testing)",
                          key="del_open_wrap"):
@@ -232,9 +276,7 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                        "If you actually placed the trade and it is finished, "
                        "**close** it on its card instead, so your results stay "
                        "honest.")
-            labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
-                      f"opened {components.fmt_date(p.opened)}"
-                      for i, p in enumerate(deletable)]
+            labels = [_open_label(p) for p in deletable]
             op = _pick(deletable, labels, "del_open_pick", "Open trade to delete")
             if op is not None:
                 _delete_control(op.trade_id, labels[deletable.index(op)],

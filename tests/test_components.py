@@ -392,3 +392,88 @@ def test_the_score_card_still_badges_a_fund_and_a_company():
                             "profitMargins": 0.25, "revenueGrowth": 0.10},
                    closes, avg_volume=50_000_000)
     assert aapl.grade in _score_card(aapl, {})
+
+
+# ================================================ Records: open and closed apart
+# Rita's ask: "separate records between open trades and closed trades - by
+# dates (european style dates)". Both halves of that are load-bearing - the two
+# kinds answer different questions, and every date on the page is DD/MM/YYYY.
+def _pos(**kw):
+    import datetime as dt
+
+    from src.engine.positions import Position
+
+    base = dict(trade_id="t", underlying="SPY", strategy_name="Iron Condor",
+                opened=dt.date(2026, 6, 1), credit=100.0, status="open")
+    return Position(**{**base, **kw})
+
+
+def test_both_records_tables_format_every_date_the_european_way():
+    from ui.components import DATE_FMT, closed_column_config, open_column_config
+
+    for cfg, cols in ((closed_column_config(), ("Closed", "Opened")),
+                      (open_column_config(), ("Opened", "Expires"))):
+        for col in cols:
+            assert col in cfg, f"{col} has no column config"
+            assert (getattr(cfg[col], "format", None) == DATE_FMT
+                    or DATE_FMT in str(cfg[col])), f"{col} is not {DATE_FMT}"
+
+
+def test_open_records_are_newest_opened_first():
+    import datetime as dt
+
+    from ui.components import by_opened_date, open_dataframe
+
+    old = _pos(trade_id="a", opened=dt.date(2026, 6, 1))
+    new = _pos(trade_id="b", opened=dt.date(2026, 8, 7))
+    mid = _pos(trade_id="c", opened=dt.date(2026, 7, 4))
+    assert [p.trade_id for p in by_opened_date([old, new, mid])] == ["b", "c", "a"]
+
+    frame = open_dataframe([old, new, mid], today=dt.date(2026, 8, 10))
+    # A real date, not a pre-formatted string: "01/06" would sort above "07/08".
+    assert frame["Opened"].iloc[0] == dt.date(2026, 8, 7)
+
+
+def test_closed_records_are_newest_closed_first_not_newest_opened():
+    """A trade opened in June and closed in August belongs at the top of the
+    closed list and the bottom of the open one - the two orders differ."""
+    import datetime as dt
+
+    from ui.components import by_closed_date, closed_dataframe
+
+    early = _pos(trade_id="a", opened=dt.date(2026, 7, 20), status="closed",
+                 closed_on=dt.date(2026, 7, 24), realized_pl=50.0)
+    late = _pos(trade_id="b", opened=dt.date(2026, 6, 1), status="closed",
+                closed_on=dt.date(2026, 8, 10), realized_pl=90.0)
+    assert [p.trade_id for p in by_closed_date([early, late])] == ["b", "a"]
+    assert closed_dataframe([early, late])["Closed"].iloc[0] == dt.date(2026, 8, 10)
+
+
+def test_open_records_carry_roll_credits_already_banked():
+    """The one number that makes an open trade a record rather than a wait:
+    money a roll already paid her is hers whatever happens next."""
+    import datetime as dt
+
+    from src.engine.positions import RollEvent
+    from ui.components import open_dataframe
+
+    p = _pos(expiration=dt.date(2026, 9, 4),
+             rolls=[RollEvent(rolled_on=dt.date(2026, 7, 1), cash=300.0),
+                    RollEvent(rolled_on=dt.date(2026, 8, 1), cash=235.0)])
+    frame = open_dataframe([p], today=dt.date(2026, 8, 10))
+    assert frame["Banked so far $"].iloc[0] == 535.0
+    assert frame["Days left"].iloc[0] == 25
+
+
+def test_the_two_records_pickers_lead_with_the_date():
+    """Leading with the symbol meant scanning tickers to find "the one from the
+    end of July". These lists are read as a diary."""
+    import datetime as dt
+
+    from ui.trades.records import _closed_label, _open_label
+
+    assert _open_label(_pos(opened=dt.date(2026, 8, 3))).startswith("03/08/2026")
+    closed = _closed_label(_pos(status="closed", closed_on=dt.date(2026, 8, 10),
+                                realized_pl=1515.0))
+    assert closed.startswith("10/08/2026")
+    assert "+$1,515" in closed
