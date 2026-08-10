@@ -874,10 +874,9 @@ def story(position: Position) -> list[dict[str, Any]]:
     """
     steps: list[dict[str, Any]] = []
 
-    opened_word = "Opened - collected" if position.open_cash > 0 else "Opened - paid"
     steps.append({
         "on": position.opened,
-        "what": opened_word,
+        "what": "You opened the trade",
         "detail": _open_detail(position),
         "cash": round(position.open_cash, 2),
         "kind": "open",
@@ -900,9 +899,9 @@ def story(position: Position) -> list[dict[str, Any]]:
     for r in position.rolls:
         steps.append({
             "on": r.rolled_on,
-            "what": ("Sold a call" if r.new_strike is not None and r.cash > 0
-                     else "Bought the call back" if r.new_strike is None
-                     else "Rolled"),
+            "what": ("You sold a call" if r.new_strike is not None and r.cash > 0
+                     else "You bought the call back" if r.new_strike is None
+                     else "You rolled the call"),
             "detail": r.note or _roll_detail(r),
             "cash": round(r.cash, 2),
             "kind": "roll",
@@ -914,7 +913,7 @@ def story(position: Position) -> list[dict[str, Any]]:
             cash = -(position.exit_cost or 0.0)
         steps.append({
             "on": position.closed_on,
-            "what": "Closed - collected" if cash > 0 else "Closed - paid",
+            "what": "You closed the trade",
             "detail": position.exit_reason or "Closed",
             "cash": round(float(cash), 2),
             "kind": "close",
@@ -932,16 +931,30 @@ def _open_detail(position: Position) -> str:
     legs = position.open_legs or position.legs
     bought = [leg for leg in legs if leg.action == Action.BUY]
     sold = [leg for leg in legs if leg.action == Action.SELL]
+
+    def names(group) -> str:
+        return "the " + _and(f"{leg.strike:g} {leg.option_type.value}"
+                             for leg in group)
+
     parts = []
-    if bought:
-        parts.append("bought " + ", ".join(
-            f"{leg.strike:g} {leg.option_type.value}" for leg in bought))
-    if sold:
-        parts.append("sold " + ", ".join(
-            f"{leg.strike:g} {leg.option_type.value}" for leg in sold))
     if position.shares_cost > 0:
-        parts.insert(0, f"bought {position.contracts * 100} shares")
-    return "; ".join(parts) if parts else (position.note or "Opened")
+        parts.append(f"Bought {position.contracts * 100} shares")
+    if bought:
+        parts.append(("bought " if parts else "Bought ") + names(bought))
+    if sold:
+        parts.append(("sold " if parts else "Sold ") + names(sold))
+    # Comma between the buying and the selling, "and" only inside each side -
+    # "bought the 705 put and the 800 call and sold the 715 put" reads as one
+    # runaway sentence with no seam where the trade actually splits.
+    return ", ".join(parts) if parts else (position.note or "Opened the trade")
+
+
+def _and(items) -> str:
+    """"a, b and c" - the way she would say it, not "a, b, c"."""
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _roll_detail(roll: RollEvent) -> str:

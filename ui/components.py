@@ -1445,64 +1445,124 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
 
 
 # ============================================================ the whole story
-def story_dataframe(steps: list[dict]) -> pd.DataFrame:
-    """positions.story() as a table she can read top to bottom."""
-    return pd.DataFrame([{
-        "Date": s["on"],
-        "What happened": s["what"],
-        "Details": s["detail"],
-        "Money in / out $": s["cash"],
-        "Running total $": s["running"],
-    } for s in steps])
+def _story_esc(text) -> str:
+    """Escape for HTML, then neutralise any dollar sign.
+
+    Every string here came out of her own log - strategy names, roll notes she
+    typed herself - and a raw pair of dollar signs turns Streamlit's markdown
+    into LaTeX and garbles the line.
+    """
+    return _htmllib.escape(str(text), quote=True).replace("$", "&#36;")
 
 
-def story_column_config():
-    return {
-        "Date": st.column_config.DateColumn(format=DATE_FMT),
-        "What happened": st.column_config.TextColumn(width="medium"),
-        "Details": st.column_config.TextColumn(width="large"),
-        "Money in / out $": st.column_config.NumberColumn(format="$%.2f",
-            help="What moved in your account that day. Positive is money you "
-                 "collected, negative is money you paid out."),
-        "Running total $": st.column_config.NumberColumn(format="$%.2f",
-            help="Every line above added up. On a trade you have bought (a "
-                 "PMCC or covered call) this starts deeply negative because "
-                 "you paid for the long leg, and only turns positive when you "
-                 "sell it back at the end."),
-    }
+def _story_amount(cash: float) -> str:
+    """One signed amount, coloured and with its sign spelled out.
+
+    The sign is on the number rather than only in the colour: green and red
+    alone would leave the whole column meaningless to anyone who cannot
+    separate them, and this column is the entire point of the panel.
+    """
+    if round(cash) == 0:              # "+$0" reads as a thing that happened
+        return '<span class="ota-story-amt">&#36;0</span>'
+    cls = "ota-story-in" if cash > 0 else "ota-story-out"
+    sign = "+" if cash > 0 else "-"
+    return (f'<span class="ota-story-amt {cls}">{sign}&#36;'
+            f'{abs(cash):,.0f}</span>')
+
+
+def _story_row(n: str, when: str, what: str, detail: str, cash,
+               extra: str = "") -> str:
+    amount = _story_amount(cash) if cash is not None else ""
+    body = f'<div>{_story_esc(what)}</div>'
+    if detail:
+        body += f'<div class="ota-story-detail">{_story_esc(detail)}</div>'
+    return (f'<div class="ota-story-row {extra}">'
+            f'<div class="ota-story-n">{_story_esc(n)}</div>'
+            f'<div class="ota-story-date">{_story_esc(when)}</div>'
+            f'<div class="ota-story-what">{body}</div>'
+            f'{amount}</div>')
 
 
 def render_story(position, steps: list[dict]) -> None:
-    """One trade from the first fill to the last, with a running total.
+    """One trade from the first fill to the last, as a list she can read.
 
-    The point is that the LAST running total IS the result in the table above.
-    A trade she rolled nine times used to be a single number with nothing
-    behind it, so a fill she forgot to log looked exactly like a fill she made
-    no money on. Laid out line by line, a missing fill is visible.
+    This was a dataframe with a "Running total" column, and Rita's verdict was
+    "not friendly and not clear" - fairly. On a PMCC the running total sits
+    around -14,000 for a dozen rows before the close flips it positive, so a
+    trade that made $1,515 read like a disaster until the very last line.
+
+    What she actually needs answering is two questions, and they are now two
+    separate things on the screen: "did this work" is the result at the top,
+    and "does this match thinkorswim" is one line per fill with the paid /
+    collected / result block underneath that visibly adds up.
     """
     if not steps:
         return
-    st.dataframe(story_dataframe(steps), width="stretch", hide_index=True,
-                 column_config=story_column_config())
 
+    paid = sum(s["cash"] for s in steps if s["cash"] < 0)
+    took = sum(s["cash"] for s in steps if s["cash"] > 0)
     final = steps[-1]["running"]
-    paid_in = sum(s["cash"] for s in steps if s["cash"] < 0)
-    took_out = sum(s["cash"] for s in steps if s["cash"] > 0)
     closed = steps[-1]["kind"] == "close"
 
+    # ---- the header: what this trade was, and how it ended
+    when = fmt_date(position.opened)
     if closed:
-        word = "made" if final >= 0 else "lost"
-        theme.note(
-            f"Across **{len(steps)} moves** you paid out **\\${abs(paid_in):,.0f}** "
-            f"and collected **\\${took_out:,.0f}**, so you {word} "
-            f"**\\${abs(final):,.0f}** on this trade. That last Running total is "
-            "the same number as the Result in the table above - if it does not "
-            "match what thinkorswim shows you, a fill is missing from your log.")
+        when += f" &rarr; {fmt_date(position.closed_on)}"
+        days = ((position.closed_on - position.opened).days
+                if position.closed_on and position.opened else None)
+        if days is not None:
+            when += f" &middot; {days} day{'' if days == 1 else 's'}"
     else:
-        theme.note(
-            f"Still open. So far you have paid out **\\${abs(paid_in):,.0f}** and "
-            f"collected **\\${took_out:,.0f}**. The Running total is not a "
-            "profit yet - it turns into one on the day you close.")
+        when += " &middot; still open"
+    when += (f" &middot; {len(steps)} move{'' if len(steps) == 1 else 's'}")
+
+    if closed:
+        tone = "ota-story-in" if final >= 0 else "ota-story-out"
+        word = "You made" if final >= 0 else "You lost"
+        headline = (f'<div class="ota-story-result {tone}">{word} &#36;'
+                    f'{abs(final):,.0f}</div>')
+        risked = position.capital_at_risk
+        if risked > 0:
+            pct = final / risked * 100
+            sub = (f"{pct:+.1f}% on the &#36;{risked:,.0f} this trade "
+                   "tied up")
+        else:
+            sub = "Every fill from the day you opened it to the day you closed it"
+    else:
+        headline = (f'<div class="ota-story-result" style="color:{theme.INK};">'
+                    f'&#36;{took + paid:,.0f} so far</div>')
+        sub = "Not a profit yet - it becomes one on the day you close"
+
+    head = (f'<div class="ota-story-head">'
+            f'<div class="ota-story-title">{_story_esc(position.underlying)} '
+            f'&middot; {_story_esc(short_strategy(position.strategy_name))}</div>'
+            f'<div class="ota-story-when">{when}</div>'
+            f'{headline}'
+            f'<div class="ota-story-resultsub">{sub}</div></div>')
+
+    # ---- one line per fill, numbered so she can count them against TOS
+    body = "".join(
+        _story_row(str(i), fmt_date(s["on"]), s["what"], s["detail"], s["cash"])
+        for i, s in enumerate(steps, 1))
+
+    # ---- the arithmetic, spelled out
+    summary = (
+        _story_row("", "", "Money you paid out", "", paid, "ota-story-sum")
+        + _story_row("", "", "Money you collected", "", took)
+        + _story_row("", "", "Result" if closed else "Where that leaves you",
+                     "", final, "ota-story-final"))
+
+    st.markdown(f'<div class="ota-story">{head}{body}{summary}</div>',
+                unsafe_allow_html=True)
+
+    if closed:
+        theme.note("Those lines are every fill on this trade. Put them next to "
+                   "the same trade in thinkorswim - if a line is missing or an "
+                   "amount is different, that is why your result does not match.")
+    else:
+        theme.note("Every fill so far. The last line is money in minus money "
+                   "out - on a trade where you bought a long leg it stays "
+                   "negative until you sell that leg back at the close.")
 
 
 # ================================================================== month view

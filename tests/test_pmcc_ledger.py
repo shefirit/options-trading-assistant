@@ -693,9 +693,8 @@ def test_story_names_the_strikes_she_opened_with_not_the_rolled_ones():
     gone by the time anyone reads it back."""
     p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
     opened = story(p)[0]["detail"]
-    assert "130 call" in opened      # what she actually sold on day one
+    assert opened == "Bought the 100 call, sold the 130 call"
     assert "135" not in opened       # where the roll moved it later
-    assert "100 call" in opened      # the LEAPS she bought
 
 
 def test_story_on_an_open_trade_stops_at_the_last_roll():
@@ -709,7 +708,7 @@ def test_story_shows_a_buy_back_with_nothing_written_as_money_out():
     back = build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
                           cash=-120.0, rolled_on=date(2026, 4, 6))
     steps = story(parse_rows(COLUMNS, [_open_row(), back])[0])
-    assert steps[1]["what"] == "Bought the call back"
+    assert steps[1]["what"] == "You bought the call back"
     assert steps[1]["cash"] == -120.0
     assert steps[1]["running"] == OPEN_CASH - 120.0
 
@@ -732,7 +731,6 @@ def test_story_of_a_credit_spread_starts_positive():
                             realized_pl=110.0, reason="Profit target (50%) hit",
                             closed_on=date(2026, 3, 20), close_cash=-90.0)
     steps = story(parse_rows(COLUMNS, [row, close])[0])
-    assert steps[0]["what"] == "Opened - collected"
-    assert steps[0]["cash"] == 200.0
-    assert steps[-1]["what"] == "Closed - paid"
+    assert steps[0]["cash"] == 200.0          # collected, not paid
+    assert steps[-1]["cash"] == -90.0        # paying to close is the mirror
     assert steps[-1]["running"] == 110.0

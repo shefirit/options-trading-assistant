@@ -42,9 +42,9 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
         theme.note("Recorded a close with the wrong fill price? Put the right number "
                    "in here. Nothing is deleted - the app writes a correction that "
                    "replaces the old figure, and you can correct it again if needed.")
-        i = st.selectbox("Which close", range(len(closed)),
-                         format_func=lambda n: labels[n], key="fix_close_pick")
-        p = closed[int(i)]
+        p = _pick(closed, labels, "fix_close_pick", "Which close")
+        if p is None:
+            return
         was_result = float(p.realized_pl or 0.0)
         # The stored figure is the open-and-close round trip only. Every number
         # she READS here adds the roll income back on, because that is the
@@ -119,6 +119,28 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
+def _pick(positions: list, labels: list[str], key: str, prompt: str):
+    """A trade picker keyed on Trade ID rather than on list position.
+
+    THIS IS NOT COSMETIC. Every picker here used `range(len(...))` as its
+    options, so Streamlit saw the identical option list - 0, 1, 2 - whether it
+    was showing the real book or the practice one. Switching accounts changed
+    the trades behind those numbers and left the widget certain nothing had
+    happened: it kept showing the label it had already drawn while the panel
+    below rendered a completely different trade. Rita caught it as a SOFI
+    heading over an iron condor's numbers.
+
+    Trade IDs differ between books, so the options genuinely change and
+    Streamlit resets the selection instead of carrying a stale one across.
+    Returns the chosen Position, or None if the log changed underneath it.
+    """
+    by_id = {p.trade_id: p for p in positions}
+    text = dict(zip(by_id, labels))
+    chosen = st.selectbox(prompt, list(by_id),
+                          format_func=lambda t: text.get(t, t), key=key)
+    return by_id.get(chosen)
+
+
 def _story_panel(tracked: list, labels: list[str]) -> None:
     """One trade, told move by move, from the opening fill to the closing one.
 
@@ -133,14 +155,12 @@ def _story_panel(tracked: list, labels: list[str]) -> None:
     if not tracked:
         return
     with st.expander("📖 See one trade from start to finish", key="trade_story"):
-        theme.note("Every move on one trade, in order, with a running total. "
-                   "The last Running total is the trade's result - so if it "
-                   "does not match thinkorswim, something is missing here.")
-        i = st.selectbox("Which trade", range(len(tracked)),
-                         format_func=lambda n: labels[n], key="story_pick")
-        from src.engine import positions as pos_mod
-        p = tracked[int(i)]
-        components.render_story(p, pos_mod.story(p))
+        theme.note("Pick a trade and see every move you made on it, in order, "
+                   "with what each one paid you or cost you.")
+        p = _pick(tracked, labels, "story_pick", "Which trade")
+        if p is not None:
+            from src.engine import positions as pos_mod
+            components.render_story(p, pos_mod.story(p))
 
 
 def _records_section(settings, strategies, provider, closed, legacy, bp_used,
@@ -197,10 +217,12 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                           f"closed {components.fmt_date(p.closed_on)}  ·  "
                           f"result ${(p.realized_total or 0):,.0f}"
                           for i, p in enumerate(fixable)]
-                idx = st.selectbox("Closed trade to delete", range(len(fixable)),
-                                   format_func=lambda i: labels[i], key="del_closed_pick")
-                cp = fixable[int(idx)]
-                _delete_control(cp.trade_id, labels[int(idx)], key=f"closed_{cp.trade_id}")
+                cp = _pick(fixable, labels, "del_closed_pick",
+                           "Closed trade to delete")
+                if cp is not None:
+                    _delete_control(cp.trade_id,
+                                    labels[fixable.index(cp)],
+                                    key=f"closed_{cp.trade_id}")
 
     deletable = [p for p in open_pos if p.trade_id]
     if deletable:
@@ -213,12 +235,10 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
             labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
                       f"opened {components.fmt_date(p.opened)}"
                       for i, p in enumerate(deletable)]
-            idx = st.selectbox("Open trade to delete", range(len(deletable)),
-                               format_func=lambda i: labels[i],
-                               key="del_open_pick")
-            op = deletable[int(idx)]
-            _delete_control(op.trade_id, labels[int(idx)],
-                            key=f"open_{op.trade_id}")
+            op = _pick(deletable, labels, "del_open_pick", "Open trade to delete")
+            if op is not None:
+                _delete_control(op.trade_id, labels[deletable.index(op)],
+                                key=f"open_{op.trade_id}")
 
     if legacy:
         with st.expander(f"🗄️ Trades logged before tracking existed ({len(legacy)})"):

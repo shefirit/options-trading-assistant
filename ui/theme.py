@@ -297,6 +297,46 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-pulse-sym  {{ font-size: 0.72rem; font-weight: 600; color: #35463D; }}
 .ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK}; }}
 
+/* ---------------- one trade, told move by move ----------------
+   A list, not a dataframe. The first version of this was a glide-grid with a
+   "Running total" column, and on a PMCC that column reads -14,360 for twelve
+   rows before turning positive at the close - which looks like a catastrophe
+   rather than a trade that made money. What answers "did this work" is the
+   paid/collected/result block at the bottom, and what answers "does it match
+   my broker" is one readable line per fill. Neither needed a grid. */
+.ota-story {{ border: 1px solid {BORDER}; border-radius: 14px; overflow: hidden;
+              background: {CARD}; }}
+.ota-story-head {{ background: {TILE}; border-bottom: 1px solid {BORDER};
+                   padding: 14px 16px; }}
+.ota-story-title {{ font-size: 1.12rem; font-weight: 800; color: {INK}; }}
+.ota-story-when {{ font-size: 0.92rem; font-weight: 600; color: {SECONDARY};
+                   margin-top: 2px; }}
+.ota-story-result {{ font-size: 1.7rem; font-weight: 800; margin-top: 8px;
+                     line-height: 1.25; }}
+.ota-story-resultsub {{ font-size: 0.92rem; font-weight: 600; color: {CAPTION}; }}
+.ota-story-row {{ display: flex; align-items: baseline; gap: 12px;
+                  padding: 11px 16px; border-bottom: 1px solid {BORDER}; }}
+.ota-story-row:last-child {{ border-bottom: none; }}
+.ota-story-n {{ flex: 0 0 26px; font-size: 0.86rem; font-weight: 800;
+                color: {SECONDARY}; }}
+.ota-story-date {{ flex: 0 0 96px; font-size: 0.9rem; font-weight: 700;
+                   color: {CAPTION}; }}
+.ota-story-what {{ flex: 1 1 auto; font-size: 0.99rem; color: {INK};
+                   font-weight: 600; }}
+.ota-story-detail {{ font-size: 0.88rem; color: {SECONDARY}; font-weight: 500;
+                     margin-top: 2px; }}
+.ota-story-amt {{ flex: 0 0 auto; font-size: 1.02rem; font-weight: 800;
+                  text-align: right; white-space: nowrap; }}
+/* Darker than the chip pair (#0A5C3F / #99271A), which land at ~7.3:1 on the
+   tile fill - under her ~9:1 floor. These clear it on both backgrounds, and
+   the amounts carry a + or - anyway so the colour is never the only signal. */
+.ota-story-in  {{ color: #08492F; }}
+.ota-story-out {{ color: #7A1E14; }}
+.ota-story-sum {{ background: {TILE}; border-top: 2px solid {BORDER_STRONG}; }}
+.ota-story-sum .ota-story-what {{ font-weight: 800; }}
+.ota-story-final .ota-story-what,
+.ota-story-final .ota-story-amt {{ font-size: 1.14rem; font-weight: 800; }}
+
 /* ---------------- the KPI row (laptop first, phone second) ----------------
    A GRID, not the flex row .ota-tiles uses. With flex: 1 1 <basis> six cards
    wrapping four-and-two stretches the last two to half the width each, and a
@@ -449,6 +489,13 @@ a {{ color: {ACCENT_DARK}; }}
     .stTabs [data-baseweb="tab"] p {{ font-size: 0.98rem !important; }}
     .ota-tile {{ flex: 1 1 42%; min-width: 42%; }}
     .ota-pulse-tile {{ flex: 1 1 30%; min-width: 30%; }}
+    /* The step number and the date stop being their own columns - on 375px
+       that leaves about nine characters for the sentence that matters. */
+    .ota-story-row {{ flex-wrap: wrap; gap: 4px 10px; padding: 10px 12px; }}
+    .ota-story-n {{ flex: 0 0 auto; }}
+    .ota-story-date {{ flex: 0 0 auto; }}
+    .ota-story-what {{ flex: 1 1 100%; order: 3; }}
+    .ota-story-amt {{ flex: 1 1 auto; order: 2; }}
     .ota-section-title {{ font-size: 1.35rem; }}
     /* Two KPI cards a row rather than auto-fit's one: six numbers should still
        be three swipes, not six. */
