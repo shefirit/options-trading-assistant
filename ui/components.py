@@ -1444,6 +1444,67 @@ def closed_dataframe(closed: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ============================================================ the whole story
+def story_dataframe(steps: list[dict]) -> pd.DataFrame:
+    """positions.story() as a table she can read top to bottom."""
+    return pd.DataFrame([{
+        "Date": s["on"],
+        "What happened": s["what"],
+        "Details": s["detail"],
+        "Money in / out $": s["cash"],
+        "Running total $": s["running"],
+    } for s in steps])
+
+
+def story_column_config():
+    return {
+        "Date": st.column_config.DateColumn(format=DATE_FMT),
+        "What happened": st.column_config.TextColumn(width="medium"),
+        "Details": st.column_config.TextColumn(width="large"),
+        "Money in / out $": st.column_config.NumberColumn(format="$%.2f",
+            help="What moved in your account that day. Positive is money you "
+                 "collected, negative is money you paid out."),
+        "Running total $": st.column_config.NumberColumn(format="$%.2f",
+            help="Every line above added up. On a trade you have bought (a "
+                 "PMCC or covered call) this starts deeply negative because "
+                 "you paid for the long leg, and only turns positive when you "
+                 "sell it back at the end."),
+    }
+
+
+def render_story(position, steps: list[dict]) -> None:
+    """One trade from the first fill to the last, with a running total.
+
+    The point is that the LAST running total IS the result in the table above.
+    A trade she rolled nine times used to be a single number with nothing
+    behind it, so a fill she forgot to log looked exactly like a fill she made
+    no money on. Laid out line by line, a missing fill is visible.
+    """
+    if not steps:
+        return
+    st.dataframe(story_dataframe(steps), width="stretch", hide_index=True,
+                 column_config=story_column_config())
+
+    final = steps[-1]["running"]
+    paid_in = sum(s["cash"] for s in steps if s["cash"] < 0)
+    took_out = sum(s["cash"] for s in steps if s["cash"] > 0)
+    closed = steps[-1]["kind"] == "close"
+
+    if closed:
+        word = "made" if final >= 0 else "lost"
+        theme.note(
+            f"Across **{len(steps)} moves** you paid out **\\${abs(paid_in):,.0f}** "
+            f"and collected **\\${took_out:,.0f}**, so you {word} "
+            f"**\\${abs(final):,.0f}** on this trade. That last Running total is "
+            "the same number as the Result in the table above - if it does not "
+            "match what thinkorswim shows you, a fill is missing from your log.")
+    else:
+        theme.note(
+            f"Still open. So far you have paid out **\\${abs(paid_in):,.0f}** and "
+            f"collected **\\${took_out:,.0f}**. The Running total is not a "
+            "profit yet - it turns into one on the day you close.")
+
+
 # ================================================================== month view
 def _month_result_word(position, tag: str) -> str:
     """One plain-English word for how this trade sits in THIS month's list."""

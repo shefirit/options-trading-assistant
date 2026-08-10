@@ -94,6 +94,10 @@ class Position(BaseModel):
     passed_sop: str = ""
     note: str = ""
     legs: list[Leg] = Field(default_factory=list)
+    # The legs exactly as she opened them. `legs` tracks what she holds TODAY -
+    # a roll rewrites the short call's strike in place - so day-one strikes
+    # would otherwise be gone by the second roll.
+    open_legs: list[Leg] = Field(default_factory=list)
     underlying_price_at_entry: Optional[float] = None
     rolls: list[RollEvent] = Field(default_factory=list)
 
@@ -505,6 +509,11 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             passed_sop=str(_get(row, idx, "Passed SOP", 10) or ""),
             note=str(_get(row, idx, "Notes", 11) or ""),
             legs=legs,
+            # A snapshot, because `legs` is mutated in place by every roll: the
+            # short call's strike on a rolled PMCC is wherever it ended up, not
+            # what she sold on day one. The story of the trade needs the day-one
+            # strikes, so they are kept before anything moves them.
+            open_legs=[leg.model_copy(deep=True) for leg in legs],
             underlying_price_at_entry=_to_float(data.get("underlying_price")),
             status="open" if trade_id else "legacy",
         )
@@ -844,6 +853,102 @@ def cash_events(positions: list[Position]) -> list[dict[str, Any]]:
             events.append({"date": p.closed_on, "amount": p.realized_pl,
                            "kind": "close", "position": p})
     return sorted(events, key=lambda e: e["date"])
+
+
+def story(position: Position) -> list[dict[str, Any]]:
+    """One position told as the sequence it actually was, oldest first.
+
+    A closed trade in the log is a single number, and on anything she rolled
+    that number hides the entire trade. A PMCC rolled weekly for two months is
+    a dozen fills reported as one figure, and nothing on the screen explained
+    where that figure came from - so nothing on the screen could show a fill
+    that had never been logged either.
+
+    Every row is one cash movement. `running` is the sum of every `cash` up to
+    and including that row, which means the LAST row of a closed trade equals
+    realized_total by construction - the story and the headline can never
+    disagree, because the headline is the end of the story.
+
+    An open position simply stops at its last roll; `running` there is money in
+    minus money out so far, not a result.
+    """
+    steps: list[dict[str, Any]] = []
+
+    opened_word = "Opened - collected" if position.open_cash > 0 else "Opened - paid"
+    steps.append({
+        "on": position.opened,
+        "what": opened_word,
+        "detail": _open_detail(position),
+        "cash": round(position.open_cash, 2),
+        "kind": "open",
+    })
+
+    if position.assigned_on is not None:
+        # No cash of its own: the shares were paid for at the strike, which the
+        # close already accounts for. It is here because a wheel makes no sense
+        # without the day the put turned into stock.
+        steps.append({
+            "on": position.assigned_on,
+            "what": "Assigned",
+            "detail": (f"The {position.assigned_strike:g} put was assigned - "
+                       f"you own the shares from here"
+                       if position.assigned_strike else "Assigned into shares"),
+            "cash": 0.0,
+            "kind": "assign",
+        })
+
+    for r in position.rolls:
+        steps.append({
+            "on": r.rolled_on,
+            "what": ("Sold a call" if r.new_strike is not None and r.cash > 0
+                     else "Bought the call back" if r.new_strike is None
+                     else "Rolled"),
+            "detail": r.note or _roll_detail(r),
+            "cash": round(r.cash, 2),
+            "kind": "roll",
+        })
+
+    if position.status == "closed":
+        cash = position.close_cash
+        if cash is None:
+            cash = -(position.exit_cost or 0.0)
+        steps.append({
+            "on": position.closed_on,
+            "what": "Closed - collected" if cash > 0 else "Closed - paid",
+            "detail": position.exit_reason or "Closed",
+            "cash": round(float(cash), 2),
+            "kind": "close",
+        })
+
+    running = 0.0
+    for s in steps:
+        running += s["cash"]
+        s["running"] = round(running, 2)
+    return steps
+
+
+def _open_detail(position: Position) -> str:
+    """What she actually bought and sold on day one, in strikes."""
+    legs = position.open_legs or position.legs
+    bought = [leg for leg in legs if leg.action == Action.BUY]
+    sold = [leg for leg in legs if leg.action == Action.SELL]
+    parts = []
+    if bought:
+        parts.append("bought " + ", ".join(
+            f"{leg.strike:g} {leg.option_type.value}" for leg in bought))
+    if sold:
+        parts.append("sold " + ", ".join(
+            f"{leg.strike:g} {leg.option_type.value}" for leg in sold))
+    if position.shares_cost > 0:
+        parts.insert(0, f"bought {position.contracts * 100} shares")
+    return "; ".join(parts) if parts else (position.note or "Opened")
+
+
+def _roll_detail(roll: RollEvent) -> str:
+    if roll.new_strike is None:
+        return "Bought the short call back - nothing written in its place"
+    when = f" expiring {roll.new_expiration:%d/%m/%Y}" if roll.new_expiration else ""
+    return f"Short call is now the {roll.new_strike:g}{when}"
 
 
 def performance(positions: list[Position], today: Optional[date] = None) -> dict[str, Any]:

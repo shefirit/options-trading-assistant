@@ -35,6 +35,7 @@ from src.engine.positions import (
     pl_at,
     position_value_from_chain,
     protection_read,
+    story,
 )
 from src.engine.quick_log import legs_from_strategy, sizing_from_fill
 from src.logging_tools.row import (COLUMNS, build_close_row, build_roll_row,
@@ -669,3 +670,69 @@ def test_a_covered_call_can_go_uncovered_without_losing_its_puts():
     r = protection_read(p, underlying_price=295.0)
     assert r["flat_to"] == 240.0
     assert r["slope_below"] == 200.0
+
+
+# ============================================================== the whole story
+# A trade she rolled is a single number in the closed-trades table, and on a
+# PMCC rolled weekly that number can cover a dozen fills. story() lays the
+# moves out so it can be checked against thinkorswim one fill at a time.
+def test_story_runs_open_to_close_and_lands_on_the_result():
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
+    steps = story(p)
+
+    assert [s["kind"] for s in steps] == ["open", "roll", "close"]
+    assert [s["cash"] for s in steps] == [OPEN_CASH, ROLL_CASH, CLOSE_CASH]
+    # The invariant the whole feature rests on: the last running total IS the
+    # headline result, so the story and the table can never disagree.
+    assert steps[-1]["running"] == p.realized_total == RESULT
+    assert steps[0]["running"] == OPEN_CASH
+
+
+def test_story_names_the_strikes_she_opened_with_not_the_rolled_ones():
+    """`legs` is mutated in place by a roll, so the day-one short strike is
+    gone by the time anyone reads it back."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
+    opened = story(p)[0]["detail"]
+    assert "130 call" in opened      # what she actually sold on day one
+    assert "135" not in opened       # where the roll moved it later
+    assert "100 call" in opened      # the LEAPS she bought
+
+
+def test_story_on_an_open_trade_stops_at_the_last_roll():
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
+    steps = story(p)
+    assert [s["kind"] for s in steps] == ["open", "roll"]
+    assert steps[-1]["running"] == OPEN_CASH + ROLL_CASH
+
+
+def test_story_shows_a_buy_back_with_nothing_written_as_money_out():
+    back = build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
+                          cash=-120.0, rolled_on=date(2026, 4, 6))
+    steps = story(parse_rows(COLUMNS, [_open_row(), back])[0])
+    assert steps[1]["what"] == "Bought the call back"
+    assert steps[1]["cash"] == -120.0
+    assert steps[1]["running"] == OPEN_CASH - 120.0
+
+
+def test_story_of_a_credit_spread_starts_positive():
+    """The mirror image: a spread collects up front and pays to close."""
+    trade = Trade(
+        strategy_key="put_credit_spread", underlying="MSFT", contracts=1,
+        legs=[
+            Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=100, premium=3.0, dte=45),
+            Leg(role="long_put", action=Action.BUY, option_type=OptionType.PUT,
+                strike=95, premium=1.0, dte=45),
+        ])
+    size = {"credit": 200.0, "max_loss": 300.0, "buying_power": 300.0,
+            "open_cash": 200.0}
+    row = build_row(trade, "Put Credit Spread", size, True, "", trade_id="S1",
+                    opened_on=OPENED, expiration_on=SHORT_EXP)
+    close = build_close_row("S1", "MSFT", "Put Credit Spread", exit_cost=90.0,
+                            realized_pl=110.0, reason="Profit target (50%) hit",
+                            closed_on=date(2026, 3, 20), close_cash=-90.0)
+    steps = story(parse_rows(COLUMNS, [row, close])[0])
+    assert steps[0]["what"] == "Opened - collected"
+    assert steps[0]["cash"] == 200.0
+    assert steps[-1]["what"] == "Closed - paid"
+    assert steps[-1]["running"] == 110.0

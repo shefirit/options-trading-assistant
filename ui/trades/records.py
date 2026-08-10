@@ -46,14 +46,21 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
                          format_func=lambda n: labels[n], key="fix_close_pick")
         p = closed[int(i)]
         was_result = float(p.realized_pl or 0.0)
+        # The stored figure is the open-and-close round trip only. Every number
+        # she READS here adds the roll income back on, because that is the
+        # trade's result everywhere else in the app - printing the smaller
+        # figure here for a trade the table above calls something larger is how
+        # a perfectly correct log comes to look broken.
+        rolls = float(p.roll_income or 0.0)
         pays_to_close = p.is_debit
         # What she actually typed last time, whichever shape the trade is.
         was_cash = abs(float(p.close_cash if p.close_cash is not None
                              else -(p.exit_cost or 0.0)))
 
         c1, c2 = st.columns(2)
-        c1.metric("Recorded now", money(was_result),
-                  help="The result currently in your log for this trade.")
+        c1.metric("Recorded now", money(was_result + rolls),
+                  help="The result currently in your log for this trade, "
+                       "including every roll credit you banked along the way.")
         # Keyed per trade on purpose. With one shared key, switching trades kept
         # the previous one's number in the box and offered to "correct" the new
         # trade to a figure that had nothing to do with it.
@@ -76,8 +83,9 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             theme.note("That matches what is already recorded - change the number to "
                        "correct it.")
         else:
-            theme.note(f"New result would be **\\${realized:,.0f}** - a change of "
-                       f"**{'+' if delta >= 0 else '-'}\\${abs(delta):,.0f}**.")
+            theme.note(f"New result would be **\\${realized + rolls:,.0f}** - a "
+                       f"change of **{'+' if delta >= 0 else '-'}"
+                       f"\\${abs(delta):,.0f}**.")
         why = st.text_input("What was wrong (optional)",
                             key=f"fix_why_{p.trade_id}",
                             placeholder="e.g. typed the wrong fill price")
@@ -111,6 +119,30 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
+def _story_panel(tracked: list, labels: list[str]) -> None:
+    """One trade, told move by move, from the opening fill to the closing one.
+
+    "All closed trades" gives one line per trade, and on anything she rolled
+    that line is a single number covering weeks of activity. A rolled PMCC hid
+    three fills that had never been logged and a fourth logged at half its
+    size, and the one-line view could not have shown any of them.
+
+    Top level, not nested inside the closed-trades expander: an expander two
+    deep collapses on every rerun. Keyed for the same reason.
+    """
+    if not tracked:
+        return
+    with st.expander("📖 See one trade from start to finish", key="trade_story"):
+        theme.note("Every move on one trade, in order, with a running total. "
+                   "The last Running total is the trade's result - so if it "
+                   "does not match thinkorswim, something is missing here.")
+        i = st.selectbox("Which trade", range(len(tracked)),
+                         format_func=lambda n: labels[n], key="story_pick")
+        from src.engine import positions as pos_mod
+        p = tracked[int(i)]
+        components.render_story(p, pos_mod.story(p))
+
+
 def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                      open_pos=()) -> None:
     """The bookkeeping, in one place instead of scattered up and down the tab.
@@ -133,11 +165,22 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
     theme.section("Correct and look back", "Records")
 
     fixable = [p for p in closed if p.trade_id]
+    tracked = [p for p in list(open_pos) + list(closed) if p.trade_id]
+    if tracked:
+        _story_panel(tracked, [
+            f"{p.underlying}  ·  {p.strategy_name}  ·  "
+            + (f"closed {components.fmt_date(p.closed_on)}"
+               if p.status == "closed"
+               else f"opened {components.fmt_date(p.opened)} · still open")
+            + (f"  ·  result ${p.realized_total:,.0f}"
+               if p.realized_total is not None else "")
+            for p in tracked])
+
     if fixable:
         _fix_close_form(fixable, [
             f"{p.underlying}  ·  {p.strategy_name}  ·  "
             f"closed {components.fmt_date(p.closed_on)}"
-            f"  ·  result ${(p.realized_pl or 0):,.0f}" for p in fixable])
+            f"  ·  result ${(p.realized_total or 0):,.0f}" for p in fixable])
 
     if closed:
         with st.expander(f"📓 All closed trades ({len(closed)})",
@@ -152,7 +195,7 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                 # removed the wrong row.
                 labels = [f"{i + 1}.  {p.underlying}  ·  {p.strategy_name}  ·  "
                           f"closed {components.fmt_date(p.closed_on)}  ·  "
-                          f"result ${(p.realized_pl or 0):,.0f}"
+                          f"result ${(p.realized_total or 0):,.0f}"
                           for i, p in enumerate(fixable)]
                 idx = st.selectbox("Closed trade to delete", range(len(fixable)),
                                    format_func=lambda i: labels[i], key="del_closed_pick")
