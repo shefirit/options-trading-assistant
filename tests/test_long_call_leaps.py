@@ -149,6 +149,37 @@ def test_the_spread_is_reported_and_never_refuses_a_trade(market_open):
         assert check.status == CheckStatus.INFO, pct
 
 
+def test_the_financing_put_band_is_settled_at_the_csp_delta():
+    """Settled 2026-08-14: "2 puts, each at delta 0.20-0.30, if needed to cover
+    the long call cost." The band does NOT widen - depth was the rejected lever,
+    because a deeper put's strike sits at or above the stock while two shallow
+    ones sit well below it. Her CSP sells at 0.30 and this never goes past it."""
+    fp = get_strategy("long_call_leaps")["financing_put"]
+    assert (fp["delta_min"], fp["delta_max"]) == (0.20, 0.30)
+    assert fp["delta_max"] <= get_strategy("cash_secured_put")["entry"]["short_leg_delta_max"]
+    assert fp["ratio"] == 1 and fp["max_ratio"] == 2
+    assert fp["enabled"] is False
+
+
+def test_two_puts_are_held_back_by_buying_power_not_by_a_new_rule():
+    """Why the band needs no extra cap: two 0.26 delta puts on a $300 stock
+    reserve essentially the whole $50,000 month, so the existing check stops it
+    the moment anything else is open."""
+    leg = _leg()
+    put = Leg(role="financing_put", action=Action.SELL, option_type=OptionType.PUT,
+              strike=270.0, premium=20.75, dte=leg.dte, delta=-0.26, quantity=2,
+              open_interest=400, bid=20.3, ask=21.2)
+    trade = Trade(strategy_key="long_call_leaps", underlying="AAPL", contracts=1,
+                  underlying_price=305.5, legs=[leg, put])
+
+    alone = validator.validate_trade(trade, existing_month_bp=0)
+    crowded = validator.validate_trade(trade, existing_month_bp=5_000)
+
+    assert _check(alone, "Puts sold per call").status == CheckStatus.WARN
+    assert _check(crowded, "buying power").status == CheckStatus.FAIL
+    assert not crowded.passed
+
+
 def test_no_bid_ask_threshold_lives_in_config():
     """The guard on the rule she removed. If this fails, someone put a limit
     back into her SOP without her asking."""

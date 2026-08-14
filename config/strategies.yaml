@@ -270,6 +270,18 @@ strategies:
     # trade look cheaper while roughly tripling the cash it ties up.
     financing_put:
       enabled: false            # opt in per scan; never the default shape
+      # SETTLED 2026-08-14. The band does NOT widen and there is no cap beyond
+      # max_ratio - her ruling was "2 puts, each at delta 0.20-0.30, if needed
+      # to cover the long call cost." Depth was considered as the alternative
+      # lever and rejected: a 0.50 delta put funds more for less capital, but
+      # its strike sits AT or above the stock, while two 0.26 puts sit ~12%
+      # below it. She chose distance over capital efficiency.
+      #
+      # No extra limit is needed because the monthly buying-power check already
+      # does the limiting: two 0.26 puts on AAPL reserve $49,850 of her $50,000
+      # month (fails outright once $5,000 is committed elsewhere), and $61,730
+      # on UNH, over the limit on its own. Available on cheap names, self-
+      # limiting on expensive ones.
       delta_min: 0.20
       delta_max: 0.30
       delta_target: 0.25        # prefer the 0.20 end - further from the money
