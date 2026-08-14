@@ -192,13 +192,43 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                     bits.append(f"{label.lower()} {leg.strike:g} → {new:g}")
                     leg.strike = float(new)
 
+        strat_cfg = get_strategy(p.strategy_key) if p.strategy_key else {}
+        basis = str(strat_cfg.get("sizing", {}).get("max_loss_basis", ""))
+
+        # open_credit, NOT credit. Every roll overwrites `credit` with whatever
+        # the CURRENT short call sold for, because that is what the 50% profit
+        # target measures against - so on a rolled PMCC the two are different
+        # numbers. This panel corrects the OPENING, so it has to use the opening
+        # figure; reading `credit` here derived a cost basis off the wrong
+        # number entirely and would have written a confidently wrong correction.
+        day_one_credit = abs(float(p.open_credit if p.open_credit is not None
+                                   else (p.credit or 0.0)))
+
         c4, c5 = st.columns(2)
         credit = float(c4.number_input(
-            "Credit collected $" if (p.open_cash or 0) >= 0 else "Net paid $",
-            value=abs(float(p.credit or 0.0)), step=1.0, format="%.2f",
+            "Credit collected when you opened it $",
+            value=day_one_credit, step=1.0, format="%.2f",
             key=f"ed_credit_{p.trade_id}",
-            help="The total for the whole position, as it went through in "
-                 "thinkorswim - not per contract."))
+            help="What you collected on the DAY YOU OPENED it, for the whole "
+                 "position - not per contract, and not what a later roll paid. "
+                 "Correct a roll in the panel below this one."))
+
+        # What she PAID, on the shapes where the credit is only half the story.
+        # A PMCC's whole cost basis is the LEAPS, and without a box for it the
+        # panel could correct everything about the trade except the biggest
+        # number in it - which is exactly the $10 typo that sent her here.
+        old_paid = None
+        paid = None
+        if basis == "debit":
+            old_paid = round(day_one_credit - float(p.open_cash or 0.0), 2)
+            paid = float(st.number_input(
+                "What the long LEAPS cost you $", value=abs(old_paid), step=1.0,
+                format="%.2f", key=f"ed_paid_{p.trade_id}",
+                help="The debit on the LEAPS fill, for the whole position. On a "
+                     "PMCC this is your cost basis - the credit box above is just "
+                     "the short call you sold against it."))
+            if abs(paid - abs(old_paid)) > 0.005:
+                bits.append(f"LEAPS cost ${abs(old_paid):,.0f} → ${paid:,.0f}")
         book = c5.selectbox(
             "Which book", ["real", "paper"],
             index=0 if (p.account or "real") == "real" else 1,
@@ -219,8 +249,8 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                  "strike": l.strike, "delta": l.delta, "premium": l.premium,
                  "qty": l.quantity, "dte": l.dte} for l in legs]
             changes["strikes"] = " / ".join(f"{l.strike:g}" for l in legs)
-        if abs(credit - abs(float(p.credit or 0.0))) > 0.005:
-            bits.append(f"credit ${abs(p.credit or 0):,.0f} → ${credit:,.0f}")
+        if abs(credit - day_one_credit) > 0.005:
+            bits.append(f"credit ${day_one_credit:,.0f} → ${credit:,.0f}")
         if book != (p.account or "real"):
             changes["account"] = book
             bits.append(f"book {p.account or 'real'} → {book}")
@@ -230,16 +260,22 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # Anything that moves the money or the size re-prices the risk. Leaving
         # the old max-loss and buying-power figures would misreport the two
         # numbers the dashboard and the monthly limit are built on.
-        if changes.get("legs") or "contracts" in changes or \
-                abs(credit - abs(float(p.credit or 0.0))) > 0.005:
+        paid_changed = paid is not None and abs(paid - abs(old_paid or 0.0)) > 0.005
+        if changes.get("legs") or "contracts" in changes or paid_changed or \
+                abs(credit - day_one_credit) > 0.005:
             try:
-                strat = get_strategy(p.strategy_key) if p.strategy_key else {}
                 trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
                               contracts=contracts, legs=legs,
                               underlying_price=p.underlying_price_at_entry or 0.0)
+                # A corrected LEAPS cost is fed in as the ledger it implies, so
+                # resize_after_edit rebuilds the cost from the corrected figure
+                # rather than the stored one it would otherwise reverse out.
+                old_cash = (round(day_one_credit - paid, 2) if paid_changed
+                            else float(p.open_cash or 0.0))
                 fresh = resize_after_edit(
-                    strat, trade, credit, old_credit=float(p.open_credit or p.credit or 0),
-                    old_open_cash=float(p.open_cash or 0.0),
+                    strat_cfg, trade, credit,
+                    old_credit=float(p.open_credit or p.credit or 0),
+                    old_open_cash=old_cash,
                     old_shares_cost=float(p.shares_cost or 0.0),
                     old_contracts=int(p.contracts or 1))
                 changes.update({
@@ -265,7 +301,7 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # credit at the one-contract figure, so the max loss came out right for
         # the wrong reason. The app must not guess that the credit doubled -
         # only her fill knows - but it must not let the mismatch pass unsaid.
-        if "contracts" in changes and abs(credit - abs(float(p.credit or 0.0))) <= 0.005:
+        if "contracts" in changes and abs(credit - day_one_credit) <= 0.005:
             st.warning(
                 f"You changed the contracts but left the credit at "
                 f"**\\${credit:,.0f}**. That box is the total for the whole "
@@ -291,6 +327,105 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
             st.session_state.pop("fix_details", None)
             st.session_state["ql_flash"] = (
                 f"✏️ {p.underlying} corrected: {'; '.join(bits) or 'note updated'}. "
+                f"Saved to {'your Google Sheet' if live else 'the local log'}.")
+            st.rerun()
+
+
+def _edit_roll_form(rollable: list, labels: list[str]) -> None:
+    """Fix a roll fill typed wrong.
+
+    Every roll is a number typed by hand, so the same slip is as likely here as
+    at the opening - her DIA log had four roll fills that needed correcting and
+    the only remedy was rebuilding the whole trade.
+
+    A roll is addressed by the order it was WRITTEN (`RollEvent.seq`), never by
+    where it sits in the list on screen. `Position.rolls` is ordered by DATE,
+    and correcting a roll's date would reshuffle it - so the number handed to
+    the correction has to come off the event itself.
+    """
+    if not rollable:
+        return
+    with st.expander("✏️ Fix a roll I typed wrong", key="fix_roll"):
+        theme.note("Wrong credit on a roll, or rolled to the wrong strike? Correct "
+                   "it here. The rest of the trade is untouched.")
+        p = _pick(rollable, labels, "fix_roll_pick", "Which trade")
+        if p is None or not p.rolls:
+            return
+
+        def roll_label(i: int, r) -> str:
+            where = f" → {r.new_strike:g}" if r.new_strike is not None else " (bought back)"
+            return (f"{i + 1}. {components.fmt_date(r.rolled_on)}{where}  ·  "
+                    f"{'+' if r.cash >= 0 else '-'}${abs(r.cash):,.0f}")
+
+        options = list(range(len(p.rolls)))
+        which = st.selectbox(
+            "Which roll", options,
+            format_func=lambda i: roll_label(i, p.rolls[i]),
+            key=f"rl_which_{p.trade_id}")
+        r = p.rolls[which]
+
+        c1, c2 = st.columns(2)
+        cash = float(c1.number_input(
+            "Cash it actually banked $", value=float(r.cash), step=1.0,
+            format="%.2f", key=f"rl_cash_{p.trade_id}_{r.seq}",
+            help="Signed: positive when the roll paid you, negative when buying "
+                 "the call back cost you. Straight off the thinkorswim fill."))
+        new_credit = float(c2.number_input(
+            "What the NEW short call sold for $", value=float(r.new_credit or 0.0),
+            step=1.0, format="%.2f", key=f"rl_credit_{p.trade_id}_{r.seq}",
+            help="Its own premium, not the net of the roll. This is what your "
+                 "50% profit target measures against from here."))
+
+        c3, c4 = st.columns(2)
+        strike = float(c3.number_input(
+            "Rolled to strike", value=float(r.new_strike or 0.0), step=1.0,
+            format="%.2f", key=f"rl_k_{p.trade_id}_{r.seq}",
+            help="Leave at 0 if you only bought the call back and wrote nothing."))
+        when = c4.date_input("Rolled on", value=r.rolled_on,
+                             key=f"rl_when_{p.trade_id}_{r.seq}", format="DD/MM/YYYY")
+
+        changes: dict = {}
+        bits: list[str] = []
+        if abs(cash - float(r.cash)) > 0.005:
+            changes["open_cash"] = round(cash, 2)
+            bits.append(f"cash ${r.cash:,.0f} → ${cash:,.0f}")
+        if abs(new_credit - float(r.new_credit or 0.0)) > 0.005:
+            changes["credit"] = round(new_credit, 2)
+            bits.append(f"new call's premium ${r.new_credit or 0:,.0f} → ${new_credit:,.0f}")
+        if abs(strike - float(r.new_strike or 0.0)) > 0.005 and strike > 0:
+            changes["strikes"] = strike
+            bits.append(f"strike {r.new_strike or 0:g} → {strike:g}")
+        if when and when != r.rolled_on:
+            changes["opened_on"] = when.isoformat()
+            bits.append(f"date {components.fmt_date(r.rolled_on)} → "
+                        f"{components.fmt_date(when)}")
+
+        if not changes:
+            theme.note("Nothing changed yet - edit a field above and the correction "
+                       "will appear here.")
+            return
+
+        banked = p.roll_income + (changes.get("open_cash", r.cash) - r.cash)
+        theme.note("**This will record:** " + "; ".join(bits)
+                   + f". Roll income banked becomes **\\${banked:,.0f}**.")
+
+        if st.button("Save the correction", type="primary", key="rl_go"):
+            from src.logging_tools.trade_logger import edit_trade
+            try:
+                _dest, live = edit_trade(
+                    p.trade_id, p.underlying, p.strategy_name, changes,
+                    summary=f"Roll {which + 1}: " + "; ".join(bits),
+                    target="roll", roll_index=r.seq)
+            except Exception as e:
+                st.error(f"Could not save the correction: {e}")
+                return
+            st.session_state.pop("trades_rows", None)
+            for k in list(st.session_state):
+                if k.startswith("rl_") and p.trade_id in k:
+                    st.session_state.pop(k, None)
+            st.session_state.pop("fix_roll", None)
+            st.session_state["ql_flash"] = (
+                f"✏️ {p.underlying} roll {which + 1} corrected: {'; '.join(bits)}. "
                 f"Saved to {'your Google Sheet' if live else 'the local log'}.")
             st.rerun()
 
@@ -416,9 +551,12 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
     # cards and the buying-power figure are reading right now.
     correctable = (components.by_opened_date([p for p in open_pos if p.trade_id])
                    + list(fixable))
-    _edit_details_form(correctable,
-                       [(_open_label(p) if p.status == "open" else _closed_label(p))
-                        for p in correctable], strategies)
+    labels = [(_open_label(p) if p.status == "open" else _closed_label(p))
+              for p in correctable]
+    _edit_details_form(correctable, labels, strategies)
+
+    rollable = [p for p in correctable if p.rolls]
+    _edit_roll_form(rollable, [labels[correctable.index(p)] for p in rollable])
 
     if open_pos:
         with st.expander(f"📂 All open trades ({len(open_pos)})",

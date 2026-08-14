@@ -40,6 +40,11 @@ class RollEvent(BaseModel):
 
     rolled_on: Optional[date] = None
     cash: float = 0.0                        # signed: + collected, - paid
+    # Where this roll sat in the log when it was WRITTEN. Corrections address a
+    # roll by this number, while `Position.rolls` is ordered by DATE - the two
+    # can disagree, so the UI has to hand back the write index rather than the
+    # position in the list it is showing, or it corrects the wrong fill.
+    seq: int = 0
     new_strike: Optional[float] = None
     new_expiration: Optional[date] = None
     # What the NEW short call sold for on its own. This - not the net cash - is
@@ -553,6 +558,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             rolls.append((trade_id, roll_seq[trade_id], RollEvent(
                 rolled_on=_to_date(_get(row, idx, "Date", 0)),
                 cash=_to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
+                seq=roll_seq[trade_id],
                 new_strike=_to_float(_get(row, idx, "Legs (strikes)", 3)),
                 new_expiration=_to_date(_get(row, idx, "Expiration", 14)),
                 new_credit=_to_float(_get(row, idx, "Credit $", 7)) or 0.0,

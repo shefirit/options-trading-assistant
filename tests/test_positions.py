@@ -666,3 +666,72 @@ def test_an_edit_cannot_change_the_strategy_or_the_ticker():
     assert p.strategy_name == "Put Credit Spread"
     assert p.underlying == "SPX"
     assert p.contracts == 2
+
+
+def test_a_roll_carries_the_index_a_correction_must_use():
+    """Position.rolls is DATE ordered; corrections address WRITE order. The UI
+    reads the number off the event so the two cannot be confused."""
+    from src.logging_tools.row import build_roll_row
+
+    late = build_roll_row("E1", "SPX", "Put Credit Spread", 100.0, new_strike=7100.0,
+                          rolled_on=date(2026, 8, 20))
+    early = build_roll_row("E1", "SPX", "Put Credit Spread", 200.0, new_strike=7200.0,
+                           rolled_on=date(2026, 7, 1))
+    p = parse_rows(COLUMNS, [_opened(), late, early])[0]
+
+    # Shown oldest-first by date, but written the other way round.
+    assert [r.rolled_on for r in p.rolls] == [date(2026, 7, 1), date(2026, 8, 20)]
+    assert [r.seq for r in p.rolls] == [1, 0]
+
+    # Correcting the one displayed FIRST must hit the row written second.
+    fix = build_edit_row("E1", "SPX", "Put Credit Spread", {"open_cash": 250.0},
+                         target="roll", roll_index=p.rolls[0].seq)
+    fixed = parse_rows(COLUMNS, [_opened(), late, early, fix])[0]
+    assert fixed.roll_income == pytest.approx(100.0 + 250.0)
+
+
+def test_correcting_a_pmcc_leaps_cost_reprices_the_whole_position():
+    """On a PMCC the credit can be right while the cost basis is not, and every
+    risk figure hangs off the cost rather than off the credit.
+
+    Invented numbers - this repo is public and her real fills belong in her
+    Google Sheet, not in source control.
+    """
+    from src.engine.models import Action as A, Leg as L, OptionType as OT
+    from src.engine.quick_log import resize_after_edit
+
+    strat = {"sizing": {"max_loss_basis": "debit"}}
+    trade = Trade(strategy_key="poor_mans_covered_call", underlying="TEST",
+                  contracts=1, underlying_price=300.0,
+                  legs=[L(role="long_call_leaps", action=A.BUY, option_type=OT.CALL,
+                          strike=200, premium=100.0, dte=400),
+                        L(role="short_call", action=A.SELL, option_type=OT.CALL,
+                          strike=340, premium=10.0, dte=40)])
+    # The LEAPS really cost 10,000; whatever was logged before does not matter,
+    # because the corrected cost is handed in as the ledger it implies.
+    fresh = resize_after_edit(strat, trade, 1000.0, old_credit=1000.0,
+                              old_open_cash=1000.0 - 10000.0,
+                              old_shares_cost=0.0, old_contracts=1)
+    assert fresh["open_cash"] == pytest.approx(-9000.0)
+    assert fresh["max_loss"] == pytest.approx(9000.0)
+    assert fresh["buying_power"] == pytest.approx(9000.0)
+
+
+def test_correcting_a_pmcc_leaps_cost_scales_with_the_contracts():
+    """Per contract, so changing the count resizes the position rather than
+    relabelling it."""
+    from src.engine.models import Action as A, Leg as L, OptionType as OT
+    from src.engine.quick_log import resize_after_edit
+
+    strat = {"sizing": {"max_loss_basis": "debit"}}
+    trade = Trade(strategy_key="poor_mans_covered_call", underlying="TEST",
+                  contracts=2, underlying_price=300.0,
+                  legs=[L(role="long_call_leaps", action=A.BUY, option_type=OT.CALL,
+                          strike=200, premium=100.0, dte=400),
+                        L(role="short_call", action=A.SELL, option_type=OT.CALL,
+                          strike=340, premium=10.0, dte=40)])
+    fresh = resize_after_edit(strat, trade, 2000.0, old_credit=1000.0,
+                              old_open_cash=1000.0 - 10000.0,
+                              old_shares_cost=0.0, old_contracts=1)
+    assert fresh["open_cash"] == pytest.approx(-18000.0)
+    assert fresh["buying_power"] == pytest.approx(18000.0)
