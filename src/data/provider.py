@@ -531,8 +531,21 @@ class DataProvider:
             info = yfinance_client.get_fundamentals(symbol) if self.is_real else {}
             candidate = leaps.score_setup(symbol, closes, market_cap=info.get("marketCap"),
                                           info=info)
-            chain = self.get_leaps_chain(symbol, target_dte=400)
-            if chain is None:
+            # The WHOLE long-dated window, not one expiration. This used to call
+            # get_leaps_chain, which narrows to a single expiration near the
+            # target - and it chooses that expiration with _is_tradable, a test
+            # that reads the PUT ladder because it was written for the premium
+            # finder. For a long call that is the wrong question asked of the
+            # wrong side of the chain, and it handed the picker 308-day
+            # expirations and strikes with an open interest of 2. The picker
+            # needs every expiration in range to honour her rules, because the
+            # compliant contract is routinely a date further out.
+            chain = self.get_chain(symbol, dte_min=leaps.min_leap_dte(),
+                                   dte_max=leaps.max_leap_dte())
+            if chain is None or not chain.contracts:
+                # Some names genuinely list nothing that far out. Widen so she
+                # still gets a scored contract - score_full now flags it as
+                # non-compliant rather than presenting it as a clean pick.
                 chain = self.get_chain(symbol, dte_min=200, dte_max=800)
             iv_pct = None
             if chain is not None:

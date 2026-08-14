@@ -299,6 +299,167 @@ def test_pick_contract_returns_none_without_calls():
                                            contracts=[])) is None
 
 
+def test_pick_contract_skips_a_thin_strike_for_a_liquid_one():
+    """Open interest is a hard rule, not a tiebreak.
+
+    The picker used to ignore it entirely and hand back strikes with an open
+    interest of 2 or 3 - contracts you cannot get out of.
+    """
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(88, 400, 21.0, delta=0.72, oi=3),      # closest to the floor, untradable
+        _call(85, 400, 23.0, delta=0.76, oi=900),    # the one she can actually trade
+    ])
+    assert leaps.pick_contract(chain, target_delta=0.70).strike == 85
+
+
+def test_pick_contract_reaches_a_further_expiration_to_stay_compliant():
+    """A compliant contract one expiration out beats a broken nearer one.
+
+    Live case this comes from: UPS listed a 400-day call with an open interest
+    of 22, and a 526-day call at delta 0.78 with 849. The old picker locked onto
+    a single expiration and took the untradable one.
+    """
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(90, 400, 20.0, delta=0.72, oi=22),
+        _call(90, 526, 24.0, delta=0.78, oi=849),
+    ])
+    picked = leaps.pick_contract(chain, target_delta=0.70)
+    assert (picked.dte, picked.open_interest) == (526, 849)
+
+
+def test_pick_contract_will_not_run_past_the_dte_ceiling():
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(90, 400, 20.0, delta=0.72),
+        _call(90, 900, 34.0, delta=0.72),            # beyond dte_max
+    ])
+    assert leaps.pick_contract(chain).dte == 400
+
+
+def test_pick_contract_aims_at_the_target_delta_not_the_floor():
+    """0.70 is a floor to clear; 0.72 is what her SOP actually aims at."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(70, 400, 33.0, delta=0.90),
+        _call(85, 400, 23.0, delta=0.74),
+        _call(95, 400, 15.0, delta=0.62),            # under the floor
+    ])
+    assert leaps.pick_contract(chain, target_delta=0.70).strike == 85
+
+
+def test_pick_contract_accepts_a_delta_that_rounds_to_the_floor():
+    """AEP listed 0.6999 against a 0.70 floor - rejected by a ten-thousandth."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(115, 525, 21.0, delta=0.6999, oi=354),
+    ])
+    picked = leaps.pick_contract(chain, target_delta=0.70)
+    assert picked.strike == 115
+    assert leaps.breaches(picked) == []
+
+
+def test_a_near_stock_substitute_delta_is_flagged():
+    """EBAY's only liquid 525-day strike was delta 0.94 - compliant on the
+    letter, but that is a PMCC leg, not a bet on a move."""
+    broken = leaps.breaches(_call(50, 525, 57.25, delta=0.9426, oi=974))
+    assert len(broken) == 1
+    assert "stock substitute" in broken[0]
+
+
+def test_the_target_delta_is_preferred_over_a_deeper_liquid_strike():
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(50, 525, 57.0, delta=0.94, oi=974),
+        _call(88, 525, 26.0, delta=0.73, oi=900),
+    ])
+    assert leaps.pick_contract(chain, target_delta=0.70).strike == 88
+
+
+def test_pick_contract_still_returns_something_when_nothing_qualifies():
+    """Showing her nothing would be worse - but see the flag test below."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(90, 308, 18.0, delta=0.72, oi=7),
+    ])
+    assert leaps.pick_contract(chain).dte == 308
+
+
+def test_the_fallback_prefers_the_least_bad_contract():
+    """WM had a 308-day strike with an open interest of 7 and a 672-day one with
+    3. Neither is tradable, but reaching for the longer date made it worse."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(90, 672, 26.0, delta=0.72, oi=3),      # breaks OI only, but thinner
+        _call(90, 400, 20.0, delta=0.72, oi=180),    # breaks OI only, far more of it
+    ])
+    picked = leaps.pick_contract(chain)
+    assert (picked.dte, picked.open_interest) == (400, 180)
+
+
+def test_the_fallback_prefers_fewer_broken_rules_over_open_interest():
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(90, 200, 14.0, delta=0.72, oi=900),    # too short AND thin on rules
+        _call(90, 400, 20.0, delta=0.72, oi=180),    # only the OI floor missed
+    ])
+    assert leaps.pick_contract(chain).dte == 400
+
+
+def test_the_fallback_will_not_trade_delta_away_for_open_interest():
+    """MAR's real chain: a 0.24 delta with 266 open interest against a 0.70 with
+    56. Both break one rule, but the 0.24 is a different trade entirely."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(140, 525, 4.0, delta=0.24, oi=266),
+        _call(90, 525, 24.0, delta=0.70, oi=56),
+    ])
+    assert leaps.pick_contract(chain).strike == 90
+
+
+def test_the_fallback_will_not_drift_deep_for_open_interest_either():
+    """Open interest piles up deep in the money. LIN came back at delta 0.94 for
+    $19,325 - the same mistake as the 0.24, off the other end."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _call(40, 525, 61.0, delta=0.94, oi=130),
+        _call(88, 525, 26.0, delta=0.74, oi=22),
+    ])
+    assert leaps.pick_contract(chain).strike == 88
+
+
+# ---------- the rules a contract breaks ----------
+def test_breaches_is_empty_for_a_compliant_contract():
+    assert leaps.breaches(_call(85, 400, 23.0, delta=0.74, oi=900)) == []
+
+
+def test_breaches_names_the_short_expiration_and_the_thin_strike():
+    broken = leaps.breaches(_call(90, 308, 18.0, delta=0.72, oi=7))
+    assert len(broken) == 2
+    assert any("308 days" in b for b in broken)
+    assert any("Open interest is 7" in b for b in broken)
+
+
+def test_breaches_ignores_delta_when_the_feed_sent_no_greeks():
+    """A delta of 0 means the feed is missing greeks, not a shallow option."""
+    broken = leaps.breaches(_call(90, 400, 18.0, delta=0.0, oi=900))
+    assert broken == []
+
+
+def test_full_score_flags_a_contract_that_breaks_the_rules():
+    """The whole point: the Analyze tab cannot show a bad pick in silence."""
+    closes = _rising()
+    spot = closes[-1]
+    chain = OptionChain(underlying="UP", underlying_price=spot, contracts=[
+        _call(round(spot * 0.9, 1), 308, spot * 0.15, delta=0.72, oi=7),
+    ])
+    setup = leaps.score_setup("UP", closes, market_cap=400e9, info=STRONG_INFO)
+    full = leaps.score_full(setup, chain, closes, STRONG_INFO)
+    assert any("does not meet your SOP" in f for f in full.flags)
+    assert any("308 days" in f for f in full.flags)
+
+
+def test_full_score_stays_quiet_when_the_contract_is_compliant():
+    closes = _rising()
+    spot = closes[-1]
+    chain = OptionChain(underlying="UP", underlying_price=spot, contracts=[
+        _call(round(spot * 0.9, 1), 400, spot * 0.18, delta=0.75, oi=900),
+    ])
+    setup = leaps.score_setup("UP", closes, market_cap=400e9, info=STRONG_INFO)
+    full = leaps.score_full(setup, chain, closes, STRONG_INFO)
+    assert not any("does not meet your SOP" in f for f in full.flags)
+
+
 def test_full_score_adds_the_cost_and_odds_pillars():
     closes = _rising()
     spot = closes[-1]

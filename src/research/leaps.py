@@ -95,9 +95,21 @@ def target_dte() -> int:
     return int(_rule("dte_target", 400))
 
 
+def max_leap_dte() -> int:
+    """The furthest out her SOP will go. Past this the extra time stops buying
+    anything - the contracts barely trade and you pay for months you will never
+    hold through, since the roll-forward rule closes the trade at 180 days."""
+    return int(_rule("dte_max", 800))
+
+
 def target_delta() -> float:
     """The SOP floor. Deeper is fine; shallower is the mistake."""
     return _rule("long_leg_delta_min", 0.70)
+
+
+def target_delta_pref() -> float:
+    """The delta her SOP actually aims at, a touch above the floor."""
+    return _rule("long_leg_delta_target", 0.72)
 
 
 def min_open_interest() -> int:
@@ -120,6 +132,7 @@ def rsi_max() -> float:
 # Kept as module names because callers import them; both now follow the SOP.
 MIN_LEAP_DTE = min_leap_dte()
 DEFAULT_TARGET_DELTA = target_delta()
+MAX_LEAP_DTE = max_leap_dte()
 
 
 # ---------------------------------------------------------------- data models
@@ -512,24 +525,175 @@ def probability_above(spot: float, target: float, dte: int, iv: float,
 
 
 # ------------------------------------------------------ picking the contract
+# Deltas arrive from the feed at four decimals and get READ at two. AEP listed a
+# 0.6999 delta against her 0.70 floor: rejected by a ten-thousandth, while the
+# rejection message said "Delta is 0.70, shallower than your 0.70 floor" - a
+# sentence no one can act on. Half a delta point of slack keeps the rule honest
+# at the precision she actually sees.
+DELTA_TOLERANCE = 0.005
+
+
+def stock_substitute_delta() -> float:
+    """Where a directional LEAPS stops being one and becomes a stock substitute.
+
+    Not a new rule - it is her PMCC's own delta floor, read from config. Her SOP
+    draws exactly this line: the PMCC buys 0.80+ as a stock replacement to rent
+    out, while this strategy buys 0.70-0.80 as a bet on the move. A call deeper
+    than the PMCC floor is priced like shares and barely leverages the move.
+    """
+    from src.engine.config_loader import get_strategy
+    try:
+        entry = get_strategy("poor_mans_covered_call").get("entry", {}) or {}
+        return float(entry.get("long_leg_delta_min", 0.80))
+    except Exception:
+        return 0.80
+
+
+def meets_sop(contract: OptionContract, delta_floor: float, min_dte: int,
+              max_dte: int, min_oi: int) -> bool:
+    """Does this contract satisfy every hard contract rule at once?"""
+    return (contract.abs_delta >= delta_floor - DELTA_TOLERANCE
+            and min_dte <= contract.dte <= max_dte
+            and contract.open_interest >= min_oi)
+
+
+def breaches(contract: OptionContract, delta_floor: Optional[float] = None,
+             min_dte: Optional[int] = None, max_dte: Optional[int] = None,
+             min_oi: Optional[int] = None) -> list[str]:
+    """The SOP contract rules this one breaks, in plain English. Empty when it
+    passes.
+
+    This exists so the Finder can never present a rule-breaking contract in
+    silence. When no compliant contract is listed at all, `pick_contract` still
+    returns the closest thing - showing her nothing would be worse - but it has
+    to come with the reason attached.
+    """
+    delta_floor = target_delta() if delta_floor is None else delta_floor
+    min_dte = min_leap_dte() if min_dte is None else min_dte
+    max_dte = max_leap_dte() if max_dte is None else max_dte
+    min_oi = min_open_interest() if min_oi is None else min_oi
+
+    out: list[str] = []
+    if contract.dte < min_dte:
+        out.append(
+            f"This contract expires in {contract.dte} days, under your {min_dte}-day "
+            "LEAPS minimum. Your SOP buys that much time on purpose - it is what "
+            "lets the trade sit through a crash without a stop loss.")
+    elif contract.dte > max_dte:
+        out.append(
+            f"This contract runs {contract.dte} days, past your {max_dte}-day ceiling. "
+            "You would be paying for months the roll-forward rule closes out anyway.")
+    # A delta of exactly 0 means the feed sent no greeks, not a shallow option.
+    if contract.abs_delta and contract.abs_delta < delta_floor - DELTA_TOLERANCE:
+        out.append(
+            f"Delta is {contract.abs_delta:.2f}, shallower than your {delta_floor:.2f} "
+            "floor. A shallower call is cheaper but needs a bigger move, which is the "
+            "trade your SOP deliberately does not take.")
+    deep = stock_substitute_delta()
+    if contract.abs_delta >= deep:
+        out.append(
+            f"Delta is {contract.abs_delta:.2f}, at or past the {deep:.2f} your PMCC uses. "
+            "This deep, the call tracks the shares almost one for one - you are paying "
+            "for a stock substitute rather than the leveraged bet on a move that this "
+            "strategy is for. It is usually a sign the strikes you actually want have "
+            "no open interest.")
+    if contract.open_interest < min_oi:
+        out.append(
+            f"Open interest is {contract.open_interest} against your {min_oi} floor. "
+            "That is how many contracts exist at this strike - too few and you will "
+            "give away real money on the spread when you try to sell out.")
+    return out
+
+
+def _shortfall(contract: OptionContract, delta_floor: float, min_dte: int,
+               max_dte: int, min_oi: int, deep: float) -> tuple:
+    """How badly a contract misses the rules - sortable, least-bad first.
+
+    The three rules are NOT equally severe, and ranking them by a simple count
+    proved it on live data: MAR listed a 0.24 delta call with 266 open interest
+    alongside a 0.70 delta call with 56. Each breaks exactly one rule, so
+    counting picked the 0.24 - a far out-of-the-money lottery ticket, which is
+    not the same trade at all.
+
+    So they are ordered by what they cost her. Delta decides WHAT the trade is.
+    DTE decides how long she has to be right. Open interest is friction on the
+    way out - real money, but it does not change the position she is holding.
+
+    Delta counts as wrong on BOTH sides. Open interest piles up deep in the
+    money, so ranking on it alone walked straight out of the strategy the other
+    way: LIN came back at delta 0.94 for $19,325, which is buying the shares
+    with extra steps.
+    """
+    off_strategy = (contract.abs_delta < delta_floor - DELTA_TOLERANCE
+                    or contract.abs_delta >= deep)
+    return (
+        off_strategy,
+        not (min_dte <= contract.dte <= max_dte),
+        contract.open_interest < min_oi,
+        -contract.open_interest,
+        abs(contract.abs_delta - max(delta_floor, target_delta_pref())),
+    )
+
+
 def pick_contract(chain: OptionChain, target_delta: float = DEFAULT_TARGET_DELTA,
-                  min_dte: int = MIN_LEAP_DTE) -> Optional[OptionContract]:
-    """The call closest to the target delta at the furthest-out expiration
-    that still counts as a LEAP. Falls back to the longest expiration on the
-    board when nothing reaches `min_dte`."""
+                  min_dte: int = MIN_LEAP_DTE, min_oi: Optional[int] = None,
+                  max_dte: Optional[int] = None) -> Optional[OptionContract]:
+    """The best call that satisfies every hard contract rule at once.
+
+    `target_delta` is a FLOOR, not a bullseye - her SOP says 70 delta or deeper,
+    so among the contracts that clear it we take the shallowest, which is the
+    cheapest way to satisfy the rule.
+
+    This used to lock onto one expiration (the furthest out) and pick the closest
+    delta on it, looking at neither open interest nor the DTE ceiling. That
+    quietly returned untradable contracts: on a live scan it handed back 308-day
+    expirations against a 365-day rule, and strikes with open interest of 2, 3
+    and 7 against a floor of 250 - while a compliant contract sat one expiration
+    further out on the same board. So the search now runs across EVERY
+    expiration, and only falls back when the board genuinely has nothing that
+    qualifies. Callers pair that fallback with `breaches()` to say what is wrong
+    with it rather than presenting it as a clean pick.
+    """
     calls = [c for c in chain.contracts
              if c.option_type == OptionType.CALL and c.mid > 0]
     if not calls:
         return None
-    long_enough = [c for c in calls if c.dte >= min_dte]
-    pool = long_enough or calls
-    best_dte = max(c.dte for c in pool)
-    at_expiry = [c for c in pool if c.dte == best_dte]
-    with_delta = [c for c in at_expiry if c.abs_delta > 0]
+
+    min_oi = min_open_interest() if min_oi is None else min_oi
+    max_dte = max_leap_dte() if max_dte is None else max_dte
+
+    compliant = [c for c in calls
+                 if meets_sop(c, target_delta, min_dte, max_dte, min_oi)]
+    if compliant:
+        # Longest expiration inside the window, because the whole point of the
+        # extra time is room to be wrong; then the delta nearest her configured
+        # target on it.
+        #
+        # That last step used to take the SHALLOWEST delta clearing the floor,
+        # on the logic that deeper only costs more. It backfired on EBAY, where
+        # every strike from 0.70 to 0.75 had an open interest under 70 and the
+        # only liquid one left was delta 0.94 - so "shallowest that qualifies"
+        # returned a $5,725 near-stock-substitute. Aiming at the target instead
+        # of the floor picks the same contract when the band is liquid and lets
+        # breaches() speak up when it is not.
+        preferred = max(target_delta, target_delta_pref())
+        best_dte = max(c.dte for c in compliant)
+        at_expiry = [c for c in compliant if c.dte == best_dte]
+        return min(at_expiry, key=lambda c: abs(c.abs_delta - preferred))
+
+    # Nothing on the board qualifies. Hand back the LEAST-BAD contract so the
+    # tab still has something to score, and let the caller say what it breaks.
+    in_window = [c for c in calls if min_dte <= c.dte <= max_dte]
+    pool = in_window or calls
+    with_delta = [c for c in pool if c.abs_delta > 0]
     if with_delta:
-        return min(with_delta, key=lambda c: abs(c.abs_delta - target_delta))
+        deep = stock_substitute_delta()
+        return min(with_delta, key=lambda c: _shortfall(
+            c, target_delta, min_dte, max_dte, min_oi, deep))
     # No greeks on the feed - approximate by moneyness instead. A 0.75 delta
     # call sits roughly 10-15% in the money on a year-out contract.
+    best_dte = max(c.dte for c in pool)
+    at_expiry = [c for c in pool if c.dte == best_dte]
     spot = chain.underlying_price
     wanted = spot * (1 - (target_delta - 0.5) * 0.55)
     return min(at_expiry, key=lambda c: abs(c.strike - wanted))
@@ -1224,6 +1388,17 @@ def score_full(candidate: LeapsCandidate, chain: Optional[OptionChain],
     candidate.strike_ladder = strike_ladder(chain, spot, contract.dte, info)
     candidate.headline = _headline(candidate)
     candidate.summary = _summary(candidate)
+
+    # The hard contract rules come first. Everything below is a judgement call;
+    # these are the ones her SOP simply does not bend on, so if the board had
+    # nothing compliant and we fell back to the nearest contract, she reads that
+    # before she reads the score.
+    broken = breaches(contract, target_delta)
+    if broken:
+        candidate.flags.append(
+            "This contract does not meet your SOP - it is the closest one listed, "
+            "not a valid pick.")
+        candidate.flags.extend(broken)
 
     if econ.liquidity == "Thin":
         candidate.flags.append(
