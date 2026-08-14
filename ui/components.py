@@ -1947,3 +1947,59 @@ def bp_effect_input(size, key: str) -> None:
         size["bp_effect"] = float(typed)
         theme.note(f"Using **\\${typed:,.0f}** from thinkorswim instead of the app's "
                    f"**\\${est:,.0f}** estimate.")
+
+
+# ==================================================== several names, side by side
+def compare_dataframe(rows) -> pd.DataFrame:
+    """One row per ticker, typed - not pre-formatted strings.
+
+    Real numbers rather than "$305.26" text so the column can sort by value and
+    a missing figure stays genuinely blank. A formatted "n/a" would sort as text
+    and sit in the middle of the prices.
+    """
+    return pd.DataFrame([{
+        "Symbol": r.symbol,
+        "Price": r.price,
+        "Today %": r.change_pct,
+        "1 year %": r.year_pct,
+        "Off high %": r.off_high_pct,
+        "Trend": (r.trend or "").title(),
+        "RSI": r.rsi,
+        "Quality": r.grade,
+        "P/E": r.pe,
+        "Sales growth %": r.rev_growth_pct,
+        "Earnings in": r.days_to_earnings,
+    } for r in rows])
+
+
+def compare_column_config():
+    return {
+        "Symbol": st.column_config.TextColumn(
+            help="Click a ticker's button above the table to open it in full."),
+        "Price": st.column_config.NumberColumn(format="$%.2f",
+            help="Latest price, about 15 minutes delayed."),
+        "Today %": st.column_config.NumberColumn(format="%+.2f%%",
+            help="Move so far today."),
+        "1 year %": st.column_config.NumberColumn(format="%+.0f%%",
+            help="Where it is against this time last year."),
+        "Off high %": st.column_config.NumberColumn(format="%+.0f%%",
+            help="How far below its 12-month high it is trading. Near 0 means "
+                 "it is at the top of its range - where your SOP sells calls "
+                 "rather than buys them."),
+        "Trend": st.column_config.TextColumn(
+            help="Up, down or sideways, from the moving averages."),
+        "RSI": st.column_config.NumberColumn(format="%.0f",
+            help="Momentum, 0-100. Under 30 is oversold, over 70 overbought. "
+                 "Your LEAPS rule buys under 45."),
+        "Quality": st.column_config.TextColumn(
+            help="A-F report card on the company. ETF means it is a basket, so "
+                 "there is no single company to grade."),
+        "P/E": st.column_config.NumberColumn(format="%.1f",
+            help="Price against earnings. Blank for funds and for anything that "
+                 "does not turn a profit."),
+        "Sales growth %": st.column_config.NumberColumn(format="%+.0f%%",
+            help="Revenue growth over the past year."),
+        "Earnings in": st.column_config.NumberColumn(format="%d days",
+            help="Days to the next report. Your SOP does not open a trade that "
+                 "straddles one. Blank for funds."),
+    }

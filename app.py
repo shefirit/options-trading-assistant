@@ -118,6 +118,93 @@ def _remember_symbol(sym: str) -> list:
     return kept
 
 
+def _compare_row(sym: str, provider, settings):
+    """Everything one row of the comparison needs, from the caches it can reach.
+
+    Each source is tried on its own: Yahoo throttles fundamentals from cloud IPs
+    far more readily than price history, so a name with a price and no P/E is
+    normal and still worth a row. Only a total failure gets reported as one.
+    """
+    from src.research import compare
+
+    kind = _classify(sym, settings)
+    price = change = None
+    closes, analysis, info, earnings = [], None, {}, None
+    trend = ""
+    try:
+        price, change = provider.get_price_change(sym)
+    except Exception:
+        pass
+    try:
+        closes = provider.get_long_closes(sym) or []
+    except Exception:
+        pass
+    if kind != "index":
+        try:
+            analysis = provider.get_stock_analysis(sym)
+        except Exception:
+            pass
+        try:
+            info = provider.get_raw_info(sym) or {}
+        except Exception:
+            pass
+        try:
+            earnings = (provider.get_earnings_info(sym) or {}).get("earnings_date")
+        except Exception:
+            pass
+    try:
+        trend = provider.get_market_context(sym).trend or ""
+    except Exception:
+        pass
+
+    return compare.build_row(sym, kind=kind, price=price, change_pct=change,
+                             closes=closes, analysis=analysis, info=info,
+                             earnings_date=earnings, trend=trend)
+
+
+def _compare_panel(symbols: list, provider, settings) -> None:
+    """The names she is holding, side by side.
+
+    Sits with the switcher row rather than in an eighth sub-tab: the tab bar
+    already needs about 1183px on her laptop and one more label pushes a tool
+    off-screen behind a scroll arrow. It is also the same thought - "these are
+    my names" then "so how do they compare" - so it belongs next to them.
+
+    Collapsed, and behind a button. Filling it costs a fetch per name, and she
+    opens this tab many times a day to look at ONE thing.
+    """
+    from src.research import compare
+
+    if len(symbols) < 2 or not provider.is_real:
+        return
+    with st.expander(f"⚖️ Compare these {len(symbols)} side by side", key="cmp"):
+        theme.note("The stock picture across your names at once - price, trend, "
+                   "momentum, quality, and when each one reports. For how RICH the "
+                   "options are on each (implied volatility, what a spread pays), "
+                   "use **Names to compare** in the 💡 Picks tab - that needs a full "
+                   "option chain per name, which is why it lives there.")
+        if st.button("Compare them", type="primary", key="cmp_go"):
+            rows, bar = [], st.progress(0.0)
+            for i, sym in enumerate(symbols, start=1):
+                bar.progress(i / len(symbols), text=f"Reading {sym}...")
+                try:
+                    rows.append(_compare_row(sym, provider, settings))
+                except Exception:
+                    pass
+            bar.empty()
+            st.session_state["cmp_rows"] = compare.sort_rows(rows, symbols)
+
+        rows = st.session_state.get("cmp_rows") or []
+        if not rows:
+            return
+        st.dataframe(components.compare_dataframe(rows), width="stretch",
+                     hide_index=True,
+                     column_config=components.compare_column_config())
+        for r in rows:
+            if r.note:
+                theme.note(f"**{r.symbol}** - {r.note}")
+
+
 def _switch_symbol(sym: str) -> None:
     """Point the whole Analyze tab at another ticker.
 
@@ -139,7 +226,13 @@ def _forget_symbols() -> None:
     st.session_state["analyze_extra_syms"] = []
 
 
-def _symbol_switcher(current: str, recents: list, limit: int = 8) -> None:
+# How many tickers get a button, and therefore a row in the comparison. The
+# stored list keeps twenty; twenty buttons is a wall and twenty fetches is a
+# wait. The rest stay one keystroke away in the dropdown.
+_SWITCHER_LIMIT = 8
+
+
+def _symbol_switcher(current: str, recents: list, limit: int = _SWITCHER_LIMIT) -> None:
     """One-click buttons for the tickers she is moving between.
 
     Her ask: "i want to add another ticker - it makes the first disappear...
@@ -216,8 +309,9 @@ def _analyze_symbol_box(settings) -> str:
                        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
                        accept_new_options=True)
     sym = (sym or "").strip().upper()
-    _symbol_switcher(sym, _remember_symbol(sym))
-    return sym
+    held = _remember_symbol(sym)
+    _symbol_switcher(sym, held)
+    return sym, held[:_SWITCHER_LIMIT]
 
 
 def _compute_advice(sym, kind, provider, settings):
@@ -1486,7 +1580,7 @@ def _tab_analyze(settings, provider, strategies) -> None:
     tool below reads it.
     """
     theme.section("Everything about one name, in one place", "Analyze")
-    sym = _analyze_symbol_box(settings)
+    sym, held = _analyze_symbol_box(settings)
     theme.note("Type a ticker and every tool below reads it. **Looking at several names? "
                "Add them one at a time - each one you pick joins the row of buttons above, "
                "and one click switches the whole tab to it.** The dropdown holds the indexes, "
@@ -1494,6 +1588,8 @@ def _tab_analyze(settings, provider, strategies) -> None:
                "(SOFI, HOOD...) type it and click the **Add:** line that appears. Your names "
                "are kept for next time, so you only ever type one once. Indexes (SPX, NDX) "
                "have no company behind them, so the company tools stay empty for those.")
+
+    _compare_panel(held, provider, settings)
 
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind
