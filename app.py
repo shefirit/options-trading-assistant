@@ -94,20 +94,74 @@ def _remembered_symbols(base: list, extras: list, current) -> list:
     return list(dict.fromkeys(list(extras) + list(base)))
 
 
-def _remember_symbol(sym: str, base: list) -> None:
-    """Keep a hand-typed ticker on disk so it is still offered tomorrow.
+def _remember_symbol(sym: str) -> list:
+    """Add a ticker to the ones she is working with, and return that list.
 
-    Only names that are NOT in the universe files are worth storing - the other
-    thousand are already in the dropdown, and writing them would fill a 20-slot
-    list with tickers that never needed remembering.
+    EVERY symbol she picks is kept, not only the hand-typed ones. That was the
+    earlier rule - the universe already offers the other thousand, so why store
+    them - and it was wrong once the switcher existed: the row is the set of
+    names she is moving between, and NVDA and AAPL belong in it exactly as much
+    as a ticker she had to type. As a side benefit the dropdown now opens on the
+    names she actually uses instead of on SPX.
     """
-    if not sym or sym in base:
-        return
+    from src.data import recent_symbols
+    if not sym:
+        return st.session_state.get("analyze_extra_syms", [])
+    try:
+        kept = recent_symbols.remember(sym)
+    except Exception:
+        # A convenience list is never worth an error on her screen. Fall back to
+        # keeping it for this session only.
+        kept = [sym] + [s for s in st.session_state.get("analyze_extra_syms", [])
+                        if s != sym]
+    st.session_state["analyze_extra_syms"] = kept
+    return kept
+
+
+def _switch_symbol(sym: str) -> None:
+    """Point the whole Analyze tab at another ticker.
+
+    An on_click CALLBACK rather than an `if st.button(...)` branch, and that is
+    load-bearing: `analyze_sym` is a widget key, and Streamlit refuses to let it
+    be written after its widget has been created in the same run. Callbacks run
+    at the top of the next run, before any widget exists, so this is the one
+    place the assignment is legal.
+    """
+    st.session_state["analyze_sym"] = sym
+
+
+def _forget_symbols() -> None:
     from src.data import recent_symbols
     try:
-        recent_symbols.remember(sym)
+        recent_symbols.save([])
     except Exception:
-        pass          # a convenience list is never worth an error on her screen
+        pass
+    st.session_state["analyze_extra_syms"] = []
+
+
+def _symbol_switcher(current: str, recents: list, limit: int = 8) -> None:
+    """One-click buttons for the tickers she is moving between.
+
+    Her ask: "i want to add another ticker - it makes the first disappear...
+    only 1 ticker." The box is a single-select and every tool below it renders
+    one name in depth, so holding several at once is a row of shortcuts rather
+    than a wider box - click one and the whole tab becomes that name.
+
+    Capped, because the list keeps twenty and twenty buttons is a wall. The
+    older ones are still one keystroke away in the dropdown, which now lists
+    them first.
+    """
+    shown = [s for s in recents if s][:limit]
+    if len(shown) < 2:
+        return          # a single button that reloads what is already on screen
+    cols = st.columns(len(shown) + 1)
+    for col, sym in zip(cols, shown):
+        col.button(sym, key=f"sw_{sym}", on_click=_switch_symbol, args=(sym,),
+                   type="primary" if sym == current else "secondary",
+                   width="stretch",
+                   help=f"Show everything about {sym}")
+    cols[-1].button("Clear", key="sw_clear", on_click=_forget_symbols,
+                    width="stretch", help="Empty this row. Nothing else changes.")
 
 
 def _analyze_symbol_box(settings) -> str:
@@ -142,6 +196,11 @@ def _analyze_symbol_box(settings) -> str:
     the session-only version shipped. Session state still carries it within a
     run, so a read-only filesystem degrades to the old behaviour rather than
     breaking the box.
+
+    That list is also what the switcher row underneath is built from: the box
+    holds ONE name because every tool below renders one name in depth, so
+    "several tickers at once" is a row of one-click shortcuts rather than a
+    multiselect that nothing downstream could use.
     """
     base = _symbol_options(settings)
     if "analyze_extra_syms" not in st.session_state:
@@ -157,7 +216,7 @@ def _analyze_symbol_box(settings) -> str:
                        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
                        accept_new_options=True)
     sym = (sym or "").strip().upper()
-    _remember_symbol(sym, base)
+    _symbol_switcher(sym, _remember_symbol(sym))
     return sym
 
 
@@ -1428,11 +1487,13 @@ def _tab_analyze(settings, provider, strategies) -> None:
     """
     theme.section("Everything about one name, in one place", "Analyze")
     sym = _analyze_symbol_box(settings)
-    theme.note("Type a ticker once - every tool below reads it. The list holds the indexes, the "
-               "big ETFs and the S&P 500 / Nasdaq-100 stocks; for anything else (SOFI, HOOD...) "
-               "type it and click the **Add:** line that appears. Anything you add is kept at "
-               "the top of the list for next time, so you only ever type it once. Indexes "
-               "(SPX, NDX) have no company behind them, so the company tools stay empty.")
+    theme.note("Type a ticker and every tool below reads it. **Looking at several names? "
+               "Add them one at a time - each one you pick joins the row of buttons above, "
+               "and one click switches the whole tab to it.** The dropdown holds the indexes, "
+               "the big ETFs and the S&P 500 / Nasdaq-100 stocks; for anything else "
+               "(SOFI, HOOD...) type it and click the **Add:** line that appears. Your names "
+               "are kept for next time, so you only ever type one once. Indexes (SPX, NDX) "
+               "have no company behind them, so the company tools stay empty for those.")
 
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind

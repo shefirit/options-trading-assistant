@@ -211,7 +211,13 @@ def test_the_remembered_list_never_duplicates():
     assert opts.count("SPY") == 1
 
 
-def test_a_symbol_already_in_the_universe_is_not_remembered_separately():
+def test_a_universe_symbol_needs_no_extra_slot_in_the_dropdown():
+    """_remembered_symbols only front-loads names the universe does not carry.
+
+    The list she switches between DOES include universe names - that is
+    _remember_symbol's job, and the switcher row is built from it - but a name
+    already in `base` needs no second entry to be selectable.
+    """
     from app import _remembered_symbols
 
     extras = []
