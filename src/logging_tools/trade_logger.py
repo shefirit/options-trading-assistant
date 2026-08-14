@@ -11,7 +11,8 @@ from typing import Any, Optional
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import (COLUMNS, build_assign_row, build_close_row,
-                                   build_roll_row, build_row, new_trade_id)
+                                   build_edit_row, build_roll_row, build_row,
+                                   new_trade_id)
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -133,6 +134,32 @@ def close_trade(
                           exit_cost, realized_pl, reason, note,
                           closed_on=closed_on, close_cash=close_cash,
                           account=account)
+    return _append(row)
+
+
+def edit_trade(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    changes: dict[str, Any],
+    summary: str = "",
+    edited_on: Optional[date] = None,
+    target: str = "open",
+    roll_index: Optional[int] = None,
+) -> tuple[str, bool]:
+    """Correct details typed wrong when the trade was logged.
+
+    Appends rather than rewrites, for the same reason the close correction does:
+    the sheet is append-only, so a fix that had to change an old row would need
+    a delete and a re-write, and a failure between the two loses the trade.
+    Here the worst case is a correction that never lands, leaving the original
+    exactly as it was. Returns (destination, went_to_sheet).
+    """
+    if not trade_id or not changes:
+        return "", False
+    row = build_edit_row(trade_id, underlying, strategy_name, changes,
+                         summary=summary, edited_on=edited_on,
+                         target=target, roll_index=roll_index)
     return _append(row)
 
 

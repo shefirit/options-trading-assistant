@@ -192,6 +192,71 @@ def build_roll_row(
     ]
 
 
+# Fields an edit row may carry. Anything not listed here is left alone, and
+# `strategy` / `underlying` are absent on purpose - changing either makes it a
+# different trade, and the honest fix for that is delete and re-log.
+EDITABLE = ("opened_on", "expiration", "contracts", "credit", "open_cash",
+            "legs", "strikes", "max_loss", "buying_power", "account", "note")
+
+
+def build_edit_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    changes: dict[str, Any],
+    summary: str = "",
+    edited_on: Optional[date] = None,
+    target: str = "open",
+    roll_index: Optional[int] = None,
+) -> list[Any]:
+    """The "edit" event row - a correction to details typed wrong earlier.
+
+    The log is append-only and the sheet cannot be edited in place, so a fix is
+    a new row rather than a change to an old one. Same shape as the existing
+    close correction: nothing is deleted, the app replays the log in order, and
+    a later edit wins. She can correct a correction.
+
+    Only the fields she actually changed are written, because absent means
+    "leave it alone" - a blanket rewrite would silently reset anything the form
+    did not know about.
+
+    `target` says WHAT is being corrected: "open" for the trade's own details,
+    or "roll" plus `roll_index` for one of its roll events. The index counts
+    rolls in the order they were WRITTEN, not by date - append order never
+    changes, whereas correcting a roll's date would renumber a date-sorted list
+    underneath the very edit doing the correcting.
+
+    `summary` is the human-readable "contracts 2 -> 1" that lands in Notes, so
+    the sheet reads as a story rather than as a second mystery row.
+    """
+    payload: dict[str, Any] = {
+        "target": target,
+        "changes": {k: v for k, v in changes.items() if k in EDITABLE},
+    }
+    if target == "roll" and roll_index is not None:
+        payload["roll_index"] = int(roll_index)
+    changed = payload["changes"]
+    return [
+        (edited_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        # The corrected strikes, when that is what changed - so the column
+        # still reads correctly at a glance in the sheet.
+        str(changed.get("strikes", "")),
+        "", "", "",                   # delta/dte/contracts - see Details JSON
+        "",                           # Credit $ - the open row keeps the original
+        "", "", "",                   # max loss/BP/passed SOP - unchanged here
+        summary or "Corrected trade details",
+        trade_id,
+        "edit",
+        str(changed.get("expiration", "")),
+        "",                           # Exit Cost $ - not a close
+        "",                           # Realized P&L $ - no money moved
+        json.dumps(payload, separators=(",", ":")),
+        "",                           # Account - carried inside changes
+    ]
+
+
 def build_assign_row(
     trade_id: str,
     underlying: str,

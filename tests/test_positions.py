@@ -21,7 +21,8 @@ from src.engine.positions import (
     performance,
     strike_cushion,
 )
-from src.logging_tools.row import COLUMNS, build_close_row, build_row
+from src.logging_tools.row import (COLUMNS, build_close_row, build_edit_row,
+                                   build_row)
 
 
 def _trade() -> Trade:
@@ -560,3 +561,108 @@ def test_an_older_row_with_no_account_column_at_all_still_parses():
     assert len(positions) == 1
     assert positions[0].account == ""
     assert positions[0].underlying == "SPX"
+
+
+# ---------- correcting details typed wrong (the "edit" event) ----------
+def _opened(trade_id: str = "E1") -> list:
+    return build_row(_trade(), "Put Credit Spread", SIZE, True, "first note",
+                     trade_id=trade_id)
+
+
+def test_an_edit_corrects_the_contract_count():
+    """Her actual complaint: typed the details wrong and could not fix them."""
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread",
+                          {"contracts": 3}, summary="contracts 1 -> 3")
+    p = parse_rows(COLUMNS, [_opened(), edit])[0]
+    assert p.contracts == 3
+
+
+def test_an_edit_only_touches_the_fields_it_names():
+    """Absent means "she did not change this", NOT "set it to blank" - a form
+    that submitted everything would otherwise wipe what it had no input for."""
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 2})
+    p = parse_rows(COLUMNS, [_opened(), edit])[0]
+    assert p.contracts == 2
+    assert p.underlying == "SPX"
+    assert p.note == "first note"
+    assert p.credit == 300.0
+    assert p.expiration is not None
+    assert [leg.strike for leg in p.legs] == [5000.0, 4975.0]
+
+
+def test_an_edit_can_move_the_strikes_and_the_day_one_snapshot_with_them():
+    legs = [{"role": "short_put", "action": "sell", "type": "put", "strike": 5050,
+             "delta": -0.2, "premium": 8.0, "qty": 1, "dte": 30},
+            {"role": "long_put", "action": "buy", "type": "put", "strike": 5025,
+             "delta": -0.15, "premium": 5.0, "qty": 1, "dte": 30}]
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread",
+                          {"legs": legs, "strikes": "5050 / 5025"})
+    p = parse_rows(COLUMNS, [_opened(), edit])[0]
+    assert [leg.strike for leg in p.legs] == [5050.0, 5025.0]
+    assert [leg.strike for leg in p.open_legs] == [5050.0, 5025.0]
+
+
+def test_the_last_edit_wins_so_a_correction_can_be_corrected():
+    first = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 5})
+    second = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 2})
+    p = parse_rows(COLUMNS, [_opened(), first, second])[0]
+    assert p.contracts == 2
+
+
+def test_an_edit_leaves_the_rolls_and_the_close_alone():
+    from src.logging_tools.row import build_roll_row
+
+    rolled = build_roll_row("E1", "SPX", "Put Credit Spread", 90.0,
+                            new_strike=7100.0, new_credit=140.0)
+    closed = build_close_row("E1", "SPX", "Put Credit Spread", 210.0, 210.0,
+                             "Profit target (50%) hit")
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 2})
+    p = parse_rows(COLUMNS, [_opened(), rolled, edit, closed])[0]
+    assert p.contracts == 2
+    assert p.status == "closed"
+    assert p.roll_income == 90.0
+    assert p.realized_pl == 210.0
+
+
+def test_an_edit_can_correct_one_roll_by_its_write_order():
+    """Rolls are addressed by the order they were WRITTEN, not by date -
+    correcting a roll's date would renumber a date-sorted list underneath the
+    very edit doing the correcting."""
+    from src.logging_tools.row import build_roll_row
+
+    r1 = build_roll_row("E1", "SPX", "Put Credit Spread", 100.0, new_strike=7100.0,
+                        rolled_on=date(2026, 7, 16))
+    r2 = build_roll_row("E1", "SPX", "Put Credit Spread", 200.0, new_strike=7200.0,
+                        rolled_on=date(2026, 7, 27))
+    fix = build_edit_row("E1", "SPX", "Put Credit Spread", {"open_cash": 241.0},
+                         target="roll", roll_index=1)
+    p = parse_rows(COLUMNS, [_opened(), r1, r2, fix])[0]
+    assert p.roll_income == pytest.approx(100.0 + 241.0)
+
+
+def test_an_edit_for_an_unknown_trade_is_ignored():
+    edit = build_edit_row("GHOST", "SPX", "Put Credit Spread", {"contracts": 9})
+    positions = parse_rows(COLUMNS, [_opened(), edit])
+    assert len(positions) == 1
+    assert positions[0].contracts == 1
+
+
+def test_an_edit_row_reads_as_a_correction_in_the_sheet():
+    """The Notes cell has to say what changed, or the sheet grows mystery rows."""
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 3},
+                          summary="contracts 1 -> 3")
+    assert edit[COLUMNS.index("Event")] == "edit"
+    assert edit[COLUMNS.index("Notes")] == "contracts 1 -> 3"
+    assert edit[COLUMNS.index("Trade ID")] == "E1"
+    assert edit[COLUMNS.index("Realized P&L $")] == ""
+
+
+def test_an_edit_cannot_change_the_strategy_or_the_ticker():
+    """Locked on purpose: either makes it a different trade."""
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread",
+                          {"strategy": "iron_condor", "underlying": "NDX",
+                           "contracts": 2})
+    p = parse_rows(COLUMNS, [_opened(), edit])[0]
+    assert p.strategy_name == "Put Credit Spread"
+    assert p.underlying == "SPX"
+    assert p.contracts == 2

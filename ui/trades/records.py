@@ -119,6 +119,182 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
+def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> None:
+    """Fix details typed wrong when the trade was logged.
+
+    The close price already had a correction path; everything typed at the
+    OPENING did not, so a mistyped strike or contract count meant deleting the
+    whole trade and rebuilding it - losing the roll history with it.
+
+    Same append-only shape as the close fix: nothing is deleted, a correction
+    row records what changed, and the app replays the log in order so the later
+    value wins. She can correct a correction, and a fix that fails to send
+    leaves the original untouched rather than half-applied.
+
+    Strategy and ticker are deliberately NOT editable. Changing either makes it
+    a different trade - the strategy re-bases the whole risk calculation and the
+    ticker is baked into the Trade ID - and delete-and-relog is the honest move.
+    """
+    if not editable:
+        return
+    from src.engine.config_loader import get_strategy
+    from src.engine.models import Trade
+    from src.engine.quick_log import resize_after_edit
+
+    with st.expander("✏️ Fix trade details I typed wrong", key="fix_details"):
+        theme.note("Wrong strike, wrong number of contracts, wrong date? Correct it "
+                   "here. Nothing is deleted - the app records the correction and "
+                   "reads the new values from now on, and your rolls and close stay "
+                   "exactly as they are.")
+        p = _pick(editable, labels, "fix_details_pick", "Which trade")
+        if p is None:
+            return
+
+        st.caption(f"{p.underlying} · {p.strategy_name} · logged "
+                   f"{components.fmt_date(p.opened)}")
+        changes: dict = {}
+        bits: list[str] = []
+
+        c1, c2, c3 = st.columns(3)
+        opened = c1.date_input("Opened on", value=p.opened,
+                               key=f"ed_open_{p.trade_id}", format="DD/MM/YYYY")
+        expiry = c2.date_input("Expires", value=p.expiration,
+                               key=f"ed_exp_{p.trade_id}", format="DD/MM/YYYY")
+        contracts = int(c3.number_input(
+            "Contracts", min_value=1, max_value=100,
+            value=int(p.contracts or 1), step=1, key=f"ed_qty_{p.trade_id}"))
+
+        if opened and opened != p.opened:
+            changes["opened_on"] = opened.isoformat()
+            bits.append(f"opened {components.fmt_date(p.opened)} → "
+                        f"{components.fmt_date(opened)}")
+        if expiry and expiry != p.expiration:
+            changes["expiration"] = expiry.isoformat()
+            bits.append(f"expiry {components.fmt_date(p.expiration)} → "
+                        f"{components.fmt_date(expiry)}")
+        if contracts != int(p.contracts or 1):
+            changes["contracts"] = contracts
+            bits.append(f"contracts {p.contracts} → {contracts}")
+
+        # One box per leg, labelled by what the leg IS. A bare list of numbers
+        # is unreadable on a four-leg condor.
+        legs = [leg.model_copy(deep=True) for leg in (p.open_legs or p.legs)]
+        if legs:
+            st.markdown("**Strikes**")
+            cols = st.columns(min(len(legs), 4))
+            for i, leg in enumerate(legs):
+                label = (f"{'Bought' if leg.action.value == 'buy' else 'Sold'} "
+                         f"{leg.option_type.value}")
+                new = cols[i % len(cols)].number_input(
+                    label, value=float(leg.strike), step=1.0, format="%.2f",
+                    key=f"ed_k{i}_{p.trade_id}")
+                if abs(float(new) - float(leg.strike)) > 1e-9:
+                    bits.append(f"{label.lower()} {leg.strike:g} → {new:g}")
+                    leg.strike = float(new)
+
+        c4, c5 = st.columns(2)
+        credit = float(c4.number_input(
+            "Credit collected $" if (p.open_cash or 0) >= 0 else "Net paid $",
+            value=abs(float(p.credit or 0.0)), step=1.0, format="%.2f",
+            key=f"ed_credit_{p.trade_id}",
+            help="The total for the whole position, as it went through in "
+                 "thinkorswim - not per contract."))
+        book = c5.selectbox(
+            "Which book", ["real", "paper"],
+            index=0 if (p.account or "real") == "real" else 1,
+            key=f"ed_book_{p.trade_id}",
+            format_func=lambda v: "Real money" if v == "real" else "Practice")
+
+        note = st.text_input("Note on the trade", value=p.note or "",
+                             key=f"ed_note_{p.trade_id}")
+        why = st.text_input("What was wrong (optional)", key=f"ed_why_{p.trade_id}",
+                            placeholder="e.g. typed 2 contracts, only placed 1")
+
+        strike_changed = any(
+            abs(float(a.strike) - float(b.strike)) > 1e-9
+            for a, b in zip(legs, (p.open_legs or p.legs)))
+        if strike_changed:
+            changes["legs"] = [
+                {"role": l.role, "action": l.action.value, "type": l.option_type.value,
+                 "strike": l.strike, "delta": l.delta, "premium": l.premium,
+                 "qty": l.quantity, "dte": l.dte} for l in legs]
+            changes["strikes"] = " / ".join(f"{l.strike:g}" for l in legs)
+        if abs(credit - abs(float(p.credit or 0.0))) > 0.005:
+            bits.append(f"credit ${abs(p.credit or 0):,.0f} → ${credit:,.0f}")
+        if book != (p.account or "real"):
+            changes["account"] = book
+            bits.append(f"book {p.account or 'real'} → {book}")
+        if (note or "") != (p.note or ""):
+            changes["note"] = note
+
+        # Anything that moves the money or the size re-prices the risk. Leaving
+        # the old max-loss and buying-power figures would misreport the two
+        # numbers the dashboard and the monthly limit are built on.
+        if changes.get("legs") or "contracts" in changes or \
+                abs(credit - abs(float(p.credit or 0.0))) > 0.005:
+            try:
+                strat = get_strategy(p.strategy_key) if p.strategy_key else {}
+                trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
+                              contracts=contracts, legs=legs,
+                              underlying_price=p.underlying_price_at_entry or 0.0)
+                fresh = resize_after_edit(
+                    strat, trade, credit, old_credit=float(p.open_credit or p.credit or 0),
+                    old_open_cash=float(p.open_cash or 0.0),
+                    old_shares_cost=float(p.shares_cost or 0.0),
+                    old_contracts=int(p.contracts or 1))
+                changes.update({
+                    "credit": fresh["credit"], "open_cash": fresh["open_cash"],
+                    "max_loss": fresh["max_loss"],
+                    "buying_power": fresh["buying_power"],
+                })
+                if abs(fresh["max_loss"] - float(p.max_loss or 0)) > 0.5:
+                    bits.append(f"most you can lose ${p.max_loss:,.0f} → "
+                                f"${fresh['max_loss']:,.0f}")
+            except Exception as exc:
+                st.warning(f"Could not re-check the risk numbers for this one ({exc}). "
+                           "The details will be corrected, but check the max loss "
+                           "and buying power yourself.")
+                changes["credit"] = round(credit, 2)
+
+        if not changes:
+            theme.note("Nothing changed yet - edit a field above and the correction "
+                       "will appear here.")
+            return
+
+        # Caught while testing the panel: correcting 1 contract to 2 left the
+        # credit at the one-contract figure, so the max loss came out right for
+        # the wrong reason. The app must not guess that the credit doubled -
+        # only her fill knows - but it must not let the mismatch pass unsaid.
+        if "contracts" in changes and abs(credit - abs(float(p.credit or 0.0))) <= 0.005:
+            st.warning(
+                f"You changed the contracts but left the credit at "
+                f"**\\${credit:,.0f}**. That box is the total for the whole "
+                f"position, so if {contracts} contracts actually collected more, "
+                "correct it here too - otherwise the result and the max loss will "
+                "be measured against the old number.")
+
+        theme.note("**This will record:** " + "; ".join(bits or ["a note change"]))
+
+        if st.button("Save the correction", type="primary", key="ed_go"):
+            from src.logging_tools.trade_logger import edit_trade
+            try:
+                dest, live = edit_trade(
+                    p.trade_id, p.underlying, p.strategy_name, changes,
+                    summary=(why.strip() or "; ".join(bits))[:250])
+            except Exception as e:
+                st.error(f"Could not save the correction: {e}")
+                return
+            st.session_state.pop("trades_rows", None)
+            for k in list(st.session_state):
+                if k.startswith("ed_") and k.endswith(p.trade_id):
+                    st.session_state.pop(k, None)
+            st.session_state.pop("fix_details", None)
+            st.session_state["ql_flash"] = (
+                f"✏️ {p.underlying} corrected: {'; '.join(bits) or 'note updated'}. "
+                f"Saved to {'your Google Sheet' if live else 'the local log'}.")
+            st.rerun()
+
+
 def _pick(positions: list, labels: list[str], key: str, prompt: str):
     """A trade picker keyed on Trade ID rather than on list position.
 
@@ -234,6 +410,15 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
 
     if fixable:
         _fix_close_form(fixable, [_closed_label(p) for p in fixable])
+
+    # Open trades first: a mistyped detail is usually caught while the trade is
+    # still on the books, and correcting it there fixes what the open-trade
+    # cards and the buying-power figure are reading right now.
+    correctable = (components.by_opened_date([p for p in open_pos if p.trade_id])
+                   + list(fixable))
+    _edit_details_form(correctable,
+                       [(_open_label(p) if p.status == "open" else _closed_label(p))
+                        for p in correctable], strategies)
 
     if open_pos:
         with st.expander(f"📂 All open trades ({len(open_pos)})",

@@ -89,6 +89,47 @@ def _value_at_zero(trade: Trade) -> float:
     return total
 
 
+def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
+                      old_credit: float, old_open_cash: float,
+                      old_shares_cost: float, old_contracts: int) -> dict[str, float]:
+    """Fresh sizing after she corrects a trade's details.
+
+    Correcting the contracts or a strike changes what the trade can lose, and
+    leaving the old figures in place would quietly misreport her risk and her
+    monthly buying power - the two numbers the whole dashboard is built on.
+
+    The awkward part is that sizing_from_fill wants the ORIGINAL fill inputs
+    (what the LEAPS cost, what the shares cost) and the log does not store them
+    directly. It does store the ledger they produced, so they come back out of
+    it by rearranging the same equations sizing_from_fill used going in:
+
+        debit  : open_cash = credit - cost           -> cost = credit - open_cash
+        shares : open_cash = credit - shares - prot  -> prot = credit - shares - open_cash
+
+    Per-share values are recovered against the OLD contract count and then
+    re-multiplied by the new one, which is what makes changing the contracts
+    scale the position rather than merely relabel it.
+    """
+    basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
+    old_contracts = max(int(old_contracts), 1)
+
+    leaps_cost = share_price = protection = None
+    if basis == "debit":
+        # Per contract, so a corrected contract count scales the cost with it.
+        per_contract = (float(old_credit) - float(old_open_cash)) / old_contracts
+        leaps_cost = per_contract * max(int(trade.contracts), 1)
+    elif basis in ("shares_plus_protection", "ratio_risk"):
+        share_price = float(old_shares_cost) / (100.0 * old_contracts) or None
+        per_contract = (float(old_credit) - float(old_shares_cost)
+                        - float(old_open_cash)) / old_contracts
+        protection = per_contract * max(int(trade.contracts), 1)
+
+    return sizing_from_fill(trade, strat, credit_total,
+                            leaps_cost_total=leaps_cost,
+                            share_price=share_price,
+                            protection_cost_total=protection)
+
+
 def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
                      leaps_cost_total: Optional[float] = None,
                      share_price: Optional[float] = None,

@@ -352,6 +352,83 @@ def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
         pos.expiration = None
 
 
+def _legs_from_json(raw: Any) -> list[Leg]:
+    """Legs out of an edit's changes block - same shape the open row stores."""
+    return _parse_details(json.dumps({"legs": raw}))[1] if raw else []
+
+
+def _apply_edit(pos: Optional[Position],
+                rolls: list[tuple[str, int, RollEvent]],
+                trade_id: str, edit: dict[str, Any]) -> None:
+    """Apply one correction to the trade it names.
+
+    Only keys actually present are touched. Absent means "she did not change
+    this", which is not the same as "set it to blank" - a form that submitted
+    every field would otherwise wipe whatever it had no input for.
+
+    A roll is addressed by its WRITE order (`roll_index`), not by date. Rolls
+    are applied in date order further down, but correcting a roll's date would
+    then renumber the very list the index is pointing into.
+    """
+    changes = edit.get("changes") or {}
+    if not isinstance(changes, dict) or not changes:
+        return
+
+    if edit.get("target") == "roll":
+        index = edit.get("roll_index")
+        if index is None:
+            return
+        for tid, seq, roll in rolls:
+            if tid != trade_id or seq != int(index):
+                continue
+            if "credit" in changes:
+                roll.new_credit = _to_float(changes["credit"]) or 0.0
+            if "open_cash" in changes:          # the cash the roll banked
+                roll.cash = _to_float(changes["open_cash"]) or 0.0
+            if "strikes" in changes:
+                roll.new_strike = _to_float(changes["strikes"])
+            if "expiration" in changes:
+                roll.new_expiration = _to_date(changes["expiration"])
+            if "opened_on" in changes:
+                roll.rolled_on = _to_date(changes["opened_on"])
+            if "note" in changes:
+                roll.note = str(changes["note"])
+            return
+        return
+
+    if pos is None:
+        return
+    if "opened_on" in changes:
+        pos.opened = _to_date(changes["opened_on"]) or pos.opened
+    if "expiration" in changes:
+        pos.expiration = _to_date(changes["expiration"]) or pos.expiration
+    if "contracts" in changes:
+        pos.contracts = int(_to_float(changes["contracts"]) or pos.contracts)
+    if "credit" in changes:
+        credit = _to_float(changes["credit"])
+        if credit is not None:
+            pos.credit = pos.open_credit = credit
+    if "open_cash" in changes:
+        cash = _to_float(changes["open_cash"])
+        if cash is not None:
+            pos.open_cash = cash
+    if "max_loss" in changes:
+        pos.max_loss = _to_float(changes["max_loss"]) or 0.0
+    if "buying_power" in changes:
+        pos.buying_power = _to_float(changes["buying_power"]) or 0.0
+    if "account" in changes:
+        pos.account = _account_of(changes["account"], {})
+    if "note" in changes:
+        pos.note = str(changes["note"])
+    if "legs" in changes:
+        legs = _legs_from_json(changes["legs"])
+        if legs:
+            # open_legs moves with it: it is the day-one snapshot the story
+            # panel reads, and a corrected day one is still day one.
+            pos.legs = legs
+            pos.open_legs = [leg.model_copy(deep=True) for leg in legs]
+
+
 def _apply_roll(pos: Position, roll: RollEvent) -> None:
     """Move the position's short call to wherever this event put it.
 
@@ -425,9 +502,13 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     idx = _column_index(header)
     opens: dict[str, Position] = {}
     ordered: list[Position] = []
-    rolls: list[tuple[str, RollEvent]] = []
+    # (trade_id, sequence-within-that-trade, event). The sequence is the order
+    # the rolls were WRITTEN, which is what edits address - see _apply_edit.
+    rolls: list[tuple[str, int, RollEvent]] = []
+    roll_seq: dict[str, int] = {}
     assigns: list[tuple[str, dict[str, Any]]] = []
     closes: list[dict[str, Any]] = []
+    edits: list[tuple[str, dict[str, Any]]] = []
 
     for row in rows:
         row = list(row)
@@ -462,8 +543,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             }))
             continue
 
+        if event == "edit" and trade_id:
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
+            edits.append((trade_id, data))
+            continue
+
         if event == "roll" and trade_id:
-            rolls.append((trade_id, RollEvent(
+            roll_seq[trade_id] = roll_seq.get(trade_id, -1) + 1
+            rolls.append((trade_id, roll_seq[trade_id], RollEvent(
                 rolled_on=_to_date(_get(row, idx, "Date", 0)),
                 cash=_to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
                 new_strike=_to_float(_get(row, idx, "Legs (strikes)", 3)),
@@ -521,7 +608,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if trade_id:
             opens[trade_id] = pos
 
-    # Assignment first: it turns the put into shares, and every roll after it
+    # Corrections come FIRST, before anything is folded in, because they fix
+    # what was typed on the day - the opening details, or a roll's own numbers.
+    # Applying them after the rolls would mean correcting a strike that a later
+    # roll had already overwritten in place.
+    for trade_id, edit in edits:
+        _apply_edit(opens.get(trade_id), rolls, trade_id, edit)
+
+    # Assignment next: it turns the put into shares, and every roll after it
     # is a CALL written against those shares.
     for trade_id, a in sorted(assigns,
                               key=lambda r: r[1]["assigned_on"] or date.min):
@@ -530,8 +624,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             _apply_assignment(pos, a)
 
     # Rolls in the order they happened, so the last one wins on strike/date.
-    for trade_id, roll in sorted(
-            rolls, key=lambda r: r[1].rolled_on or date.min):
+    for trade_id, _seq, roll in sorted(
+            rolls, key=lambda r: r[2].rolled_on or date.min):
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_roll(pos, roll)
