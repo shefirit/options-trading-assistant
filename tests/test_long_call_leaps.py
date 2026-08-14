@@ -298,6 +298,286 @@ def test_the_market_board_treats_fear_as_the_buy_signal(strategy):
     assert fearful["poor_mans_covered_call"] < calm["poor_mans_covered_call"]
 
 
+# -------------------------------------------- the optional financing put
+# Rita's addition, 2026-08-13: sell a 0.20-0.30 delta put at the SAME expiration
+# to part-pay for the call (a risk reversal). It is a VARIANT - off by default -
+# because it breaks the sentence the rest of this strategy rests on, "the most
+# you can lose is the premium paid". These tests pin that it stays optional and
+# that the money maths tells the truth when it is on.
+FIN_PUT_STRIKE = 150.0
+FIN_PUT_PREMIUM = 12.0
+
+
+def _put_leg(strike=FIN_PUT_STRIKE, premium=FIN_PUT_PREMIUM, delta=-0.25, dte=400):
+    return Leg(role="financing_put", action=Action.SELL, option_type=OptionType.PUT,
+               strike=strike, premium=premium, quantity=1, dte=dte, delta=delta,
+               open_interest=400)
+
+
+def _reversal(contracts=1, put=None, **kw):
+    """The variant: the same bought call, plus the financing put."""
+    return Trade(strategy_key="long_call_leaps", underlying="AMZN", contracts=contracts,
+                 underlying_price=200.0,
+                 legs=[_leg(**kw), put if put is not None else _put_leg()])
+
+
+def test_the_financing_put_is_off_by_default(strategy):
+    """It must never appear unasked. `legs` stays one bought call - the config
+    block only supplies numbers for when she opts in."""
+    assert len(strategy["legs"]) == 1
+    assert strategy["financing_put"]["enabled"] is False
+    assert strategy["financing_put"]["delta_min"] == 0.20
+    assert strategy["financing_put"]["delta_max"] == 0.30
+
+
+def test_the_plain_leaps_checklist_is_untouched():
+    """The whole point of "variant, not default": switching this feature into
+    the config must not add a single check to her ordinary one-leg trade."""
+    report = validator.validate_trade(_trade())
+    names = " ".join(c.name for c in report.results).lower()
+    assert "financing put" not in names
+    assert "same day" not in names
+    # ...and it still must not ask a BOUGHT call for a credit or an assignment.
+    assert "credit" not in names and "assign" not in names
+
+
+def test_the_credit_pays_down_the_debit_but_not_the_collateral(strategy):
+    """The arithmetic that is easiest to get wrong, and it flatters the trade
+    when you do. Buying the $39 call is $3,900 out; selling the $150 put pays
+    $1,200 back, so the DEBIT is $2,700 - but $15,000 still has to sit behind
+    that put. Netting the credit off both makes the position look $1,200
+    cheaper than it is."""
+    size = sizing.estimate(_reversal(), strategy)
+    assert size["debit"] == 2700.0                  # 3900 paid - 1200 collected
+    assert size["capital"] == 17700.0               # 2700 + the full 15000 collateral
+    assert size["buying_power"] == 13800.0          # 15000 - 1200, same as her CSP
+
+
+def test_the_worst_case_is_no_longer_the_premium_paid(strategy):
+    """The headline risk change. Alone, the call can lose $3,900. With the put
+    attached, a stock that goes to zero costs the debit AND the assignment."""
+    alone = sizing.estimate(_trade(), strategy)["max_loss"]
+    with_put = sizing.estimate(_reversal(), strategy)["max_loss"]
+    assert alone == 3900.0
+    assert with_put == 17700.0
+    assert with_put > alone * 4
+
+
+def test_the_credit_is_never_reported_as_income(strategy):
+    """It part-pays for a call; it is not premium she gets to keep. If this ever
+    starts feeding the credit line, the dashboards will show a debit trade
+    earning money."""
+    assert sizing.estimate(_reversal(), strategy)["credit"] == 0.0
+    assert sizing.estimate(_reversal(), strategy)["return_on_risk"] == 0.0
+
+
+def test_the_ten_percent_cap_is_measured_on_the_debit_not_the_collateral():
+    """Her SOP caps LEAPS at 10% of the account on premium PAID. Measure it
+    against capital instead and every financing-put trade fails at 17.6% for
+    the wrong reason - the collateral belongs to the buying-power limit."""
+    report = validator.validate_trade(_reversal())
+    check = _check(report, "% of the account")
+    assert check.status == CheckStatus.PASS         # $2,600 net on $100k
+    # ...and it says so, rather than repeating "every cent of that can be lost".
+    assert "not your worst case" in check.message
+
+
+def test_the_put_delta_is_a_band_not_a_floor():
+    """The opposite of the bought call's rule, sitting inches away from it. Too
+    deep is the danger on a put you SELL - it pays more precisely because it is
+    likelier to hand you 100 shares."""
+    ok = validator.validate_trade(_reversal())
+    too_deep = validator.validate_trade(_reversal(put=_put_leg(strike=185.0, delta=-0.45)))
+    too_far = validator.validate_trade(_reversal(put=_put_leg(strike=110.0, delta=-0.08)))
+
+    assert _check(ok, "Financing put delta").status == CheckStatus.PASS
+    assert _check(too_deep, "Financing put delta").status == CheckStatus.FAIL
+    assert _check(too_far, "Financing put delta").status == CheckStatus.FAIL
+
+
+def test_mismatched_expirations_are_caught():
+    """A gap turns one trade into two, and the leftover short put cannot be
+    rolled forward - there is nothing listed beyond a LEAPS expiration."""
+    matched = validator.validate_trade(_reversal())
+    mismatched = validator.validate_trade(_reversal(put=_put_leg(dte=200)))
+    assert _check(matched, "same day").status == CheckStatus.PASS
+    assert _check(mismatched, "same day").status == CheckStatus.FAIL
+
+
+def _ratio(n):
+    """The variant with n puts sold against the one bought call."""
+    trade = _reversal()
+    trade.legs[1].quantity = n
+    return trade
+
+
+def test_two_puts_are_allowed_but_never_silently():
+    """Rita's point, 2026-08-13: one 0.25 delta put funds only about a quarter
+    of a 0.70 delta call, so "sell a put to pay for it" barely does. Two is the
+    honest answer - but the second one is uncovered, so it warns rather than
+    passing green. Three is a different trade wearing this one's name."""
+    one = _check(validator.validate_trade(_ratio(1)), "Puts sold per call")
+    two = _check(validator.validate_trade(_ratio(2)), "Puts sold per call")
+    three = _check(validator.validate_trade(_ratio(3)), "Puts sold per call")
+
+    assert one.status == CheckStatus.PASS
+    assert two.status == CheckStatus.WARN
+    assert three.status == CheckStatus.FAIL
+
+
+def test_the_second_put_is_named_as_uncovered():
+    """The call balances the first put and does nothing for the second. If that
+    ever reads as ordinary, she is carrying twice the downside for a cheaper
+    debit without being told."""
+    msg = _check(validator.validate_trade(_ratio(2)), "Puts sold per call").message
+    assert "$200 per point instead of $100" in msg
+    assert "200 shares" in msg
+    assert "Model 3" in msg              # the same shape her SOP calls ADVANCED
+
+
+def test_the_second_put_doubles_the_collateral_and_the_worst_case(strategy):
+    """Where two puts actually bite. The debit halves again - which is the
+    attraction - while the cash committed and the loss both climb."""
+    one = sizing.estimate(_ratio(1), strategy)
+    two = sizing.estimate(_ratio(2), strategy)
+
+    assert one["debit"] == 2700.0 and two["debit"] == 1500.0      # 3900 - 2x1200
+    assert two["capital"] == 31500.0                             # 1500 + 2x15000
+    assert two["max_loss"] == two["capital"]
+    assert two["buying_power"] == 27600.0                        # 30000 - 2400
+    # The cheaper debit is the trap: it FALLS while the risk doubles.
+    assert two["debit"] < one["debit"]
+    assert two["max_loss"] > one["max_loss"] * 1.7
+
+
+def test_two_puts_lose_at_twice_the_rate_below_the_strike(strategy):
+    """The accelerating shape, drawn rather than described. Below the put strike
+    the two-put version must fall away twice as steeply."""
+    lo = FIN_PUT_STRIKE - 50
+    one = payoff.value_at(_ratio(1), lo)
+    two = payoff.value_at(_ratio(2), lo)
+    one_further = payoff.value_at(_ratio(1), lo - 10)
+    two_further = payoff.value_at(_ratio(2), lo - 10)
+
+    assert two < one
+    assert (two - two_further) == pytest.approx(2 * (one - one_further), rel=0.01)
+
+
+def test_the_scanner_cannot_build_more_than_the_cap():
+    """The cap lives in her config and the scanner must respect it even when
+    asked for more - it must never produce a setup the checklist would reject."""
+    from src.data.chain import OptionChain, OptionContract
+
+    def contract(otype, strike, delta, mid):
+        return OptionContract(option_type=otype, strike=strike, expiration="2027-09-17",
+                              dte=400, bid=mid - 0.5, ask=mid + 0.5, delta=delta,
+                              iv=0.30, open_interest=500)
+
+    chain = OptionChain(underlying="AMZN", underlying_price=200.0, contracts=[
+        contract(OptionType.CALL, 185, 0.74, 39.0),
+        contract(OptionType.PUT, 150, -0.25, 12.0),
+    ])
+
+    def sold(ratio):
+        found = scanner.scan_setups("long_call_leaps", chain, dte_min=365, dte_max=800,
+                                    financing_put=True, put_ratio=ratio)
+        return [l for l in found[0].trade.legs if l.action == Action.SELL][0].quantity
+
+    assert sold(1) == 1
+    assert sold(2) == 2
+    assert sold(5) == 2          # clamped to max_ratio, not obeyed blindly
+
+
+def test_the_commitment_is_spelled_out_in_dollars():
+    """The number that actually decides whether the variant is worth it is the
+    cash she must hold, and neither the debit nor the buying-power check shows
+    it next to the credit that looks like a discount."""
+    check = _check(validator.validate_trade(_reversal()),
+                   "What the financing put commits you to")
+    assert check.status == CheckStatus.INFO
+    assert "$15,000" in check.message          # collateral, not netted down
+    assert "$138.00" in check.message          # lower break-even: 150 - 12
+
+
+def test_the_delta_flag_explains_the_shape_instead_of_blaming_it():
+    """A bought call plus a sold put IS a ~100 delta position - that is the
+    definition of the structure. The generic wording told her to reduce size on
+    a trade whose whole design is to move like 100 shares, which reads as a
+    fault in the setup rather than the thing she chose."""
+    check = _check(validator.validate_trade(_reversal()), "Position delta")
+    assert check.status == CheckStatus.WARN            # 0.71 + 0.25 = ~96 delta
+    assert "owning 100 shares" in check.message
+    assert "reduce size" not in check.message
+    # ...and a plain long call is still told the plain thing.
+    plain = _check(validator.validate_trade(_trade(delta=0.95, strike=120.0, premium=82.0)),
+                   "Position delta")
+    assert "reduce size" in plain.message
+
+
+def test_the_payoff_knows_about_the_downside(strategy):
+    """Alone, the payoff floor is flat at the premium. With the put sold it
+    keeps falling - if that never got drawn, the chart would be reassuring
+    about the exact risk she took on."""
+    alone = payoff.profile(_trade(), strategy)
+    reversal = payoff.profile(_reversal(), strategy)
+    assert alone.loss_grows_below is False
+    assert reversal.loss_grows_below is True
+    assert reversal.max_loss < alone.max_loss
+
+
+def test_the_ticket_is_one_combo_order(strategy):
+    """Her SOP says both legs go in as ONE order - legging in is how she ends up
+    filled on only the risky half."""
+    line = tos_ticket.ticket_line(_reversal(), today=TODAY)
+    assert line.startswith("BUY +1 COMBO AMZN")
+    assert "CALL/-150 PUT" in line
+    assert "@27.00 LMT" in line                # the net debit, per share (39 - 12)
+
+
+def test_the_scanner_only_sells_a_put_when_asked():
+    from src.data.chain import OptionChain, OptionContract
+
+    def contract(otype, strike, delta, mid):
+        return OptionContract(option_type=otype, strike=strike, expiration="2027-09-17",
+                              dte=400, bid=mid - 0.5, ask=mid + 0.5, delta=delta,
+                              iv=0.30, open_interest=500)
+
+    chain = OptionChain(underlying="AMZN", underlying_price=200.0, contracts=[
+        contract(OptionType.CALL, 185, 0.74, 39.0),
+        contract(OptionType.PUT, 150, -0.25, 12.0),
+        contract(OptionType.PUT, 185, -0.45, 26.0),
+    ])
+
+    off = scanner.scan_setups("long_call_leaps", chain, dte_min=365, dte_max=800)
+    on = scanner.scan_setups("long_call_leaps", chain, dte_min=365, dte_max=800,
+                             financing_put=True)
+    assert [len(c.trade.legs) for c in off] == [1]
+    assert [len(c.trade.legs) for c in on] == [2]
+    # In the band, nearest 0.25 - never the richer 0.45 sitting right there.
+    sold = [l for l in on[0].trade.legs if l.action == Action.SELL]
+    assert sold[0].strike == 150
+
+
+def test_no_put_in_the_band_leaves_the_call_on_its_own():
+    """Skipping the setup entirely would hide a perfectly good default trade,
+    and substituting a wrong-delta put would quietly build a bigger position
+    than she asked for. Neither - the call goes out alone."""
+    from src.data.chain import OptionChain, OptionContract
+
+    def contract(otype, strike, delta, mid):
+        return OptionContract(option_type=otype, strike=strike, expiration="2027-09-17",
+                              dte=400, bid=mid - 0.5, ask=mid + 0.5, delta=delta,
+                              iv=0.30, open_interest=500)
+
+    chain = OptionChain(underlying="AMZN", underlying_price=200.0, contracts=[
+        contract(OptionType.CALL, 185, 0.74, 39.0),
+        contract(OptionType.PUT, 185, -0.45, 26.0),      # only a too-deep put
+    ])
+    found = scanner.scan_setups("long_call_leaps", chain, dte_min=365, dte_max=800,
+                                financing_put=True)
+    assert [len(c.trade.legs) for c in found] == [1]
+
+
 def test_the_scanner_respects_a_floor_not_a_band():
     """Deeper than target is valid - it just behaves more like the shares. A
     band would have silently skipped a 0.90 contract. Below the floor there is

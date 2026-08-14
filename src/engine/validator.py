@@ -17,8 +17,10 @@ from src.engine.config_loader import (
     underlying_fits_style,
 )
 from src.engine.models import (
+    Action,
     CheckResult,
     CheckStatus,
+    OptionType,
     Trade,
     ValidationReport,
 )
@@ -71,6 +73,25 @@ def validate_trade(
         r = rules.check_bought_call_delta(trade, float(entry["long_leg_delta_min"]))
         if r:
             results.append(r)
+
+        # 2b. The optional financing put, if one was actually sold. Every check
+        # here returns None on a plain one-leg LEAPS, so her default trade's
+        # checklist is untouched - this is a variant, not a change to the
+        # strategy. The config block only supplies the numbers.
+        fp = strategy.get("financing_put") or {}
+        for check in (
+            rules.check_financing_put_delta(
+                trade, float(fp.get("delta_min", 0.20)), float(fp.get("delta_max", 0.30))),
+            rules.check_financing_put_expiration(trade) if fp.get("same_expiration", True)
+            else None,
+            rules.check_financing_put_ratio(trade, int(fp.get("ratio", 1)),
+                                            int(fp.get("max_ratio", fp.get("ratio", 1)))),
+            rules.check_financing_put_commitment(
+                trade, monthly_bp_limit=float(risk["monthly_bp_limit"]),
+                existing_month_bp=existing_month_bp),
+        ):
+            if check:
+                results.append(check)
     elif "long_leg_delta_min" in entry:
         r = rules.check_long_leaps_delta(trade, float(entry["long_leg_delta_min"]))
         if r:
@@ -130,11 +151,20 @@ def validate_trade(
     # buying power, so it reports zero and always passes.
     sizing_cfg = strategy.get("sizing", {})
     if sizing_cfg.get("max_loss_basis") == "long_premium":
+        # The NET debit, not `capital`. With a financing put sold those two stop
+        # being the same number - capital picks up the put's collateral, and
+        # measuring a 10%-of-account cap against collateral would fail every
+        # variant trade for the wrong reason. Her SOP caps premium PAID; the
+        # collateral is caught by the monthly buying-power check above.
+        sold_put = any(l.action == Action.SELL and l.option_type == OptionType.PUT
+                       for l in trade.legs)
         debit = rules.check_debit_size(
-            size["capital"], float(settings["account"]["starting_capital"]),
+            size.get("debit", size["capital"]),
+            float(settings["account"]["starting_capital"]),
             float(sizing_cfg.get("max_pct_of_account", 10)),
             open_leaps_capital=open_leaps_capital,
-            target_positions=int(sizing_cfg.get("target_positions", 3)))
+            target_positions=int(sizing_cfg.get("target_positions", 3)),
+            has_financing_put=sold_put)
         if debit:
             results.append(debit)
         if "min_open_interest" in entry:

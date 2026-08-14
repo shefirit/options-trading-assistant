@@ -206,6 +206,188 @@ def check_bought_call_delta(trade: Trade, min_delta: float) -> Optional[CheckRes
         message=message, expected=f">= {min_delta:.2f}", actual=f"{d:.3f}")
 
 
+# ------------------------------------------------- the optional financing put
+# Sold alongside a LEAPS long call to part-pay for it (a risk reversal). Every
+# check below returns None when there is no sold put, so the plain one-leg
+# version of the strategy never sees any of them - it is a variant, and the
+# default trade's checklist must stay exactly as it was.
+def _financing_puts(trade: Trade) -> list:
+    return [leg for leg in trade.legs
+            if leg.action == Action.SELL and leg.option_type == OptionType.PUT]
+
+
+def _bought_calls(trade: Trade) -> list:
+    return [leg for leg in trade.legs
+            if leg.action == Action.BUY and leg.option_type == OptionType.CALL]
+
+
+def check_financing_put_delta(trade: Trade, delta_min: float,
+                              delta_max: float) -> Optional[CheckResult]:
+    """The sold put must sit in the 0.20-0.30 band - a BAND, not a floor.
+
+    The exact opposite of the bought call above it, and worth being clear why,
+    because the two rules sit inches apart and look contradictory. On the call
+    you BUY, deeper is safer: more of what you pay is intrinsic value that
+    cannot evaporate. On the put you SELL, deeper is the danger: a 0.45 delta
+    put pays more premium precisely because it is likelier to land you 100
+    shares. Shallower than 0.20 is not dangerous, just barely worth doing - you
+    take on the whole assignment obligation for very little cash.
+    """
+    puts = _financing_puts(trade)
+    if not puts:
+        return None
+    leg = max(puts, key=lambda l: l.abs_delta)
+    name = f"Financing put delta {delta_min:.2f}-{delta_max:.2f}"
+    if delta_missing(leg):
+        return CheckResult(
+            name=name, status=CheckStatus.WARN,
+            message=(f"No delta came through for the {leg.strike:g} put, so this could not "
+                     f"be checked. Your SOP wants it between {delta_min:.2f} and "
+                     f"{delta_max:.2f} - well out of the money."),
+            expected=f"{delta_min:.2f}-{delta_max:.2f}", actual="not available")
+    d = leg.abs_delta
+    ok = delta_min - 1e-9 <= d <= delta_max + 1e-9
+    if ok:
+        why = "Out of the money by the margin your SOP asks for."
+    elif d > delta_max:
+        why = (f"That is too close to the money. It pays more, and that is exactly the "
+               f"problem - roughly a {d * 100:.0f}% chance of finishing in the money and "
+               f"putting 100 shares at ${leg.strike:g} in your account.")
+    else:
+        why = ("That is further out than your SOP asks. Not dangerous, but you are taking "
+               "on the whole obligation to buy 100 shares for very little premium - check "
+               "it is worth the collateral it freezes.")
+    return CheckResult(
+        name=name, status=CheckStatus.PASS if ok else CheckStatus.FAIL,
+        message=f"The put you would sell has delta {d:.3f}. {why}",
+        expected=f"{delta_min:.2f}-{delta_max:.2f}", actual=f"{d:.3f}")
+
+
+def check_financing_put_expiration(trade: Trade) -> Optional[CheckResult]:
+    """Both legs must expire on the SAME day.
+
+    Mismatched dates are the failure that turns this from one trade into two.
+    If the call expires first you are left holding a naked short put with no
+    long leg balancing it - and a LEAPS-dated put cannot be rolled out of, since
+    there is usually nothing listed further along the board.
+    """
+    puts, calls = _financing_puts(trade), _bought_calls(trade)
+    if not puts or not calls:
+        return None
+    put_dte = puts[0].dte
+    call_dte = max(calls, key=lambda l: l.abs_delta).dte
+    if put_dte is None or call_dte is None:
+        return None
+    ok = put_dte == call_dte
+    return CheckResult(
+        name="Both legs expire on the same day",
+        status=CheckStatus.PASS if ok else CheckStatus.FAIL,
+        message=(f"Call and put both run {call_dte} days. One trade, one end date."
+                 if ok else
+                 f"The call runs {call_dte} days and the put {put_dte} - a "
+                 f"{abs(call_dte - put_dte)}-day gap. Whichever ends first leaves the "
+                 "other leg standing alone, and a lone short put this far out cannot be "
+                 "rolled forward because nothing is listed beyond it."),
+        expected="same expiration", actual=f"call {call_dte}d / put {put_dte}d")
+
+
+def check_financing_put_ratio(trade: Trade, ratio: int = 1,
+                              max_ratio: int = 1) -> Optional[CheckResult]:
+    """How many puts per call - 1 is the default, 2 is allowed, more is not.
+
+    Rita's point (2026-08-13) is a fair one: one 0.25 delta put often funds only
+    a quarter of a 0.70 delta call, so "sell a put to pay for it" barely does.
+    Two is the honest answer to that and her book already contains a 1x2 ratio
+    (Covered Call Model 3), so this is not a foreign shape to her.
+
+    It is still the single biggest risk step on this page, so 2 warns rather
+    than passes. The second put is uncovered - the call offsets the first one's
+    directional exposure and does nothing at all for the second - so below the
+    strike the position loses at twice the rate, and assignment arrives as 200
+    shares rather than 100.
+    """
+    puts, calls = _financing_puts(trade), _bought_calls(trade)
+    if not puts or not calls:
+        return None
+    sold = sum(l.quantity for l in puts)
+    bought = sum(l.quantity for l in calls)
+    per_call = sold / bought if bought else sold
+    strike = puts[0].strike
+    contracts = trade.contracts
+
+    if per_call <= ratio + 1e-9:
+        return CheckResult(
+            name="Puts sold per call bought",
+            status=CheckStatus.PASS,
+            message=f"{sold:g} put against {bought:g} call - matched, one for one.",
+            expected=f"<= {max_ratio:g} per call", actual=f"{sold:g} per {bought:g}")
+
+    if per_call <= max_ratio + 1e-9:
+        extra = sold - bought
+        return CheckResult(
+            name="Puts sold per call bought",
+            status=CheckStatus.WARN,
+            message=(
+                f"{sold:g} puts against {bought:g} call. Allowed, and it roughly doubles "
+                f"what the put leg pays toward the call - but be clear about what the "
+                f"second one is. The call offsets the first put's downside and does "
+                f"nothing for the extra {extra:g}: below ${strike:g} this position loses "
+                f"about ${200 * contracts:,.0f} per point instead of ${100 * contracts:,.0f}, "
+                f"and assignment hands you {200 * contracts:g} shares, not "
+                f"{100 * contracts:g}. Same accelerating shape your Covered Call Model 3 "
+                f"carries, and your SOP calls that one ADVANCED."),
+            expected=f"<= {max_ratio:g} per call", actual=f"{sold:g} per {bought:g}")
+
+    return CheckResult(
+        name="Puts sold per call bought",
+        status=CheckStatus.FAIL,
+        message=(f"{sold:g} puts against {bought:g} call - past your limit of "
+                 f"{max_ratio:g} per call. Funding the whole call this way takes three or "
+                 "four puts, and at that point the LEAPS is a rounding error attached to "
+                 "a large uncovered short put position. That is a different trade wearing "
+                 "this one's name."),
+        expected=f"<= {max_ratio:g} per call", actual=f"{sold:g} per {bought:g}")
+
+
+def check_financing_put_commitment(trade: Trade, monthly_bp_limit: float = 0.0,
+                                   existing_month_bp: float = 0.0) -> Optional[CheckResult]:
+    """What selling the put actually commits you to, spelled out in dollars.
+
+    Not pass/fail - the pass/fail on the money is done by the buying-power and
+    debit-size checks. This one exists because the number that decides whether
+    the variant is worth it is the one neither of those shows on its own: the
+    cash you must hold, against a credit that looks like a discount.
+    """
+    puts = _financing_puts(trade)
+    if not puts:
+        return None
+    leg = puts[0]
+    contracts = trade.contracts
+    shares = 100 * leg.quantity * contracts
+    collateral = leg.strike * shares
+    credit = leg.premium * shares
+    lower_be = leg.strike - leg.premium
+    room = ""
+    if monthly_bp_limit > 0:
+        used = collateral - credit
+        pct = used / monthly_bp_limit * 100
+        room = (f" That reserves about ${used:,.0f} of buying power - {pct:.0f}% of your "
+                f"${monthly_bp_limit:,.0f} monthly limit"
+                + (f", on top of the ${existing_month_bp:,.0f} already used this month."
+                   if existing_month_bp > 0 else "."))
+    return CheckResult(
+        name="What the financing put commits you to",
+        status=CheckStatus.INFO,
+        message=(
+            f"You collect ${credit:,.0f}, which comes off what the call costs you. In "
+            f"exchange you promise to buy {shares:g} shares at ${leg.strike:g} - "
+            f"${collateral:,.0f} that has to be sitting there until you close.{room} "
+            f"Below ${lower_be:,.2f} the put leg is a net loser and keeps losing dollar "
+            f"for dollar all the way down. Only worth it on a name you would genuinely "
+            f"be happy to own at that price."),
+    )
+
+
 def check_open_interest(trade: Trade, minimum: int) -> Optional[CheckResult]:
     """Enough people trade this contract that you can get back OUT of it.
 
@@ -233,7 +415,8 @@ def check_open_interest(trade: Trade, minimum: int) -> Optional[CheckResult]:
 
 def check_debit_size(capital: float, account_size: float, max_pct: float,
                      open_leaps_capital: float = 0.0,
-                     target_positions: int = 3) -> Optional[CheckResult]:
+                     target_positions: int = 3,
+                     has_financing_put: bool = False) -> Optional[CheckResult]:
     """Bought premium only: is this bet small enough to survive losing all of it?
 
     This strategy has NO stop loss on purpose, so size at entry is the entire
@@ -242,6 +425,13 @@ def check_debit_size(capital: float, account_size: float, max_pct: float,
     positions is a 24% bet on one idea wearing three tickers.
 
     open_leaps_capital: premium already committed to other open LEAPS.
+
+    has_financing_put: a put was sold to part-pay for the call, so `capital` is
+    the NET debit (her SOP measures the 10% cap on premium paid, and the put's
+    collateral lands against the monthly buying-power limit instead). It also
+    means the sentence this check would otherwise end on - "every cent of that
+    can be lost" - understates the risk rather than overstating it, so the
+    wording has to change with it.
     """
     if capital <= 0 or account_size <= 0:
         return None
@@ -251,14 +441,23 @@ def check_debit_size(capital: float, account_size: float, max_pct: float,
     share = max_pct / max(target_positions, 1)
     held = (f" You already hold ${open_leaps_capital:,.0f} of LEAPS, so this would take "
             f"the total to ${total:,.0f}." if open_leaps_capital > 0 else "")
+    paid = ("You would pay ${:,.0f} net of the put's credit, which puts {:.1f}% of your "
+            "${:,.0f} account into bought calls.".format(capital, pct, account_size)
+            + held
+            + " Careful with this one: the 10% cap is on premium PAID, so a cheaper debit "
+              "passes it easily. It is not your worst case any more - the sold put can "
+              "cost you far more than the debit, and the collateral is checked against "
+              "your monthly buying-power limit instead."
+            if has_financing_put else
+            f"You would pay ${capital:,.0f}, which puts {pct:.1f}% of your "
+            f"${account_size:,.0f} account into bought calls.{held} Every cent of that "
+            "can be lost, and this strategy has no stop to catch it - the size IS the "
+            "risk control.")
     return CheckResult(
         name=f"All LEAPS together under {max_pct:g}% of the account",
         status=CheckStatus.PASS if ok else CheckStatus.FAIL,
         message=(
-            f"You would pay ${capital:,.0f}, which puts {pct:.1f}% of your "
-            f"${account_size:,.0f} account into bought calls.{held} Every cent of that "
-            "can be lost, and this strategy has no stop to catch it - the size IS the "
-            "risk control."
+            paid
             + ("" if ok else f" Your SOP caps all LEAPS at {max_pct:g}% together, spread "
                              f"across about {target_positions} names - roughly "
                              f"{share:.1f}% each. Buy fewer contracts, or pick a cheaper "
@@ -484,14 +683,30 @@ def check_monthly_bp(
 def check_position_delta(trade: Trade, red_flag: float) -> CheckResult:
     net = abs(trade.net_position_delta)
     ok = net <= red_flag
+    # A bought call plus a sold put IS a near-100-delta position - that is the
+    # definition of the shape, not a sizing error. Left generic, this check told
+    # her to "reduce size" on a trade whose whole design is to behave like 100
+    # shares, which reads as a fault in the setup rather than the thing she
+    # deliberately chose. It still warns: 100 delta is worth seeing.
+    reversal = (_financing_puts(trade) and _bought_calls(trade)
+                and len(trade.legs) == 2)
+    if not ok and reversal:
+        tail = (f"Its size ({net:,.0f}) is past your {red_flag:g} red flag, and that is "
+                "what this structure IS rather than a mistake in it: a bought call plus a "
+                "sold put moves almost exactly like owning 100 shares. Worth seeing "
+                "clearly - you are taking share-sized directional risk, so judge it "
+                "against what 100 shares would do, not against a spread.")
+    elif not ok:
+        tail = (f"Its size ({net:,.0f}) is past your {red_flag:g} red flag - the position "
+                "leans strongly one way. Watch it closely or reduce size.")
+    else:
+        tail = "Within your comfort zone."
     return CheckResult(
         name=f"Position delta under red-flag ({red_flag:g})",
         status=CheckStatus.PASS if ok else CheckStatus.WARN,
         message=(
             f"Net position delta is {trade.net_position_delta:,.0f} share-equivalents. "
-            + ("Within your comfort zone." if ok else
-               f"Its size ({net:,.0f}) is past your {red_flag:g} red flag - the position "
-               "leans strongly one way. Watch it closely or reduce size.")
+            + tail
         ),
         expected=f"|delta| <= {red_flag:g}",
         actual=f"{trade.net_position_delta:,.0f}",

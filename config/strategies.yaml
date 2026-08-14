@@ -237,6 +237,39 @@ strategies:
       max_loss_basis: long_premium   # the debit paid, full stop - it can go to zero
       max_pct_of_account: 10         # ALL open LEAPS together, not per trade
       target_positions: 3            # spread that 10% across about 3 names
+    # ---- OPTIONAL: the financing put (Rita's addition, 2026-08-13) ----
+    # Sell a put at the SAME expiration as the call to part-pay for it. Proper
+    # name: a risk reversal. Deliberately OFF by default and kept OUT of `legs`
+    # above, because it is a variant and not the strategy - turning it on breaks
+    # the one sentence the rest of this block is built on, "the most you can
+    # lose is the premium paid".
+    #
+    # What changes when it is on:
+    #   max loss     - no longer the debit. Worst case is the debit PLUS the
+    #                  put's collateral, several times bigger.
+    #   capital      - net debit + strike x 100. The credit does NOT reduce the
+    #                  collateral you must hold, it only reduces the debit.
+    #   the 10% cap  - still measured on the NET DEBIT (premium paid), per her
+    #                  SOP. The collateral goes against the monthly BP limit
+    #                  instead, which is where it actually bites.
+    # See the Notion page's "return-on-capital trap" section: this makes the
+    # trade look cheaper while roughly tripling the cash it ties up.
+    financing_put:
+      enabled: false            # opt in per scan; never the default shape
+      delta_min: 0.20
+      delta_max: 0.30
+      delta_target: 0.25        # prefer the 0.20 end - further from the money
+      ratio: 1                  # the DEFAULT: 1 put per 1 call.
+      # Rita, 2026-08-13: one put often barely dents the call. Measured on a
+      # live AAPL chain - a $54.38 call against a 0.24 delta put paying $15.03 -
+      # one put funds 28% of it, two fund 55%, and fully funding it would take
+      # 3.3 puts. So 2 is allowed. It is NOT free: the second put is uncovered
+      # (the call offsets nothing on it), losses below the strike then fall at
+      # $200 per point instead of $100, and assignment means 200 shares.
+      # Above `ratio` the checks warn rather than pass; above max_ratio they fail.
+      max_ratio: 2
+      same_expiration: true     # exact same date, so the trade has ONE end
+      collateral: cash_secured  # strike x 100 set aside, like her CSP
 
   # ---------------- POOR MAN'S COVERED CALL ----------------
   poor_mans_covered_call:

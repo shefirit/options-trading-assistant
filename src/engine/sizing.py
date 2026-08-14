@@ -55,6 +55,31 @@ def _long_call_cost(trade: Trade) -> float:
     return total * 100 * trade.contracts
 
 
+def _short_put_credit(trade: Trade) -> float:
+    """Premium collected from the put(s) you SELL.
+
+    On a LEAPS long call this is the financing put - money that part-pays for
+    the call. It is NOT income: nothing here should ever add it to a profit
+    figure, because you are still net out of pocket on the trade.
+    """
+    total = sum(l.premium * l.quantity for l in trade.legs
+                if l.action == Action.SELL and l.option_type == OptionType.PUT)
+    return total * 100 * trade.contracts
+
+
+def _short_put_collateral(trade: Trade) -> float:
+    """Cash that must sit behind a sold put: strike x 100 per contract.
+
+    Deliberately NOT netted against the credit here. Those are two different
+    questions - what the trade cost you, and what you must have in the account -
+    and netting them once at the wrong moment is how the credit gets counted
+    twice, making the position look thousands of dollars cheaper than it is.
+    """
+    total = sum(l.strike * l.quantity for l in trade.legs
+                if l.action == Action.SELL and l.option_type == OptionType.PUT)
+    return total * 100 * trade.contracts
+
+
 def shares_capital(trade: Trade) -> float:
     """Cost of the 100 shares per contract a covered call is written against."""
     price = trade.underlying_price or 0.0
@@ -86,6 +111,10 @@ def estimate(trade: Trade, strategy: dict[str, Any],
     """
     basis = strategy.get("sizing", {}).get("max_loss_basis", "vertical_width")
     credit = trade.net_credit_total
+    # Cash actually paid for bought premium, kept apart from `capital` because
+    # the two stop being the same number the moment a financing put is sold.
+    # Her SOP's 10%-of-account cap is on what she PAID, not on the collateral.
+    debit: float | None = None
 
     if basis == "vertical_width":
         # Defined risk: the broker holds exactly the most you can lose.
@@ -118,8 +147,28 @@ def estimate(trade: Trade, strategy: dict[str, Any],
         # max_loss equals capital equals 100% of the position - which is why the
         # dashboards must never call this number "worst case" and move on.
         credit = 0.0
-        capital = max_loss = _long_call_cost(trade) or debit_risk(trade)
-        buying_power = 0.0                          # cash, not margin
+        call_cost = _long_call_cost(trade) or debit_risk(trade)
+        put_credit = _short_put_credit(trade)
+        if put_credit > 0:
+            # ...and the optional financing put changes all three of those.
+            # Worked through on her numbers: a $38 call is $3,800 out, the $150
+            # put pays $1,200 back, so the DEBIT is $2,600 - but $15,000 has to
+            # sit behind that put regardless. Cash committed is $17,600, and if
+            # the stock went to zero she would lose every cent of it (call
+            # worthless, assigned 100 shares at $150 now worth nothing, keeping
+            # the $1,200). Capital and max loss coincide here, which is the
+            # honest headline: with a cash-secured put, what you commit IS what
+            # you can lose. The one-leg version risks $3,800.
+            collateral = _short_put_collateral(trade)
+            debit = call_cost - put_credit
+            capital = max_loss = debit + collateral
+            # The broker reserves the strike less the premium it already handed
+            # you - the same arithmetic as her cash secured put, so the monthly
+            # buying-power check sees this variant the way TOS will.
+            buying_power = max(collateral - put_credit, 0.0)
+        else:
+            debit = capital = max_loss = call_cost
+            buying_power = 0.0                      # cash, not margin
     else:
         max_loss = vertical_max_loss(trade)
         capital = buying_power = max_loss
@@ -137,4 +186,5 @@ def estimate(trade: Trade, strategy: dict[str, Any],
         "capital": round(capital, 2),
         "buying_power": round(buying_power, 2),
         "return_on_risk": round(return_on_risk, 4),
+        "debit": round(debit if debit is not None else capital, 2),
     }

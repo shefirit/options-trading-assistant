@@ -388,6 +388,31 @@ def _pick_long_call(options: list[OptionContract], strategy: dict) -> Optional[O
     return min(eligible, key=lambda o: abs(o.abs_delta - target))
 
 
+def _pick_financing_put(options: list[OptionContract], strategy: dict) -> Optional[OptionContract]:
+    """The put to SELL alongside a LEAPS long call, to part-pay for it.
+
+    A BAND, not a floor - the opposite of the call above, and for the opposite
+    reason. On the call, deeper is safer (more intrinsic, tracks the stock). On
+    a put you are SELLING, deeper is the danger: a 0.45 delta put collects far
+    more premium and is far likelier to land you 100 shares you did not plan to
+    buy. So anything outside 0.20-0.30 is skipped rather than substituted.
+
+    Returns None when nothing sits in the band, which means no financing put for
+    that expiration - the call alone is still a perfectly good trade, and quietly
+    selling a wrong-delta put to make the scan "work" is how this variant turns
+    into a much larger position than she signed up for.
+    """
+    cfg = strategy.get("financing_put", {}) or {}
+    lo = float(cfg.get("delta_min", 0.20))
+    hi = float(cfg.get("delta_max", 0.30))
+    target = float(cfg.get("delta_target", (lo + hi) / 2))
+    band = [o for o in options
+            if lo - 1e-9 <= o.abs_delta <= hi + 1e-9 and o.mid > 0]
+    if not band:
+        return None
+    return min(band, key=lambda o: abs(o.abs_delta - target))
+
+
 def _sample_evenly(values: list[int], k: int) -> list[int]:
     """Up to k values spread across a sorted list (e.g. 21, 28, 35, 44)."""
     if len(values) <= k:
@@ -401,7 +426,9 @@ def _sample_evenly(values: list[int], k: int) -> list[int]:
 
 def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float,
                   width: float, contracts: int,
-                  leaps_chain: Optional[OptionChain] = None) -> Optional[Candidate]:
+                  leaps_chain: Optional[OptionChain] = None,
+                  financing_put: bool = False,
+                  put_ratio: int = 1) -> Optional[Candidate]:
     strategy = get_strategy(strategy_key)
     family = strategy.get("family")
     limit = float(strategy["entry"].get("short_leg_delta_max",
@@ -420,13 +447,32 @@ def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float
     # LEAPS long call: one bought call, nothing sold. The only setup here with
     # no short leg at all, so there is no delta LIMIT to check - the band is
     # enforced by the picker instead.
+    #
+    # Unless the optional financing put is switched on, in which case a put at
+    # the SAME expiration joins it and the trade becomes a risk reversal. Off by
+    # default: it is a variant, and it changes the worst case from "the premium
+    # I paid" to something several times larger.
     if family == "long_call":
         long_call = _pick_long_call(chain.by(OptionType.CALL, dte), strategy)
         if not long_call:
             return None
+        legs = [_leg("long_call_leaps", Action.BUY, long_call)]
+        if financing_put:
+            put = _pick_financing_put(chain.by(OptionType.PUT, dte), strategy)
+            # No put in the band means the call goes out alone rather than being
+            # dropped: her SOP's default trade is still available and valid.
+            if put:
+                put_leg = _leg("financing_put", Action.SELL, put)
+                # One put often funds only a quarter of the call, so her SOP
+                # allows a second. Capped at max_ratio here rather than trusted
+                # from the caller - the scanner must not be able to build a
+                # setup the checklist would reject outright.
+                fp_cfg = strategy.get("financing_put", {}) or {}
+                cap = int(fp_cfg.get("max_ratio", fp_cfg.get("ratio", 1)))
+                put_leg.quantity = max(1, min(int(put_ratio), cap))
+                legs.append(put_leg)
         trade = Trade(strategy_key=strategy_key, underlying=chain.underlying, contracts=contracts,
-                      underlying_price=chain.underlying_price,
-                      legs=[_leg("long_call_leaps", Action.BUY, long_call)])
+                      underlying_price=chain.underlying_price, legs=legs)
         return _make_candidate(trade, strategy, delta_limit=None)
 
     # PMCC: a deep in-the-money LEAPS (stock stand-in) plus a short call for income.
@@ -501,6 +547,8 @@ def scan_setups(
     dte_max: int = 44,
     max_setups: int = 10,
     leaps_chain: Optional[OptionChain] = None,
+    financing_put: Optional[bool] = None,
+    put_ratio: int = 1,
 ) -> list[Candidate]:
     """A short list of the best setups: one trade per sampled expiration, each at
     the SOP-target delta. Sorted soonest-expiry first.
@@ -509,6 +557,15 @@ def scan_setups(
     chain a LEAPS long call is scanned against - its expirations are a year or
     more out, so the near-dated chain every other strategy uses holds nothing
     it can trade.
+
+    financing_put: LEAPS long call only - also sell a 0.20-0.30 delta put at the
+    same expiration to part-pay for the call. None means "use whatever the config
+    says", which is off. Passing True is an explicit opt-in per scan, because the
+    variant multiplies the capital committed and the worst case.
+
+    put_ratio: how many puts per call, 1 or 2. One put often funds only a
+    quarter of the call, which is why 2 exists - but the second one is uncovered,
+    so it is capped at the strategy's max_ratio however high this is set.
     """
     strategy = get_strategy(strategy_key)
     if strategy.get("family") not in SETUP_FAMILIES:
@@ -526,9 +583,13 @@ def scan_setups(
         nearest = chain.nearest_dte((lo + hi) // 2)
         dtes = [nearest] if nearest is not None else []
 
+    if financing_put is None:
+        financing_put = bool((strategy.get("financing_put") or {}).get("enabled", False))
+
     out: list[Candidate] = []
     for dte in _sample_evenly(dtes, max_setups):
-        cand = _setup_at_dte(strategy_key, chain, dte, target, w, contracts, leaps_chain)
+        cand = _setup_at_dte(strategy_key, chain, dte, target, w, contracts, leaps_chain,
+                             financing_put=financing_put, put_ratio=put_ratio)
         if cand:
             out.append(cand)
     out.sort(key=lambda c: (c.dte if c.dte is not None else 0))

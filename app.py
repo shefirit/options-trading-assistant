@@ -2037,11 +2037,43 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
              "also have positions the app doesn't know about.")
     is_pmcc = strat.get("family") == "diagonal"
     is_long_call = strat.get("family") == "long_call"
+    want_financing_put = False
+    put_ratio = 1
     if is_long_call:
         theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration a year or "
                    "more out, each at the 0.70-0.80 delta your SOP calls for. This one BUYS "
                    "an option, so every setup is a debit: the money leaves your account and "
                    "the whole of it is at risk.")
+        fp_cfg = strat.get("financing_put") or {}
+        want_financing_put = st.checkbox(
+            f"Also sell a {fp_cfg.get('delta_min', 0.20):.2f}-{fp_cfg.get('delta_max', 0.30):.2f} "
+            "delta put to help pay for the call",
+            value=bool(fp_cfg.get("enabled", False)), key="build_financing_put",
+            help="Optional variant (a risk reversal). Same expiration as the call. The credit "
+                 "cuts what you pay - but you must hold the strike x 100 in cash, and your "
+                 "worst case stops being 'the premium I paid'.")
+        if want_financing_put:
+            put_ratio = int(st.radio(
+                "How many puts per call?",
+                options=[1, 2], horizontal=True, key="build_put_ratio",
+                format_func=lambda n: ("1 put (matched)" if n == 1
+                                       else "2 puts (advanced - uncovered second put)")))
+            theme.note(
+                f"**Financing put ON.** Each setup below now has two legs: the call you buy "
+                f"(**+1**) and {'a put' if put_ratio == 1 else 'two puts'} you sell "
+                f"(**-{put_ratio}**) at the same expiration. Read the capital line, not just "
+                "the debit - the put's collateral is usually several times the cost of the "
+                "call, so these setups tie up far more money than the same call on its own. "
+                "Only worth it on a name you would be happy to own "
+                f"{100 * put_ratio} shares of at the put's strike.")
+            if put_ratio == 2:
+                st.warning(
+                    "**The second put is uncovered.** The call balances the first one and "
+                    "does nothing for the second, so below the put strike this loses at "
+                    "twice the rate and assignment arrives as 200 shares. It also doubles "
+                    "the collateral - on a $300 stock that is over $50,000, your whole "
+                    "monthly buying power, for one trade. Check the buying-power line on "
+                    "every setup before you like the look of the cheaper debit.")
     else:
         theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
                    "each at the delta your SOP calls for."
@@ -2070,7 +2102,9 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                     leaps = None
                 found.extend(scanner.scan_setups(key, chain, width=width,
                                                  contracts=int(contracts), max_setups=10,
-                                                 leaps_chain=leaps))
+                                                 leaps_chain=leaps,
+                                                 financing_put=want_financing_put,
+                                                 put_ratio=put_ratio))
             except YFRateLimitError:
                 rate_limited.append(u)
             except Exception as e:

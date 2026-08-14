@@ -66,6 +66,19 @@ def ticket_line(trade: Trade, today: Optional[dt.date] = None) -> Optional[str]:
                 f"{_exp_text(long_.dte, today)}/{_exp_text(short.dte, today)} "
                 f"{_k(long_.strike)}/{_k(short.strike)} {opt} @{abs(net):.2f} LMT")
 
+    # ---- two legs, one call one put: the LEAPS risk reversal (buy the call,
+    # sell the financing put at the same expiration). Worth having a real ticket
+    # for rather than falling through to "read the leg table": her SOP is
+    # explicit that both legs go in as ONE order, and legging in is how she ends
+    # up filled on only the risky half.
+    if len(legs) == 2:
+        call = next((l for l in legs if l.option_type == OptionType.CALL), None)
+        put = next((l for l in legs if l.option_type == OptionType.PUT), None)
+        if (call and put and call.action == Action.BUY and put.action == Action.SELL
+                and call.dte == put.dte):
+            return (f"BUY +{qty} COMBO {sym} {_exp_text(call.dte, today)} "
+                    f"{_k(call.strike)} CALL/-{_k(put.strike)} PUT @{abs(net):.2f} LMT")
+
     # ---- four legs: iron condor (short call/long call/short put/long put) ----
     if len(legs) == 4:
         def pick(action: Action, otype: OptionType):
