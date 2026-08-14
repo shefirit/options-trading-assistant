@@ -81,6 +81,56 @@ def _symbol_options(settings) -> list:
         european + etfs + stock_universe.FEATURED + stock_universe.all_stocks()))
 
 
+def _remembered_symbols(base: list, extras: list, current) -> list:
+    """The Analyze dropdown's options: her own additions first, then the universe.
+
+    `extras` is MUTATED on purpose - it lives in session state and is how a
+    hand-typed ticker survives past the one rerun that created it. `current`
+    covers the case where a handoff button (Picks, Premium) wrote a symbol
+    straight into the widget's key without it ever being typed here.
+    """
+    if current and current not in base and current not in extras:
+        extras.append(current)
+    return list(dict.fromkeys(list(extras) + list(base)))
+
+
+def _analyze_symbol_box(settings) -> str:
+    """The Analyze tab's one symbol box, and the two bugs it used to have.
+
+    Rita: "i tried to enter 2 tickers one after another and it doesn't let it.
+    tickers dissapear." Both halves of that were real, and they had one cause
+    between them - the option list was rebuilt from the static universe on every
+    single rerun, so a ticker she added with the "Add:" line existed for exactly
+    one script run.
+
+      1. It vanished from the DROPDOWN. Add TQQQ, move to something else, and
+         TQQQ was gone - not merely unselected, absent from the list, so getting
+         back to it meant typing the whole thing again. Confirmed live: after
+         adding two, neither was in the list, not even the selected one.
+
+      2. The box went BLANK. `index=` was passed alongside `key=` on every
+         rerun, and `index` was computed as "where the stored symbol sits in the
+         options, or None if it is missing" - which for a hand-typed ticker is
+         always None. So the widget was handed "select nothing" on the very
+         rerun that was supposed to show what she had just chosen, and the panel
+         below carried on rendering the previous name.
+
+    So the tickers she adds are remembered for the session and put at the TOP of
+    the list where she can find them, and `index` is gone entirely: the widget's
+    key is the single source of truth for what is selected. Seeding the key with
+    None keeps the box empty on the first visit rather than pre-selecting SPX,
+    which is what dropping `index` would otherwise do.
+    """
+    extras = st.session_state.setdefault("analyze_extra_syms", [])
+    opts = _remembered_symbols(_symbol_options(settings), extras,
+                               st.session_state.get("analyze_sym"))
+    st.session_state.setdefault("analyze_sym", None)
+    sym = st.selectbox("Symbol", opts, key="analyze_sym",
+                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
+                       accept_new_options=True)
+    return (sym or "").strip().upper()
+
+
 def _compute_advice(sym, kind, provider, settings):
     ctx = provider.get_market_context(sym)
     analysis = provider.get_stock_analysis(sym) if kind in ("stock", "etf") else None
@@ -1347,14 +1397,7 @@ def _tab_analyze(settings, provider, strategies) -> None:
     tool below reads it.
     """
     theme.section("Everything about one name, in one place", "Analyze")
-    opts = _symbol_options(settings)
-    default = st.session_state.get("analyze_sym")
-    idx = opts.index(default) if default in opts else None
-    sym = st.selectbox("Symbol", opts, index=idx, key="analyze_sym",
-                       placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
-                       accept_new_options=True)
-    if sym:
-        sym = sym.strip().upper()
+    sym = _analyze_symbol_box(settings)
     theme.note("Type a ticker once - every tool below reads it. The list holds the indexes, the "
                "big ETFs and the S&P 500 / Nasdaq-100 stocks; for anything else (SOFI, HOOD...) "
                "type it and click the **Add:** line that appears. Indexes (SPX, NDX) have no "

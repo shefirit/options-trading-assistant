@@ -165,3 +165,63 @@ def test_glossary_is_reachable_from_every_tab_and_filters(demo_app):
     # A word that is in no entry says so rather than showing a blank panel.
     at.text_input(key="glossary_search").set_value("zzzzz").run()
     assert "Nothing here matches" in glossary_text(at)
+
+
+# ---------- the Analyze symbol box remembering hand-typed tickers ----------
+def test_a_hand_typed_ticker_survives_the_next_rerun():
+    """Rita: "i tried to enter 2 tickers one after another... tickers dissapear."
+
+    The option list was rebuilt from the static universe every rerun, so a
+    ticker added with the "Add:" line existed for exactly one script run - it
+    vanished from the dropdown, and the box blanked because `index` was then
+    computed as "not found".
+    """
+    from app import _remembered_symbols
+
+    base = ["SPX", "SPY", "AAPL"]
+    extras = []
+
+    # She adds one that is not in the universe.
+    opts = _remembered_symbols(base, extras, "TQQQ")
+    assert "TQQQ" in opts
+    # ...and it is still there on the next run, without being re-typed.
+    assert "TQQQ" in _remembered_symbols(base, extras, "SPY")
+
+
+def test_a_second_hand_typed_ticker_does_not_evict_the_first():
+    from app import _remembered_symbols
+
+    base = ["SPX", "SPY"]
+    extras = []
+    _remembered_symbols(base, extras, "TQQQ")
+    opts = _remembered_symbols(base, extras, "SQQQ")
+    assert opts[:2] == ["TQQQ", "SQQQ"], "her own tickers come first"
+    assert set(base).issubset(opts)
+
+
+def test_the_remembered_list_never_duplicates():
+    from app import _remembered_symbols
+
+    base = ["SPX", "SPY"]
+    extras = []
+    for _ in range(3):
+        _remembered_symbols(base, extras, "TQQQ")
+    opts = _remembered_symbols(base, extras, "SPY")
+    assert opts.count("TQQQ") == 1
+    assert opts.count("SPY") == 1
+
+
+def test_a_symbol_already_in_the_universe_is_not_remembered_separately():
+    from app import _remembered_symbols
+
+    extras = []
+    _remembered_symbols(["SPX", "SPY"], extras, "SPY")
+    assert extras == []
+
+
+def test_a_handoff_symbol_becomes_selectable():
+    """Picks and Premium write straight into the widget key; if that name is not
+    an option the box cannot display it."""
+    from app import _remembered_symbols
+
+    assert "HOOD" in _remembered_symbols(["SPX"], [], "HOOD")
