@@ -83,6 +83,9 @@ def validate_trade(
         for check in (
             rules.check_financing_put_delta(
                 trade, float(fp.get("delta_min", 0.20)), float(fp.get("delta_max", 0.30))),
+            # Her hard line, checked off the strike rather than the delta so it
+            # still holds when the feed sends no greeks.
+            rules.check_financing_put_not_itm(trade),
             rules.check_financing_put_expiration(trade) if fp.get("same_expiration", True)
             else None,
             rules.check_financing_put_ratio(trade, int(fp.get("ratio", 1)),

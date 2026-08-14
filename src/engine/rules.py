@@ -296,6 +296,11 @@ def check_financing_put_delta(trade: Trade, delta_min: float,
     put pays more premium precisely because it is likelier to land you 100
     shares. Shallower than 0.20 is not dangerous, just barely worth doing - you
     take on the whole assignment obligation for very little cash.
+
+    Rita, 2026-08-14: "put in the money is not an option, only 0.2-0.3 delta can
+    be." The band is a hard boundary, not a preference to be traded off against
+    how much of the call gets funded. See check_financing_put_not_itm for the
+    belt-and-braces version that does not depend on the feed sending a delta.
     """
     puts = _financing_puts(trade)
     if not puts:
@@ -325,6 +330,44 @@ def check_financing_put_delta(trade: Trade, delta_min: float,
         name=name, status=CheckStatus.PASS if ok else CheckStatus.FAIL,
         message=f"The put you would sell has delta {d:.3f}. {why}",
         expected=f"{delta_min:.2f}-{delta_max:.2f}", actual=f"{d:.3f}")
+
+
+def check_financing_put_not_itm(trade: Trade) -> Optional[CheckResult]:
+    """The put you sell must be BELOW the stock. No exceptions.
+
+    Rita's ruling, 2026-08-14: "put in the money is not an option." The delta
+    band already implies it - 0.20-0.30 sits well out of the money - but the
+    delta check only WARNS when the feed sends no greeks, and a missing delta is
+    exactly when a bad strike would slip past unnoticed. Strike and stock price
+    are always known, so this one can be certain where the delta check cannot.
+
+    An in-the-money short put is not a financing put at all. It is an immediate
+    obligation to buy shares above where they trade, on a position opened
+    precisely because the stock had already fallen.
+    """
+    puts = _financing_puts(trade)
+    price = trade.underlying_price or 0.0
+    if not puts or price <= 0:
+        return None
+    leg = max(puts, key=lambda l: l.strike)
+    name = "The put you sell is out of the money"
+    itm = leg.strike >= price
+    gap = (price - leg.strike) / price * 100
+    if not itm:
+        return CheckResult(
+            name=name, status=CheckStatus.PASS,
+            message=(f"The ${leg.strike:g} put sits {gap:.1f}% below the ${price:,.2f} the "
+                     "stock trades at, so it only costs you if the stock falls that far "
+                     "first."),
+            expected="strike below the stock", actual=f"{gap:.1f}% below")
+    return CheckResult(
+        name=name, status=CheckStatus.FAIL,
+        message=(f"The ${leg.strike:g} put is AT or IN the money - the stock is at "
+                 f"${price:,.2f}. Your SOP does not allow this at any delta. You would be "
+                 "promising to buy shares above where they already trade, on a stock you "
+                 "are buying because it just fell. Move the strike down into the "
+                 "0.20-0.30 delta band."),
+        expected="strike below the stock", actual=f"{abs(gap):.1f}% above")
 
 
 def check_financing_put_expiration(trade: Trade) -> Optional[CheckResult]:

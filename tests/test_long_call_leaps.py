@@ -15,6 +15,7 @@ import datetime as dt
 
 import pytest
 
+from src.data.chain import OptionContract
 from src.engine import exit_rules, payoff, rules, scanner, sizing, tos_ticket, validator
 from src.engine.config_loader import get_strategy
 from src.engine.models import Action, CheckStatus, Leg, OptionType, Trade
@@ -508,6 +509,45 @@ def test_the_put_delta_is_a_band_not_a_floor():
     assert _check(ok, "Financing put delta").status == CheckStatus.PASS
     assert _check(too_deep, "Financing put delta").status == CheckStatus.FAIL
     assert _check(too_far, "Financing put delta").status == CheckStatus.FAIL
+
+
+def test_an_in_the_money_financing_put_is_refused():
+    """Rita, 2026-08-14: "put in the money is not an option. only 0.2-0.3 delta
+    can be." Not a trade-off against how much of the call gets funded. The
+    underlying sits at 200 in these fixtures, so a 220 strike is in the money."""
+    itm = validator.validate_trade(_reversal(put=_put_leg(strike=220.0, delta=-0.55)))
+    assert _check(itm, "out of the money").status == CheckStatus.FAIL
+    assert _check(itm, "Financing put delta").status == CheckStatus.FAIL
+    assert not itm.passed
+
+
+def test_the_itm_check_holds_when_the_feed_sends_no_delta():
+    """Why it reads the STRIKE, not the delta: a missing delta only warns, and
+    that is exactly the moment a bad strike would slip past unnoticed."""
+    blind = validator.validate_trade(_reversal(put=_put_leg(strike=220.0, delta=0.0)))
+    assert _check(blind, "Financing put delta").status == CheckStatus.WARN
+    assert _check(blind, "out of the money").status == CheckStatus.FAIL
+    assert not blind.passed
+
+
+def test_an_out_of_the_money_put_passes_and_says_how_far():
+    check = _check(validator.validate_trade(_reversal()), "out of the money")
+    assert check.status == CheckStatus.PASS
+    assert "25.0% below" in check.message
+
+
+def test_the_scanner_will_not_build_an_in_the_money_financing_put():
+    """The checklist refusing it is not enough - the scan must not offer it.
+    Stale greeks can put an in-the-money strike inside the delta band."""
+    def put(strike, delta):
+        return OptionContract(
+            option_type=OptionType.PUT, strike=strike, expiration="2027-09-17",
+            dte=400, delta=delta, bid=9.8, ask=10.2, open_interest=500)
+
+    picked = scanner._pick_financing_put(
+        [put(220.0, -0.26), put(150.0, -0.26)],
+        get_strategy("long_call_leaps"), spot=200.0)
+    assert picked.strike == 150.0
 
 
 def test_mismatched_expirations_are_caught():

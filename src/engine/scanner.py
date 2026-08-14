@@ -388,7 +388,8 @@ def _pick_long_call(options: list[OptionContract], strategy: dict) -> Optional[O
     return min(eligible, key=lambda o: abs(o.abs_delta - target))
 
 
-def _pick_financing_put(options: list[OptionContract], strategy: dict) -> Optional[OptionContract]:
+def _pick_financing_put(options: list[OptionContract], strategy: dict,
+                        spot: float = 0.0) -> Optional[OptionContract]:
     """The put to SELL alongside a LEAPS long call, to part-pay for it.
 
     A BAND, not a floor - the opposite of the call above, and for the opposite
@@ -408,6 +409,12 @@ def _pick_financing_put(options: list[OptionContract], strategy: dict) -> Option
     target = float(cfg.get("delta_target", (lo + hi) / 2))
     band = [o for o in options
             if lo - 1e-9 <= o.abs_delta <= hi + 1e-9 and o.mid > 0]
+    if spot > 0:
+        # Her hard line (2026-08-14): "put in the money is not an option." The
+        # band already implies it, but a chain with missing or stale greeks can
+        # put an in-the-money strike inside the band, and the scanner must not
+        # be able to build a trade the checklist would refuse outright.
+        band = [o for o in band if o.strike < spot]
     if not band:
         return None
     return min(band, key=lambda o: abs(o.abs_delta - target))
@@ -458,7 +465,8 @@ def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float
             return None
         legs = [_leg("long_call_leaps", Action.BUY, long_call)]
         if financing_put:
-            put = _pick_financing_put(chain.by(OptionType.PUT, dte), strategy)
+            put = _pick_financing_put(chain.by(OptionType.PUT, dte), strategy,
+                                      chain.underlying_price)
             # No put in the band means the call goes out alone rather than being
             # dropped: her SOP's default trade is still available and valid.
             if put:
