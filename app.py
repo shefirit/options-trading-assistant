@@ -94,6 +94,22 @@ def _remembered_symbols(base: list, extras: list, current) -> list:
     return list(dict.fromkeys(list(extras) + list(base)))
 
 
+def _remember_symbol(sym: str, base: list) -> None:
+    """Keep a hand-typed ticker on disk so it is still offered tomorrow.
+
+    Only names that are NOT in the universe files are worth storing - the other
+    thousand are already in the dropdown, and writing them would fill a 20-slot
+    list with tickers that never needed remembering.
+    """
+    if not sym or sym in base:
+        return
+    from src.data import recent_symbols
+    try:
+        recent_symbols.remember(sym)
+    except Exception:
+        pass          # a convenience list is never worth an error on her screen
+
+
 def _analyze_symbol_box(settings) -> str:
     """The Analyze tab's one symbol box, and the two bugs it used to have.
 
@@ -115,20 +131,34 @@ def _analyze_symbol_box(settings) -> str:
          rerun that was supposed to show what she had just chosen, and the panel
          below carried on rendering the previous name.
 
-    So the tickers she adds are remembered for the session and put at the TOP of
-    the list where she can find them, and `index` is gone entirely: the widget's
-    key is the single source of truth for what is selected. Seeding the key with
-    None keeps the box empty on the first visit rather than pre-selecting SPX,
-    which is what dropping `index` would otherwise do.
+    So the tickers she adds are remembered and put at the TOP of the list where
+    she can find them, and `index` is gone entirely: the widget's key is the
+    single source of truth for what is selected. Seeding the key with None keeps
+    the box empty on the first visit rather than pre-selecting SPX, which is what
+    dropping `index` would otherwise do.
+
+    The remembered list is seeded from disk (recent_symbols) so it survives a
+    browser refresh and tomorrow morning, not just this session - her ask after
+    the session-only version shipped. Session state still carries it within a
+    run, so a read-only filesystem degrades to the old behaviour rather than
+    breaking the box.
     """
-    extras = st.session_state.setdefault("analyze_extra_syms", [])
-    opts = _remembered_symbols(_symbol_options(settings), extras,
-                               st.session_state.get("analyze_sym"))
+    base = _symbol_options(settings)
+    if "analyze_extra_syms" not in st.session_state:
+        from src.data import recent_symbols
+        try:
+            st.session_state["analyze_extra_syms"] = recent_symbols.read()
+        except Exception:
+            st.session_state["analyze_extra_syms"] = []
+    extras = st.session_state["analyze_extra_syms"]
+    opts = _remembered_symbols(base, extras, st.session_state.get("analyze_sym"))
     st.session_state.setdefault("analyze_sym", None)
     sym = st.selectbox("Symbol", opts, key="analyze_sym",
                        placeholder="Type any ticker - SPX, SPY, AAPL, NVDA...",
                        accept_new_options=True)
-    return (sym or "").strip().upper()
+    sym = (sym or "").strip().upper()
+    _remember_symbol(sym, base)
+    return sym
 
 
 def _compute_advice(sym, kind, provider, settings):
@@ -1400,8 +1430,9 @@ def _tab_analyze(settings, provider, strategies) -> None:
     sym = _analyze_symbol_box(settings)
     theme.note("Type a ticker once - every tool below reads it. The list holds the indexes, the "
                "big ETFs and the S&P 500 / Nasdaq-100 stocks; for anything else (SOFI, HOOD...) "
-               "type it and click the **Add:** line that appears. Indexes (SPX, NDX) have no "
-               "company behind them, so the company tools stay empty for those.")
+               "type it and click the **Add:** line that appears. Anything you add is kept at "
+               "the top of the list for next time, so you only ever type it once. Indexes "
+               "(SPX, NDX) have no company behind them, so the company tools stay empty.")
 
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind

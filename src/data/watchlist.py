@@ -25,8 +25,13 @@ WATCHLIST_PATH = PROJECT_ROOT / "sample_data" / "watchlist.json"
 MAX_SYMBOLS = 30        # past this the sweep slows down for little gain
 
 
-def _clean(symbols) -> list[str]:
-    """Uppercase, de-duplicated, order preserved, junk dropped."""
+def clean_symbols(symbols, limit: int = MAX_SYMBOLS) -> list[str]:
+    """Uppercase, de-duplicated, order preserved, junk dropped, capped.
+
+    Public because the Analyze tab's remembered-tickers list needs exactly the
+    same rules with a different cap, and two copies of "what counts as a
+    ticker" is how they drift apart.
+    """
     out: list[str] = []
     for raw in symbols or []:
         # Guard the type before str(): str(None) is "None", which sails through
@@ -39,7 +44,12 @@ def _clean(symbols) -> list[str]:
         if len(sym) > 6 or sym in out:
             continue
         out.append(sym)
-    return out[:MAX_SYMBOLS]
+    return out[:limit]
+
+
+def _clean(symbols) -> list[str]:
+    """Kept as the module's own name for its own cap."""
+    return clean_symbols(symbols, MAX_SYMBOLS)
 
 
 def read(path: Optional[Path] = None) -> list[str]:
