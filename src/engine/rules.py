@@ -206,6 +206,86 @@ def check_bought_call_delta(trade: Trade, min_delta: float) -> Optional[CheckRes
         message=message, expected=f">= {min_delta:.2f}", actual=f"{d:.3f}")
 
 
+def check_bought_call_spread(trade: Trade, warn_pct: float, max_pct: float,
+                             stale_reason: Optional[str] = None) -> Optional[CheckResult]:
+    """The bid-ask spread on a call she BUYS - what the round trip costs her.
+
+    Rita's addition, 2026-08-14, after a scan surfaced FE with 490 contracts of
+    open interest (comfortably past her 250 floor) quoting a spread of 54% of
+    the option's own value. Open interest counts how many contracts EXIST; the
+    spread is what it costs to get in and out. They usually move together, which
+    is why one floor mostly worked - but on quiet utilities and tobacco they come
+    apart, and the floor alone waved those through.
+
+    Bought calls only. On a cheap far-out option she SELLS, a 5-cent spread reads
+    as 17% and means nothing; her credit strategies keep the 6%-of-width minimum
+    credit rule instead and carry no spread rule at all.
+
+    `stale_reason` downgrades a failure to a warning when the US market is shut.
+    The delayed feed keeps handing back the last prints and those are wide -
+    the same reason `premium_finder` already softens its liquidity read - so a
+    Sunday scan must not refuse a name that trades tightly on Monday.
+    """
+    calls = [l for l in trade.legs
+             if l.action == Action.BUY and l.option_type == OptionType.CALL]
+    if not calls:
+        return None
+    # The most expensive bought call is the one that matters: it is where the
+    # spread costs the most dollars, and on a PMCC it is the long LEAPS rather
+    # than anything short-dated.
+    leg = max(calls, key=lambda l: l.premium)
+    pct = leg.spread_pct
+    name = f"Bid-ask spread on the call you buy (under {max_pct:g}%)"
+
+    if pct is None:
+        return CheckResult(
+            name=name, status=CheckStatus.WARN,
+            message=(f"No usable bid and ask came through for the {leg.strike:g} call, so "
+                     "the spread could not be checked. Look at it in thinkorswim before "
+                     "you buy - a wide one costs you real money twice, going in and "
+                     "coming out."),
+            expected=f"<= {max_pct:g}%", actual="not available")
+
+    # What the spread actually costs, in dollars, on this position.
+    cost = (leg.ask - leg.bid) * 100 * leg.quantity * trade.contracts
+    detail = (f"The {leg.strike:g} call is quoted {leg.bid:.2f} bid / {leg.ask:.2f} ask - "
+              f"a spread of {pct:.1f}% of what the option is worth, about ${cost:,.0f} "
+              f"on this position.")
+
+    if pct <= warn_pct:
+        return CheckResult(
+            name=name, status=CheckStatus.PASS,
+            message=f"{detail} Tight enough to trade through.",
+            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
+
+    if pct <= max_pct:
+        return CheckResult(
+            name=name, status=CheckStatus.WARN,
+            message=(f"{detail} That is above your {warn_pct:g}% comfort line. You are "
+                     "starting the trade down by that much, so the stock has to make it "
+                     "back before you see a cent. Try a limit order near the mid price "
+                     "and only take the fill if it comes."),
+            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
+
+    if stale_reason:
+        return CheckResult(
+            name=name, status=CheckStatus.WARN,
+            message=(f"{detail} That is past your {max_pct:g}% limit - but the US market "
+                     f"is closed ({stale_reason}), and a shut market quotes wide because "
+                     "nobody is making a price. This is very likely a stale quote rather "
+                     "than an untradable option. Check it again once trading is open "
+                     "before you decide."),
+            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}% (market closed)")
+
+    return CheckResult(
+        name=name, status=CheckStatus.FAIL,
+        message=(f"{detail} That is past your {max_pct:g}% limit. Buying here means "
+                 "handing away a large piece of the trade before the stock does anything, "
+                 "and you pay it again on the way out. Your SOP says find a name whose "
+                 "options actually trade."),
+        expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
+
+
 # ------------------------------------------------- the optional financing put
 # Sold alongside a LEAPS long call to part-pay for it (a risk reversal). Every
 # check below returns None when there is no sold put, so the plain one-leg

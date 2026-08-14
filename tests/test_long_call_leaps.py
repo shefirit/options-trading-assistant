@@ -24,10 +24,16 @@ TODAY = dt.date(2026, 8, 7)
 EXPIRY = dt.date(2027, 9, 17)
 
 
-def _leg(strike=185.0, premium=39.0, delta=0.71, dte=400, open_interest=430):
+def _leg(strike=185.0, premium=39.0, delta=0.71, dte=400, open_interest=430,
+         spread=2.0):
+    """`spread` is the bid-ask gap as a percentage of the mid, so a test can
+    ask for a specific fill quality. The default is a tight, tradable quote;
+    the bid/ask straddle `premium` so the mid stays exactly what was asked for."""
+    half = premium * spread / 200
     return Leg(role="long_call_leaps", action=Action.BUY, option_type=OptionType.CALL,
                strike=strike, premium=premium, quantity=1, dte=dte, delta=delta,
-               open_interest=open_interest)
+               open_interest=open_interest,
+               bid=round(premium - half, 2), ask=round(premium + half, 2))
 
 
 def _trade(contracts=1, **kw):
@@ -44,6 +50,19 @@ def _position(days_held=7, paid=3900.0):
 @pytest.fixture(scope="module")
 def strategy():
     return get_strategy("long_call_leaps")
+
+
+@pytest.fixture
+def market_open(monkeypatch):
+    """Pin the market to OPEN for spread tests that go through the validator.
+
+    The bid-ask rule softens a refusal to a warning while New York is shut,
+    because the delayed feed quotes wide on a closed market. That is correct
+    behaviour and it makes any test of the refusal time-dependent - green in
+    Rita's evening, red in her morning. Caught exactly that way. The closed
+    branch is tested separately by calling the rule directly.
+    """
+    monkeypatch.setattr(validator.market_calendar, "quotes_are_stale", lambda *a, **k: None)
 
 
 # ------------------------------------------------------------------ the shape
@@ -117,6 +136,66 @@ def test_thin_contracts_are_flagged():
     assert _check(thin, "Open interest").status == CheckStatus.WARN
     assert _check(validator.validate_trade(_trade()), "Open interest").status \
         == CheckStatus.PASS
+
+
+def test_a_wide_bid_ask_is_refused_even_when_open_interest_is_fine(market_open):
+    """Rita's rule, 2026-08-14. FE had 490 contracts open - past her 250 floor -
+    and a spread of 54% of the option's value. Open interest counts contracts
+    that exist; the spread counts what they cost to get in and out of."""
+    wide = validator.validate_trade(_trade(open_interest=490, spread=54.0))
+    assert _check(wide, "Bid-ask spread").status == CheckStatus.FAIL
+    assert _check(wide, "Open interest").status == CheckStatus.PASS
+
+
+def test_the_spread_bands_are_pass_warn_fail(market_open):
+    tight = validator.validate_trade(_trade(spread=4.0))
+    middling = validator.validate_trade(_trade(spread=14.0))
+    awful = validator.validate_trade(_trade(spread=24.0))
+    assert _check(tight, "Bid-ask spread").status == CheckStatus.PASS
+    assert _check(middling, "Bid-ask spread").status == CheckStatus.WARN
+    assert _check(awful, "Bid-ask spread").status == CheckStatus.FAIL
+
+
+def test_the_spread_check_says_what_it_costs_in_dollars(market_open):
+    """A percentage does not land; "about $780" does."""
+    report = validator.validate_trade(_trade(premium=39.0, spread=20.0, contracts=1))
+    msg = _check(report, "Bid-ask spread").message
+    assert "$780" in msg
+
+
+def test_a_missing_quote_warns_rather_than_passing_quietly():
+    leg = _leg()
+    leg.bid, leg.ask = None, None
+    trade = Trade(strategy_key="long_call_leaps", underlying="AMZN", contracts=1,
+                  underlying_price=200.0, legs=[leg])
+    check = _check(validator.validate_trade(trade), "Bid-ask spread")
+    assert check.status == CheckStatus.WARN
+    assert "could not be checked" in check.message
+
+
+def test_a_closed_market_downgrades_the_refusal_to_a_warning():
+    """Her delayed feed quotes wide when New York is shut, and she scans during
+    her afternoon. A stale quote must not refuse a name that trades tightly."""
+    trade = _trade(spread=24.0)
+    entry = get_strategy("long_call_leaps")["entry"]
+    warn, cap = float(entry["warn_bid_ask_pct"]), float(entry["max_bid_ask_pct"])
+
+    open_market = rules.check_bought_call_spread(trade, warn, cap, stale_reason=None)
+    shut = rules.check_bought_call_spread(trade, warn, cap, stale_reason="the weekend")
+
+    assert open_market.status == CheckStatus.FAIL
+    assert shut.status == CheckStatus.WARN
+    assert "the weekend" in shut.message
+
+
+def test_the_spread_rule_only_touches_the_strategies_that_buy_calls():
+    """Her credit strategies keep the 6%-of-width credit rule instead - on a
+    cheap option she sells, a percentage spread reads high and means nothing."""
+    for key in ("put_credit_spread", "call_credit_spread", "iron_condor",
+                "cash_secured_put"):
+        assert "max_bid_ask_pct" not in get_strategy(key)["entry"], key
+    for key in ("long_call_leaps", "poor_mans_covered_call"):
+        assert "max_bid_ask_pct" in get_strategy(key)["entry"], key
 
 
 def test_the_cap_counts_every_open_leaps_not_just_this_one():

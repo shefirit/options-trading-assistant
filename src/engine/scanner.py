@@ -65,7 +65,7 @@ def _leg(role: str, action: Action, c: OptionContract) -> Leg:
     return Leg(
         role=role, action=action, option_type=c.option_type,
         strike=c.strike, delta=c.delta, premium=c.mid, dte=c.dte,
-        open_interest=c.open_interest,
+        open_interest=c.open_interest, bid=c.bid, ask=c.ask,
     )
 
 

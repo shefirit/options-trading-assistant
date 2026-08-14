@@ -51,10 +51,35 @@ class Leg(BaseModel):
     # because a thin far-dated contract is expensive to get back out of.
     # None means "not captured", which is different from zero.
     open_interest: Optional[int] = None
+    # The raw quote behind `premium`, carried for the bought-call spread rule.
+    # Same convention as open_interest above: None means "not captured", which
+    # is different from a real zero, and a check that cannot measure must say so
+    # rather than pass silently.
+    bid: Optional[float] = None
+    ask: Optional[float] = None
 
     @property
     def abs_delta(self) -> float:
         return abs(self.delta)
+
+    @property
+    def spread_pct(self) -> Optional[float]:
+        """Bid-ask spread as a percentage of the mid price.
+
+        None when the quote is missing or nonsensical (a zero bid on a
+        far-dated contract usually means nobody has posted one, not that the
+        option is worthless). Only meaningful on options that cost real money -
+        on a cheap far-out contract a 5-cent spread reads as 17% and means
+        nothing, which is why her SOP applies this to bought calls only.
+        """
+        if self.bid is None or self.ask is None:
+            return None
+        if self.bid <= 0 or self.ask <= 0 or self.ask < self.bid:
+            return None
+        mid = (self.bid + self.ask) / 2
+        if mid <= 0:
+            return None
+        return round((self.ask - self.bid) / mid * 100, 1)
 
     @property
     def signed_cashflow(self) -> float:

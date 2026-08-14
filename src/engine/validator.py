@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from src.data import market_calendar
 from src.engine import rules, sizing
 from src.engine.config_loader import (
     allowed_underlyings_for,
@@ -94,6 +95,18 @@ def validate_trade(
                 results.append(check)
     elif "long_leg_delta_min" in entry:
         r = rules.check_long_leaps_delta(trade, float(entry["long_leg_delta_min"]))
+        if r:
+            results.append(r)
+
+    # 2c. What the bought call costs to get in and out of. Only the two
+    # strategies that BUY a long-dated call carry these numbers in config, so
+    # the credit strategies never see this check - on a cheap option they sell,
+    # a percentage spread reads high and means nothing.
+    if "max_bid_ask_pct" in entry:
+        r = rules.check_bought_call_spread(
+            trade, float(entry.get("warn_bid_ask_pct", entry["max_bid_ask_pct"])),
+            float(entry["max_bid_ask_pct"]),
+            stale_reason=market_calendar.quotes_are_stale())
         if r:
             results.append(r)
 

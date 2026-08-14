@@ -116,6 +116,18 @@ def min_open_interest() -> int:
     return int(_rule("min_open_interest", 250))
 
 
+def warn_spread_pct() -> float:
+    """Above this the bid-ask is expensive but tradable with a limit order."""
+    return _rule("warn_bid_ask_pct", 10.0)
+
+
+def max_spread_pct() -> float:
+    """Above this her SOP says do not buy it. Rita's addition, 2026-08-14 -
+    open interest counts contracts that EXIST, this counts what they cost to
+    get in and out of, and on quiet names the two come apart badly."""
+    return _rule("max_bid_ask_pct", 20.0)
+
+
 def vix_min() -> float:
     return _rule("vix_min", 15.0)
 
@@ -549,12 +561,31 @@ def stock_substitute_delta() -> float:
         return 0.80
 
 
+def spread_pct(contract: OptionContract) -> Optional[float]:
+    """Bid-ask as a percentage of mid, or None when there is no usable quote."""
+    if contract.bid <= 0 or contract.ask <= 0 or contract.ask < contract.bid:
+        return None
+    mid = (contract.bid + contract.ask) / 2
+    return round((contract.ask - contract.bid) / mid * 100, 1) if mid > 0 else None
+
+
 def meets_sop(contract: OptionContract, delta_floor: float, min_dte: int,
-              max_dte: int, min_oi: int) -> bool:
-    """Does this contract satisfy every hard contract rule at once?"""
-    return (contract.abs_delta >= delta_floor - DELTA_TOLERANCE
+              max_dte: int, min_oi: int, max_spread: Optional[float] = None) -> bool:
+    """Does this contract satisfy every hard contract rule at once?
+
+    An unquotable spread does NOT disqualify - the check cannot measure, and a
+    rule that cannot be measured must not silently reject. `breaches()` says so
+    in words instead.
+    """
+    if not (contract.abs_delta >= delta_floor - DELTA_TOLERANCE
             and min_dte <= contract.dte <= max_dte
-            and contract.open_interest >= min_oi)
+            and contract.open_interest >= min_oi):
+        return False
+    if max_spread is not None:
+        pct = spread_pct(contract)
+        if pct is not None and pct > max_spread:
+            return False
+    return True
 
 
 def breaches(contract: OptionContract, delta_floor: Optional[float] = None,
@@ -602,6 +633,13 @@ def breaches(contract: OptionContract, delta_floor: Optional[float] = None,
             f"Open interest is {contract.open_interest} against your {min_oi} floor. "
             "That is how many contracts exist at this strike - too few and you will "
             "give away real money on the spread when you try to sell out.")
+    pct = spread_pct(contract)
+    if pct is not None and pct > max_spread_pct():
+        out.append(
+            f"Bid-ask spread is {pct:.0f}% of what the option is worth, past your "
+            f"{max_spread_pct():.0f}% limit. Open interest counts contracts that exist; "
+            "this counts what they cost you to get in and out of. You would start the "
+            "trade down by that much and pay it again on the way out.")
     return out
 
 
@@ -626,10 +664,14 @@ def _shortfall(contract: OptionContract, delta_floor: float, min_dte: int,
     """
     off_strategy = (contract.abs_delta < delta_floor - DELTA_TOLERANCE
                     or contract.abs_delta >= deep)
+    pct = spread_pct(contract)
     return (
         off_strategy,
         not (min_dte <= contract.dte <= max_dte),
-        contract.open_interest < min_oi,
+        # An untradable spread sits alongside thin open interest rather than
+        # above it: both are "you can get the position but not out of it", and
+        # an unquotable contract must not sort BELOW a measurably terrible one.
+        contract.open_interest < min_oi or (pct is not None and pct > max_spread_pct()),
         -contract.open_interest,
         abs(contract.abs_delta - max(delta_floor, target_delta_pref())),
     )
@@ -663,7 +705,7 @@ def pick_contract(chain: OptionChain, target_delta: float = DEFAULT_TARGET_DELTA
     max_dte = max_leap_dte() if max_dte is None else max_dte
 
     compliant = [c for c in calls
-                 if meets_sop(c, target_delta, min_dte, max_dte, min_oi)]
+                 if meets_sop(c, target_delta, min_dte, max_dte, min_oi, max_spread_pct())]
     if compliant:
         # Longest expiration inside the window, because the whole point of the
         # extra time is room to be wrong; then the delta nearest her configured

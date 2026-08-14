@@ -215,6 +215,20 @@ strategies:
       dte_max: 800                # roughly the furthest LEAPS actually listed
       dte_target: 400             # 400+ preferred: room to be wrong through a crash
       min_open_interest: 250      # thin LEAPS cost more to get out of than they pay
+      # ---- bid-ask spread (Rita's addition, 2026-08-14) ----
+      # Open interest counts how many contracts EXIST. The spread is what it
+      # actually costs to get in and out, and the two come apart badly on quiet
+      # names: a live scan found FE with 490 contracts open - well past the floor
+      # above - quoting a spread of 54% of the option's own value. Buying that is
+      # handing away half the money before the stock does anything.
+      #
+      # Measured as (ask - bid) / mid. It only works as a percentage because
+      # these are deep in-the-money calls costing real money; the same measure on
+      # a cheap far-out option she SELLS would read high and mean nothing, which
+      # is why the credit strategies keep their 6%-of-width credit rule instead
+      # and carry no spread rule at all.
+      warn_bid_ask_pct: 10        # over this: expensive, worth a second look
+      max_bid_ask_pct: 20         # over this: do not buy it
       # Entry TIMING. Buy fear, not comfort - all of these point the same way.
       vix_min: 15.0               # below 15 the market is greedy and a shock is due
       bollinger_band_max: 0.50    # 0 = lower band, 1 = upper. Lower half only.
@@ -293,6 +307,13 @@ strategies:
       short_call_delta: 0.30      # sell the short call at delta 0.30
       short_call_dte_target: 30
       leaps_dte_min: 180          # long call should be far out (6+ months)
+      # Same bid-ask rule as the LEAPS long call, and for the same reason: the
+      # long leg here is a BOUGHT deep-ITM call, so a wide spread is money gone
+      # on the way in and again on the way out. Applies to the LONG leg only -
+      # the short call she sells monthly is cheap and near-dated, where a
+      # percentage spread reads high and means nothing. (Rita, 2026-08-14.)
+      warn_bid_ask_pct: 10
+      max_bid_ask_pct: 20
     exit:
       profit_target_pct: 50       # applies to the short call
       time_exit_dte: 21           # for the short call
