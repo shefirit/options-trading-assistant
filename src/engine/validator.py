@@ -98,15 +98,13 @@ def validate_trade(
         if r:
             results.append(r)
 
-    # 2c. What the bought call costs to get in and out of. Only the two
-    # strategies that BUY a long-dated call carry these numbers in config, so
-    # the credit strategies never see this check - on a cheap option they sell,
-    # a percentage spread reads high and means nothing.
-    if "max_bid_ask_pct" in entry:
+    # 2c. What the bought call costs to get in and out of - reported, never
+    # enforced (her ruling, 2026-08-14). It returns None unless the trade
+    # actually buys a call, so only the LEAPS long call and the PMCC see it; on
+    # a cheap option she sells, a percentage spread reads high and means nothing.
+    if strategy.get("family") in ("long_call", "diagonal"):
         r = rules.check_bought_call_spread(
-            trade, float(entry.get("warn_bid_ask_pct", entry["max_bid_ask_pct"])),
-            float(entry["max_bid_ask_pct"]),
-            stale_reason=market_calendar.quotes_are_stale())
+            trade, stale_reason=market_calendar.quotes_are_stale())
         if r:
             results.append(r)
 

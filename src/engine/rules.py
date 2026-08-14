@@ -206,25 +206,27 @@ def check_bought_call_delta(trade: Trade, min_delta: float) -> Optional[CheckRes
         message=message, expected=f">= {min_delta:.2f}", actual=f"{d:.3f}")
 
 
-def check_bought_call_spread(trade: Trade, warn_pct: float, max_pct: float,
+def check_bought_call_spread(trade: Trade,
                              stale_reason: Optional[str] = None) -> Optional[CheckResult]:
-    """The bid-ask spread on a call she BUYS - what the round trip costs her.
+    """What the round trip costs on a call she BUYS. Reported, never enforced.
 
-    Rita's addition, 2026-08-14, after a scan surfaced FE with 490 contracts of
-    open interest (comfortably past her 250 floor) quoting a spread of 54% of
-    the option's own value. Open interest counts how many contracts EXIST; the
-    spread is what it costs to get in and out. They usually move together, which
-    is why one floor mostly worked - but on quiet utilities and tobacco they come
-    apart, and the floor alone waved those through.
+    Rita's ruling, 2026-08-14: "just relate to it in general, pay attention but
+    do not place strong limitations." An earlier version of this ran on a
+    10%/20% pass-warn-fail ladder from config and could refuse a trade. She
+    removed it the same day. **This check must never return FAIL, and there must
+    be no threshold in strategies.yaml for it to read.** If a future session is
+    tempted to add one back, she has already said no once.
 
-    Bought calls only. On a cheap far-out option she SELLS, a 5-cent spread reads
-    as 17% and means nothing; her credit strategies keep the 6%-of-width minimum
-    credit rule instead and carry no spread rule at all.
+    What it still does is show her the number and say plainly when it looks
+    wide, because the concern behind it was real: FE listed 490 contracts of
+    open interest - past her 250 floor - quoting a spread of 54% of the option's
+    own value. Open interest counts contracts that EXIST; this counts what they
+    cost to trade. Judging it is hers.
 
-    `stale_reason` downgrades a failure to a warning when the US market is shut.
-    The delayed feed keeps handing back the last prints and those are wide -
-    the same reason `premium_finder` already softens its liquidity read - so a
-    Sunday scan must not refuse a name that trades tightly on Monday.
+    `stale_reason` is passed when the US market is shut, because the delayed
+    feed just repeats the last prints and those are wide - the same reason
+    premium_finder already softens its liquidity read. Without that note a
+    Sunday scan reads as though half the board were untradable.
     """
     calls = [l for l in trade.legs
              if l.action == Action.BUY and l.option_type == OptionType.CALL]
@@ -235,55 +237,37 @@ def check_bought_call_spread(trade: Trade, warn_pct: float, max_pct: float,
     # than anything short-dated.
     leg = max(calls, key=lambda l: l.premium)
     pct = leg.spread_pct
-    name = f"Bid-ask spread on the call you buy (under {max_pct:g}%)"
+    name = "What the bid-ask spread costs you"
 
     if pct is None:
         return CheckResult(
-            name=name, status=CheckStatus.WARN,
+            name=name, status=CheckStatus.INFO,
             message=(f"No usable bid and ask came through for the {leg.strike:g} call, so "
-                     "the spread could not be checked. Look at it in thinkorswim before "
-                     "you buy - a wide one costs you real money twice, going in and "
-                     "coming out."),
-            expected=f"<= {max_pct:g}%", actual="not available")
+                     "the spread could not be measured. Worth a look in thinkorswim - a "
+                     "wide one costs you real money twice, going in and coming out."))
 
-    # What the spread actually costs, in dollars, on this position.
     cost = (leg.ask - leg.bid) * 100 * leg.quantity * trade.contracts
     detail = (f"The {leg.strike:g} call is quoted {leg.bid:.2f} bid / {leg.ask:.2f} ask - "
               f"a spread of {pct:.1f}% of what the option is worth, about ${cost:,.0f} "
               f"on this position.")
 
-    if pct <= warn_pct:
-        return CheckResult(
-            name=name, status=CheckStatus.PASS,
-            message=f"{detail} Tight enough to trade through.",
-            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
-
-    if pct <= max_pct:
-        return CheckResult(
-            name=name, status=CheckStatus.WARN,
-            message=(f"{detail} That is above your {warn_pct:g}% comfort line. You are "
-                     "starting the trade down by that much, so the stock has to make it "
-                     "back before you see a cent. Try a limit order near the mid price "
-                     "and only take the fill if it comes."),
-            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
-
     if stale_reason:
         return CheckResult(
-            name=name, status=CheckStatus.WARN,
-            message=(f"{detail} That is past your {max_pct:g}% limit - but the US market "
-                     f"is closed ({stale_reason}), and a shut market quotes wide because "
-                     "nobody is making a price. This is very likely a stale quote rather "
-                     "than an untradable option. Check it again once trading is open "
-                     "before you decide."),
-            expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}% (market closed)")
+            name=name, status=CheckStatus.INFO,
+            message=(f"{detail} The US market is closed ({stale_reason}), and a shut "
+                     "market quotes wide because nobody is making a price - so treat "
+                     "that number as rough until trading opens."))
 
-    return CheckResult(
-        name=name, status=CheckStatus.FAIL,
-        message=(f"{detail} That is past your {max_pct:g}% limit. Buying here means "
-                 "handing away a large piece of the trade before the stock does anything, "
-                 "and you pay it again on the way out. Your SOP says find a name whose "
-                 "options actually trade."),
-        expected=f"<= {max_pct:g}%", actual=f"{pct:.1f}%")
+    if pct <= 10:
+        tail = "Tight - this one trades easily."
+    elif pct <= 20:
+        tail = ("On the wide side. You start the trade down by that much, so a limit "
+                "order near the mid is worth the patience.")
+    else:
+        tail = ("That is very wide. Open interest can look healthy on a contract that "
+                "still costs this much to get in and out of - worth checking whether "
+                "another name gives you the same trade more cheaply.")
+    return CheckResult(name=name, status=CheckStatus.INFO, message=f"{detail} {tail}")
 
 
 # ------------------------------------------------- the optional financing put

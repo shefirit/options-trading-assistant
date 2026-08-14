@@ -116,16 +116,10 @@ def min_open_interest() -> int:
     return int(_rule("min_open_interest", 250))
 
 
-def warn_spread_pct() -> float:
-    """Above this the bid-ask is expensive but tradable with a limit order."""
-    return _rule("warn_bid_ask_pct", 10.0)
-
-
-def max_spread_pct() -> float:
-    """Above this her SOP says do not buy it. Rita's addition, 2026-08-14 -
-    open interest counts contracts that EXIST, this counts what they cost to
-    get in and out of, and on quiet names the two come apart badly."""
-    return _rule("max_bid_ask_pct", 20.0)
+# Where the Finder starts CALLING a spread wide in words. Not an SOP rule and
+# deliberately not in config: her ruling (2026-08-14) is that the spread gets
+# noticed, never enforced. Nothing below drops a contract for exceeding it.
+WIDE_SPREAD_PCT = 20.0
 
 
 def vix_min() -> float:
@@ -570,22 +564,15 @@ def spread_pct(contract: OptionContract) -> Optional[float]:
 
 
 def meets_sop(contract: OptionContract, delta_floor: float, min_dte: int,
-              max_dte: int, min_oi: int, max_spread: Optional[float] = None) -> bool:
+              max_dte: int, min_oi: int) -> bool:
     """Does this contract satisfy every hard contract rule at once?
 
-    An unquotable spread does NOT disqualify - the check cannot measure, and a
-    rule that cannot be measured must not silently reject. `breaches()` says so
-    in words instead.
+    The bid-ask spread is deliberately NOT one of them. It was briefly, on
+    2026-08-14, and she removed it the same day: noticed, never enforced.
     """
-    if not (contract.abs_delta >= delta_floor - DELTA_TOLERANCE
+    return (contract.abs_delta >= delta_floor - DELTA_TOLERANCE
             and min_dte <= contract.dte <= max_dte
-            and contract.open_interest >= min_oi):
-        return False
-    if max_spread is not None:
-        pct = spread_pct(contract)
-        if pct is not None and pct > max_spread:
-            return False
-    return True
+            and contract.open_interest >= min_oi)
 
 
 def breaches(contract: OptionContract, delta_floor: Optional[float] = None,
@@ -633,14 +620,25 @@ def breaches(contract: OptionContract, delta_floor: Optional[float] = None,
             f"Open interest is {contract.open_interest} against your {min_oi} floor. "
             "That is how many contracts exist at this strike - too few and you will "
             "give away real money on the spread when you try to sell out.")
-    pct = spread_pct(contract)
-    if pct is not None and pct > max_spread_pct():
-        out.append(
-            f"Bid-ask spread is {pct:.0f}% of what the option is worth, past your "
-            f"{max_spread_pct():.0f}% limit. Open interest counts contracts that exist; "
-            "this counts what they cost you to get in and out of. You would start the "
-            "trade down by that much and pay it again on the way out.")
     return out
+
+
+def spread_note(contract: OptionContract) -> Optional[str]:
+    """A plain-English remark when the spread is wide - NOT a rule breach.
+
+    Kept out of `breaches()` on purpose: that list is what her SOP refuses, and
+    the spread is not something it refuses. This is the "pay attention to it"
+    half, with no limit attached.
+    """
+    pct = spread_pct(contract)
+    if pct is None or pct <= WIDE_SPREAD_PCT:
+        return None
+    return (
+        f"Wide bid-ask: {pct:.0f}% of what the option is worth. Nothing in your SOP "
+        "refuses this, but it is worth seeing - open interest counts contracts that "
+        "exist, and this counts what they cost you to get in and out of. You would "
+        "start the trade down by that much and pay it again on the way out. Quotes go "
+        "wide when the US market is shut, so check it again while trading is open.")
 
 
 def _shortfall(contract: OptionContract, delta_floor: float, min_dte: int,
@@ -668,12 +666,15 @@ def _shortfall(contract: OptionContract, delta_floor: float, min_dte: int,
     return (
         off_strategy,
         not (min_dte <= contract.dte <= max_dte),
-        # An untradable spread sits alongside thin open interest rather than
-        # above it: both are "you can get the position but not out of it", and
-        # an unquotable contract must not sort BELOW a measurably terrible one.
-        contract.open_interest < min_oi or (pct is not None and pct > max_spread_pct()),
+        contract.open_interest < min_oi,
         -contract.open_interest,
         abs(contract.abs_delta - max(delta_floor, target_delta_pref())),
+        # Last, and only as a tiebreak between contracts that are otherwise
+        # equally good: prefer the one that is cheaper to trade out of. This is
+        # "pay attention to the spread" without it limiting anything - it can
+        # never push a contract out, only order two that already tie. Unquotable
+        # sorts last of the ties rather than first.
+        pct if pct is not None else float("inf"),
     )
 
 
@@ -705,7 +706,7 @@ def pick_contract(chain: OptionChain, target_delta: float = DEFAULT_TARGET_DELTA
     max_dte = max_leap_dte() if max_dte is None else max_dte
 
     compliant = [c for c in calls
-                 if meets_sop(c, target_delta, min_dte, max_dte, min_oi, max_spread_pct())]
+                 if meets_sop(c, target_delta, min_dte, max_dte, min_oi)]
     if compliant:
         # Longest expiration inside the window, because the whole point of the
         # extra time is room to be wrong; then the delta nearest her configured
@@ -721,7 +722,12 @@ def pick_contract(chain: OptionChain, target_delta: float = DEFAULT_TARGET_DELTA
         preferred = max(target_delta, target_delta_pref())
         best_dte = max(c.dte for c in compliant)
         at_expiry = [c for c in compliant if c.dte == best_dte]
-        return min(at_expiry, key=lambda c: abs(c.abs_delta - preferred))
+        # Delta first, then - only to separate contracts that tie on it - the
+        # one that is cheaper to trade out of. The spread never removes a
+        # contract from consideration, it just orders equals.
+        return min(at_expiry, key=lambda c: (
+            abs(c.abs_delta - preferred),
+            spread_pct(c) if spread_pct(c) is not None else float("inf")))
 
     # Nothing on the board qualifies. Hand back the LEAST-BAD contract so the
     # tab still has something to score, and let the caller say what it breaks.
@@ -1441,6 +1447,12 @@ def score_full(candidate: LeapsCandidate, chain: Optional[OptionChain],
             "This contract does not meet your SOP - it is the closest one listed, "
             "not a valid pick.")
         candidate.flags.extend(broken)
+
+    # Separate from the breaches above, and deliberately so: this one is a
+    # remark, not a rule. Nothing refuses the trade over it.
+    note = spread_note(contract)
+    if note:
+        candidate.flags.append(note)
 
     if econ.liquidity == "Thin":
         candidate.flags.append(

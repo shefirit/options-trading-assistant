@@ -365,29 +365,46 @@ def test_pick_contract_accepts_a_delta_that_rounds_to_the_floor():
     assert leaps.breaches(picked) == []
 
 
-def test_a_wide_spread_disqualifies_a_contract_the_oi_floor_waved_through():
-    """Rita's rule, 2026-08-14. FE: 490 contracts open, 54% spread. The picker
-    should reach past it for something she can actually trade out of."""
+def test_a_wide_spread_is_never_a_breach():
+    """Her ruling, 2026-08-14: the spread gets noticed, never enforced. It was
+    briefly a hard rule earlier the same day - do not put it back."""
+    wide = _wide(88, 525, 26.0, delta=0.73, oi=490, spread=54.0)
+    assert leaps.breaches(wide) == []
+    assert leaps.meets_sop(wide, 0.70, 365, 800, 250) is True
+
+
+def test_a_wide_spread_still_gets_said_out_loud():
+    note = leaps.spread_note(_wide(88, 525, 26.0, delta=0.73, oi=490, spread=54.0))
+    assert note is not None and "54%" in note
+    assert leaps.spread_note(_call(85, 525, 28.0, delta=0.76, oi=300)) is None
+
+
+def test_a_wide_spread_cannot_push_a_contract_out_of_the_running():
+    """Only the OI floor and the delta/DTE window can do that."""
     chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
         _wide(88, 525, 26.0, delta=0.73, oi=490, spread=54.0),
-        _call(85, 525, 28.0, delta=0.76, oi=300),
     ])
-    assert leaps.pick_contract(chain, target_delta=0.70).strike == 85
+    assert leaps.pick_contract(chain, target_delta=0.70).strike == 88
 
 
-def test_breaches_names_a_wide_spread():
-    broken = leaps.breaches(_wide(88, 525, 26.0, delta=0.73, oi=490, spread=54.0))
-    assert len(broken) == 1
-    assert "Bid-ask spread is 54%" in broken[0]
+def test_the_spread_only_breaks_a_tie():
+    """Two contracts equal on every rule - the cheaper one to trade out of wins.
+    This is the whole of "pay attention to it" with no limit attached."""
+    chain = OptionChain(underlying="T", underlying_price=100.0, contracts=[
+        _wide(88, 525, 26.0, delta=0.72, oi=500, spread=40.0),
+        _wide(88, 525, 26.0, delta=0.72, oi=500, spread=3.0),
+    ])
+    picked = leaps.pick_contract(chain, target_delta=0.70)
+    assert leaps.spread_pct(picked) == 3.0
 
 
-def test_an_unquotable_spread_does_not_disqualify():
-    """A missing quote is a thing we cannot measure, not a thing that failed."""
+def test_an_unquotable_spread_is_not_held_against_a_contract():
     contract = OptionContract(
         option_type=OptionType.CALL, strike=85, expiration="2028-01-21", dte=525,
         delta=0.73, bid=0.0, ask=0.0, open_interest=900)
     assert leaps.spread_pct(contract) is None
-    assert leaps.meets_sop(contract, 0.70, 365, 800, 250, 20.0) is True
+    assert leaps.spread_note(contract) is None
+    assert leaps.meets_sop(contract, 0.70, 365, 800, 250) is True
 
 
 def test_a_near_stock_substitute_delta_is_flagged():
