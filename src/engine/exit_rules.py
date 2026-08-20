@@ -6,12 +6,15 @@ the exit rules from your own SOP (config/strategies.yaml):
   ✅ profit    - you kept your profit target (50% of the credit): take the win
   ⚠️ watch     - price is near/past a short strike, or delta crossed the red flag
   ➕ uncovered - a PMCC / covered call with no call written against it
+  🎯 awaiting  - you sold the long put off a spread and are letting the short
+                 one assign you: the follow-up is the shares, not an exit
   ✋ hold      - nothing triggered: let time decay keep working
 
 Pure math, no network, fully unit-tested. Priority when several trigger:
-stop > time > profit > watch > hold (safety first). "uncovered" short-circuits
-the lot: with no short call sold there is simply nothing for the rules to
-measure.
+stop > time > profit > watch > hold (safety first). "uncovered" and "awaiting"
+short-circuit the lot: on the first there is no short call for the rules to
+measure, and on the second every one of them would argue against the decision
+she has already taken and paid for.
 """
 
 from __future__ import annotations
@@ -85,6 +88,124 @@ def _strike_notes(position: Position, underlying_price: float,
                     f"Price ({underlying_price:,.0f}) is within 1.5% of your short call "
                     f"strike ({k:g}). Your SOP says consider rolling before it crosses.")
     return notes
+
+
+def _awaiting_assignment_signal(position: Position,
+                               underlying_price: Optional[float],
+                               dte_left: Optional[int],
+                               current_cost: Optional[float] = None) -> ExitSignal:
+    """She sold the long put off a credit spread and is letting the short put
+    assign her. What she needs from here is not an exit rule.
+
+    Every rule below this would fight the decision. The stop measures a loss
+    against the credit and would shout "close now" at the exact moment the plan
+    is working; the 21-day clock would tell her to close or roll a leg she is
+    deliberately holding to expiration; the 50% target is measured on a spread
+    that no longer exists. So this replaces the lot with the three things that
+    actually matter now:
+
+      the cash    the shares cost strike x 100 per contract, and that money has
+                  to be there. This is the real change: a $500-wide spread
+                  became a five-figure obligation the moment the long put went.
+      the basis   what those shares will have cost her after everything this
+                  trade has collected - the number the wheel then runs on.
+      the risk    nothing is bought underneath the short put any more, so below
+                  the basis the loss keeps going. Assignment is the plan; a
+                  collapse is still a collapse.
+    """
+    strike = position.assignment_strike
+    shares = 100 * max(int(position.contracts or 1), 1)
+    cash = position.assignment_cash_needed
+    basis = position.assignment_basis
+    collected = round(float(position.open_credit or 0.0) + position.banked_income, 2)
+
+    if not strike:
+        # No usable strike on the leg (a row saved without one). Everything
+        # below is arithmetic on that strike, so say the true thing rather
+        # than crash the card it is drawn on.
+        return ExitSignal(
+            action="awaiting", tone="neutral",
+            headline="Waiting to be assigned",
+            reason=("You left the short put open to be assigned. Its strike is "
+                    "missing from the log, so the app cannot work out what the "
+                    "shares would cost - correct the trade's strikes in Records "
+                    "and this fills itself in."),
+            notes=[])
+
+    notes: list[str] = []
+    notes.append(
+        f"**Have ${cash:,.0f} ready.** If you are assigned you BUY {shares} "
+        f"{position.underlying} shares at {strike:g} - that cash (or the margin "
+        "for it) has to be in the account on the day, whatever the shares are "
+        "worth that morning.")
+    if basis is not None:
+        notes.append(
+            f"**Your cost basis would be ${basis:,.2f} a share** - the {strike:g} "
+            f"strike less the ${collected:,.0f} this trade has collected "
+            "(the opening credit, the long put you sold back, and any roll). "
+            "That is the number every covered call you write afterwards has to "
+            "beat, and it is what the app will track from the day the shares "
+            "arrive.")
+    if not position.has_long_put:
+        notes.append(
+            "**The floor is gone.** With the long put sold there is nothing "
+            "bought underneath this any more, so the loss no longer stops at "
+            f"the width of the spread: below ${basis:,.2f} it keeps going, "
+            f"${shares:,.0f} for every further dollar the stock falls. "
+            "That is the trade you chose - just size the next one knowing it."
+            if basis is not None else
+            "**The floor is gone.** With the long put sold there is nothing "
+            "bought underneath the short put any more, so the loss no longer "
+            "stops at the width of the spread.")
+
+    tone, headline, where = "neutral", "", ""
+    if underlying_price and strike:
+        if underlying_price <= strike:
+            tone = "amber"
+            headline = "Assignment is on - be ready for the shares"
+            where = (f"{position.underlying} is at {underlying_price:,.2f}, below your "
+                     f"{strike:g} put, so as things stand the shares are coming "
+                     "to you. ")
+        else:
+            gap = (underlying_price - strike) / underlying_price * 100
+            headline = f"Waiting to be assigned - {gap:.1f}% above your strike"
+            where = (f"{position.underlying} is at {underlying_price:,.2f}, "
+                     f"{gap:.1f}% above your {strike:g} put. If it stays there the "
+                     "put simply expires, you keep everything you have collected "
+                     "and no shares arrive - which is a win, not a failure of the "
+                     "plan. ")
+    else:
+        headline = "Waiting to be assigned"
+
+    if dte_left is not None:
+        if dte_left <= 0:
+            headline = "Expiration day - the shares land tonight if it is in the money"
+        elif dte_left <= 5:
+            headline += f" - {dte_left} day{'s' if dte_left != 1 else ''} left"
+            notes.append(
+                f"Only {dte_left} day{'s' if dte_left != 1 else ''} to go. Check the "
+                "cash is in the account now, and remember assignment usually shows "
+                "up over the weekend after expiration - record it here with "
+                "**🎡 I was assigned** as soon as it does, so the premium you have "
+                "collected keeps counting towards what the shares cost.")
+
+    # Where she stands in dollars, but no percentage: "% kept" measures a
+    # credit she means to buy back, and buying this one back is the one thing
+    # she has decided not to do. The number is still worth seeing - it is what
+    # walking away today would cost.
+    pl = None if current_cost is None else round(position.credit - current_cost, 2)
+
+    return ExitSignal(
+        action="awaiting", tone=tone,
+        headline=headline,
+        pl_dollars=pl,
+        reason=(where + "You sold the long put and left the short one open on "
+                "purpose, so the exit rules are off for this trade: there is no "
+                "50% target to take and no 21-day roll to make. What you are "
+                "doing now is waiting - either it expires and you keep the "
+                f"${collected:,.0f} you have collected, or you are assigned and "
+                "the wheel starts."),
+        notes=notes)
 
 
 def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
@@ -208,6 +329,13 @@ def evaluate(
         value = None if current_cost is None else -current_cost
         return _long_premium_signal(position, exit_cfg, value,
                                     underlying_price, dte_left, today)
+
+    # ---- 0a-ii. She stripped the spread down to its short put on purpose and
+    # is waiting to be assigned. Running the exit rules over that would argue
+    # against the decision she has already taken - see the function.
+    if position.awaiting_assignment:
+        return _awaiting_assignment_signal(position, underlying_price, dte_left,
+                                           current_cost)
 
     # ---- 0. Nothing sold: none of the exit rules have anything to measure.
     if position.is_uncovered:

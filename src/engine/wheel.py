@@ -56,11 +56,13 @@ class WheelState:
 def state_from(position, market_price: Optional[float] = None) -> Optional[WheelState]:
     """The wheel's numbers for an assigned position, or None if not assigned.
 
-    premium_collected deliberately counts BOTH sides of the story: the put that
-    got her assigned (open_credit) and every call written since, including the
-    credits from rolling them (roll_income). That is what makes the cost basis
-    fall month after month, and it is the whole reason the strategy is worth
-    running.
+    premium_collected deliberately counts EVERY side of the story: the put that
+    got her assigned (open_credit), every call written since including the
+    credits from rolling them, and - on a credit spread she stripped down on
+    purpose - what the long put sold for on its way out. All of it is cash this
+    trade has banked, so all of it pulls the cost basis down. That is what makes
+    the basis fall month after month, and it is the whole reason the strategy is
+    worth running.
     """
     strike = getattr(position, "assigned_strike", None)
     if not strike:
@@ -68,8 +70,12 @@ def state_from(position, market_price: Optional[float] = None) -> Optional[Wheel
 
     contracts = max(int(position.contracts or 1), 1)
     shares = 100 * contracts
-    premium = round(float(position.open_credit or 0.0)
-                    + float(position.roll_income or 0.0), 2)
+    # banked_income, not roll_income: it is roll credits PLUS any leg she sold
+    # off on the way here, and both are cash this trade collected.
+    banked = getattr(position, "banked_income", None)
+    if banked is None:
+        banked = position.roll_income
+    premium = round(float(position.open_credit or 0.0) + float(banked or 0.0), 2)
     basis = round(float(strike) - premium / shares, 2)
 
     unrealised = (round((float(market_price) - basis) * shares, 2)
@@ -116,6 +122,12 @@ def is_wheelable(position) -> bool:
     if position.status != "open":
         return False
     if position.strategy_key in ("wheel", "cash_secured_put"):
+        return True
+    # A credit spread she has stripped the long put off, on purpose, so the
+    # short put can assign her. It is not a wheel by name and never will be by
+    # shape while the call side of a condor is still open - she said what she
+    # was doing when she recorded the fill, and that is what counts.
+    if getattr(position, "awaiting_assignment", False):
         return True
     # Older rows carry no strategy key, so fall back to the shape: exactly one
     # short put and nothing else.

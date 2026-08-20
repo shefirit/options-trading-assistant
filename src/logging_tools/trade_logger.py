@@ -11,8 +11,8 @@ from typing import Any, Optional
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import (COLUMNS, build_assign_row, build_close_row,
-                                   build_edit_row, build_roll_row, build_row,
-                                   new_trade_id)
+                                   build_edit_row, build_leg_close_row,
+                                   build_roll_row, build_row, new_trade_id)
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -88,6 +88,35 @@ def roll_trade(
     row = build_roll_row(trade_id, underlying, strategy_name, cash,
                          new_strike, new_expiration, new_credit, note,
                          rolled_on=rolled_on, account=account)
+    return _append(row)
+
+
+def close_leg(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    cash: float,
+    strike: Optional[float] = None,
+    option_type: str = "put",
+    side: str = "buy",
+    for_assignment: bool = False,
+    note: str = "",
+    closed_on: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Record that ONE leg came off while the rest of the trade stayed open (a
+    "legclose" event on the same Trade ID).
+
+    The fill this is written for: a credit spread where she sells the long put
+    back and leaves the short put alone so it can be assigned. Returns
+    (destination, went_to_sheet). cash is signed - positive when the fill paid
+    her, which is the usual case here - and is banked on closed_on, which
+    defaults to today.
+    """
+    row = build_leg_close_row(trade_id, underlying, strategy_name, cash,
+                              strike=strike, option_type=option_type, side=side,
+                              for_assignment=for_assignment, note=note,
+                              closed_on=closed_on, account=account)
     return _append(row)
 
 

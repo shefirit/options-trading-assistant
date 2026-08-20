@@ -210,6 +210,16 @@ SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
          "Closing the trade you have and opening a similar one further out in time. Your "
          "SOP only allows it if the roll pays you a net credit. If it will not fill for "
          "a credit, close instead of forcing it."),
+        ("Selling the long leg (taking assignment)",
+         "The third way out of a credit spread, next to closing it and rolling it: you "
+         "sell the long put back, bank what the protection is worth, and leave the short "
+         "put open so it assigns you the 100 shares per contract. Only do it on a name "
+         "you are happy to own and with the cash there - the strike x 100 leaves your "
+         "account on assignment, and without the long put your loss no longer stops at "
+         "the width of the spread. Record it in My trades with **Sell the long put, keep "
+         "the short one**: the app then stops running the 50% target and the 21-day clock "
+         "at you, tracks what the shares would cost after everything you have collected, "
+         "and hands you over to the wheel when they arrive."),
         ("In the money / out of the money",
          "In the money (ITM) means the option would be worth something if exercised right "
          "now. Out of the money (OTM) means it would not. You sell OTM options and hope "

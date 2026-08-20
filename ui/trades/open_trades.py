@@ -11,8 +11,10 @@ import streamlit as st
 from ui import components, theme
 from ui.trades.actions import (
     _assign_form,
+    _assignment_plan_panel,
     _close_form,
     _roll_form,
+    _sell_long_leg_form,
     _wheel_panel,
     _write_call_form,
 )
@@ -122,6 +124,10 @@ def _trade_card(it: dict, strategies, provider) -> None:
 
         if wheel_state is not None:
             _wheel_panel(p, px)
+        elif p.awaiting_assignment:
+            # The spread's numbers stopped applying the day she sold the long
+            # put. This is the position she is actually holding now.
+            _assignment_plan_panel(p, px)
 
         # Keyed, so it survives a rerun. Without a key, recording anything on
         # this card snapped every expander shut and she lost her place.
@@ -132,6 +138,10 @@ def _trade_card(it: dict, strategies, provider) -> None:
             _write_call_form(p, provider)
         elif p.is_debit:
             _roll_form(p, live, provider)
+        # Her third way out of a credit spread: sell the long put and let the
+        # short one assign you. Offered before the close button, because it is
+        # the decision the close button used to swallow.
+        _sell_long_leg_form(p, provider)
         _assign_form(p)
         _close_form(p, live)
 

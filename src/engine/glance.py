@@ -46,6 +46,31 @@ def _shares_line(position, state, price: Optional[float]) -> str:
     return ", ".join(bits) + "."
 
 
+def _awaiting_line(position, price: Optional[float]) -> str:
+    """A spread stripped down to its short put, on purpose, waiting to assign.
+
+    The credit line above would be nonsense here: it measures a spread that no
+    longer exists against a cost to close she has no intention of paying. What
+    she is holding is an obligation to buy shares at a price, and that is what
+    the sentence has to say.
+    """
+    strike = position.assignment_strike
+    basis = position.assignment_basis
+    bits = [f"short the {strike:g} put on its own"] if strike else ["waiting to assign"]
+    if price is not None and strike:
+        where = "below" if price <= strike else "above"
+        bits.append(f"{position.underlying} at {_price(price)}, {where} it")
+    if basis is not None:
+        bits.append(f"assignment would leave you {position.contracts * 100} shares "
+                    f"at a {_price(basis)} basis, for "
+                    f"{_money(position.assignment_cash_needed)} of cash")
+    dte = position.dte_left()
+    if dte is not None:
+        bits.append("expires today" if dte == 0
+                    else f"{dte} day{'s' if dte != 1 else ''} to go")
+    return _sentence(bits)
+
+
 def summary_line(position, live: dict, signal, target_pct: float = 50.0,
                  wheel_state=None) -> str:
     """The one line that answers "how is this trade going?".
@@ -56,6 +81,8 @@ def summary_line(position, live: dict, signal, target_pct: float = 50.0,
     """
     if wheel_state is not None:
         return _shares_line(position, wheel_state, live.get("underlying_price"))
+    if getattr(position, "awaiting_assignment", False):
+        return _awaiting_line(position, live.get("underlying_price"))
 
     bits: list[str] = []
     credit = float(position.credit or 0.0)
@@ -133,6 +160,8 @@ def priority(signal, position) -> tuple:
     the list she should act on. Within a band, whatever expires soonest.
     """
     order = {"stop": 0, "time": 1, "profit": 2, "watch": 3, "uncovered": 4,
-             "unpriced": 5, "hold": 6}
+             # Below the trades needing a decision, above a plain hold: she has
+             # already decided what happens here, she just has to be ready for it.
+             "awaiting": 5, "unpriced": 6, "hold": 7}
     dte = position.dte_left()
     return (order.get(signal.action, 9), dte if dte is not None else 10**6)

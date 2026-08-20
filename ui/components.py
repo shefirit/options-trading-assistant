@@ -1157,6 +1157,9 @@ _SIGNAL_WORD = {
     "profit": "✅ Take the win",
     "watch": "⚠️ Watch closely",
     "uncovered": "➕ No call sold",
+    # She sold the long put off a spread and is letting the short one assign
+    # her. Not "hold" - there is something to do, and it is have the cash.
+    "awaiting": "🎯 Let it assign",
     "hold": "✋ Hold",
     "unpriced": "❓ Could not price",
 }
@@ -1229,7 +1232,12 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Room to it": (cushion["room_pct"] * 100) if cushion else None,
             "Strategy": short_strategy(pos.strategy_name),
             "Days left": pos.dte_left(),
-            "Decide by": _decide_by(pos, it.get("time_exit_dte", 21)),
+            # A trade she is holding to expiration on purpose has no 21-day
+            # decision to date - saying "overdue" there would nag her about a
+            # rule she has already, deliberately, stepped outside.
+            "Decide by": ("at expiry"
+                          if getattr(pos, "awaiting_assignment", False)
+                          else _decide_by(pos, it.get("time_exit_dte", 21))),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
             "P&L $": pl,
@@ -1665,6 +1673,8 @@ def _month_result_word(position, tag: str) -> str:
     """One plain-English word for how this trade sits in THIS month's list."""
     if tag == "rolled":
         return "🔄 Rolled"
+    if tag == "legclose":
+        return "✂️ Leg sold"
     if tag in ("closed", "both") and position.status == "closed":
         pl = position.realized_total
         if pl is None:
@@ -1684,12 +1694,14 @@ def _month_result_word(position, tag: str) -> str:
 def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
     """One month's trades, friendliest facts first.
 
-    rows: [{"position": Position, "tag": "closed"|"opened"|"both"|"rolled"}]
-    from positions.monthly_summary. Money banked this month sorts to the top.
-    A "rolled" row is its own line: the credit landed in THIS month even when
-    the position was opened earlier and is still open."""
+    rows: [{"position": Position, "tag": "closed"|"opened"|"both"|"rolled"
+            |"legclose"}] from positions.monthly_summary. Money banked this
+    month sorts to the top. A "rolled" row is its own line: the credit landed
+    in THIS month even when the position was opened earlier and is still open,
+    and a "legclose" row - a long put sold off a spread - is the same idea.
+    """
     def sort_key(r):
-        banked_here = (r["tag"] == "rolled"
+        banked_here = (r["tag"] in ("rolled", "legclose")
                        or (r["tag"] in ("closed", "both")
                            and r["position"].status == "closed"))
         return 0 if banked_here else 1
@@ -1709,6 +1721,19 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Result $": roll.cash,
                 "Why closed": (f"Rolled the short call to {roll.new_strike:g}"
                                if roll.new_strike else "Rolled the short call"),
+            })
+            continue
+        leg = r.get("leg_close")
+        if tag == "legclose" and leg is not None:
+            out.append({
+                "Result": _month_result_word(p, tag),
+                "Symbol": p.underlying,
+                "Strategy": p.strategy_name,
+                "Opened": p.opened,
+                "Closed": leg.closed_on,
+                "Credit $": None,
+                "Result $": leg.cash,
+                "Why closed": leg.note or "Sold one leg, kept the rest open",
             })
             continue
         reason = (p.exit_reason or "").split(" - ", 1)[0]
@@ -1737,7 +1762,9 @@ def month_trades_column_config():
         "Result": st.column_config.TextColumn(
             help="How this trade ended up. 'Still open' trades are being "
                  "watched in the open-trades list above. 'Rolled' is a short "
-                 "call rolled out - the credit was banked that day."),
+                 "call rolled out - the credit was banked that day. 'Leg sold' "
+                 "is one leg taken off while the trade carried on, usually the "
+                 "long put of a spread left to be assigned."),
         "Opened": st.column_config.DateColumn(format=DATE_FMT),
         "Closed": st.column_config.DateColumn(
             format=DATE_FMT,
