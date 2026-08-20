@@ -189,6 +189,12 @@ tried automatically if present - see `src/logging_tools/sheets_logger.py`.)*
 5. Enter the trade yourself in thinkorswim PaperMoney, then press **Log this trade**.
 6. **📒 My trades** - watch each open trade against your exit rules. Already placed something
    the app did not find for you? Use **➕ Quick Log** there to record it from your fill.
+7. Each open trade's card carries what you can do to it: roll it, close it, or - on a credit
+   spread you have decided to take the shares on - **Sell the long put, keep the short one**.
+   That records the long leg coming off, banks what it sold for, and switches the follow-up
+   over to the assignment: what the shares will cost, the cash to have ready, and the wheel
+   afterwards. It all stays one trade, so the premium already collected keeps counting
+   towards your cost basis.
 
 Any word you do not know is in the **📖 glossary** above the tab bar.
 

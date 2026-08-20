@@ -1,5 +1,5 @@
-"""What she can do to an open trade: write a call, roll it, record an
-assignment, close it, or delete a mistake.
+"""What she can do to an open trade: write a call, roll it, sell one leg off,
+record an assignment, close it, or delete a mistake.
 
 Each one is a form that records something that already happened in
 thinkorswim. Nothing here places a trade.
@@ -46,10 +46,15 @@ def _delete_control(trade_id, what: str, key: str) -> None:
             st.warning("Nothing was deleted - it may already be gone. Press ↻ Refresh.")
 
 
-def _live_call_mid(provider, underlying: str, strike: float,
-                   expiration: dt.date) -> Optional[float]:
-    """Today's mid for one call, or None. Used to suggest what a freshly sold
-    call was worth, so she doesn't have to dig per-leg prices out of TOS."""
+def _live_leg_mid(provider, underlying: str, strike: float,
+                  expiration: dt.date,
+                  option_type: OptionType = OptionType.CALL) -> Optional[float]:
+    """Today's mid for one contract in dollars per contract, or None.
+
+    Used to prefill what a leg is worth so she does not have to dig per-leg
+    prices out of thinkorswim: what a freshly sold call went for, and what the
+    long put she is about to sell back is fetching today.
+    """
     import datetime as dt
 
     if not strike or expiration is None:
@@ -65,11 +70,18 @@ def _live_call_mid(provider, underlying: str, strike: float,
     exp = expiration.isoformat()
     contract = next(
         (c for c in chain.contracts
-         if c.option_type == OptionType.CALL and c.expiration == exp
+         if c.option_type == option_type and c.expiration == exp
          and abs(c.strike - strike) < 1e-6), None)
     if contract is None or contract.mid <= 0:
         return None
     return round(contract.mid * 100, 2)
+
+
+def _live_call_mid(provider, underlying: str, strike: float,
+                   expiration: dt.date) -> Optional[float]:
+    """Today's mid for one call - the call side of _live_leg_mid."""
+    return _live_leg_mid(provider, underlying, strike, expiration,
+                         OptionType.CALL)
 
 
 def _write_call_form(p, provider, kp: str = "detail") -> None:
@@ -553,6 +565,221 @@ def _wheel_panel(p, price: Optional[float]) -> None:
             "still a win.")
 
 
+def _sellable_long_puts(p) -> list:
+    """The long puts she could sell off while keeping the short put open.
+
+    Only on a credit shape (a spread or a condor), and only while a short put
+    is still there to be left behind - selling the protection off a position
+    with nothing short under it is just closing it, which the close form
+    already does properly.
+    """
+    if p.status != "open" or p.assigned_strike or p.is_debit:
+        return []
+    if not p.short_puts:
+        return []
+    return [leg for leg in p.legs
+            if leg.action == Action.BUY and leg.option_type == OptionType.PUT]
+
+
+def _after_selling_the_long_put(p, proceeds: float) -> dict:
+    """The three numbers that change the moment that fill goes through.
+
+    Worked out here rather than after the fact because they are what makes the
+    decision real: the spread's capped loss becomes an obligation to buy the
+    shares, and she should see the size of it before she records anything.
+    """
+    contracts = max(int(p.contracts or 1), 1)
+    shares = 100 * contracts
+    strike = p.assignment_strike or 0.0
+    collected = round(float(p.open_credit or 0.0) + p.banked_income + proceeds, 2)
+    return {
+        "shares": shares,
+        "strike": strike,
+        "collected": collected,
+        "cash_needed": round(strike * shares, 2),
+        "basis": round(strike - collected / shares, 2) if shares else 0.0,
+        "was_max_loss": float(p.max_loss or 0.0),
+    }
+
+
+def _assignment_plan_panel(p, price: Optional[float]) -> None:
+    """A trade waiting to be assigned on purpose: what it now costs and owes.
+
+    The spread's numbers are gone - there is no width to lose and no 50% to
+    take - so the card would otherwise be showing her the arithmetic of a
+    position she no longer holds. These are the three she actually needs
+    between now and expiration.
+    """
+    strike = p.assignment_strike
+    if not strike:
+        return
+    shares = 100 * max(int(p.contracts or 1), 1)
+    collected = round(float(p.open_credit or 0.0) + p.banked_income, 2)
+    basis = p.assignment_basis or 0.0
+
+    rows = [
+        _money_line(
+            f"If assigned you buy {shares} shares at {strike:g}",
+            "the cash (or the margin for it) has to be in the account that day",
+            f"-${p.assignment_cash_needed:,.0f}", theme.INK),
+        _money_line(
+            "Collected on this trade so far",
+            "the opening credit, the long put you sold back, and any roll",
+            f"+${collected:,.0f}", theme.GREEN),
+        _money_line(
+            "So the shares would cost you",
+            f"{basis:,.2f} a share - premium has already taken "
+            f"${strike - basis:,.2f} off the {strike:g} strike",
+            f"${basis:,.2f}", theme.INK, strong=True),
+    ]
+    st.markdown(
+        f"<div style='background:{theme.TILE};border:1px solid {theme.BORDER};"
+        f"border-radius:12px;padding:12px 16px;margin:6px 0 10px;'>"
+        f"<div style='font-weight:800;color:{theme.INK};font-size:1.02rem;"
+        f"margin-bottom:4px;'>🎯 Waiting to be assigned on "
+        f"{_h_esc(p.underlying)}</div>" + "".join(rows) + "</div>",
+        unsafe_allow_html=True)
+
+    if price is not None and strike:
+        if price <= strike:
+            theme.note(
+                f"**{p.underlying} is at \\${price:,.2f}, below your {strike:g} "
+                "put**, so as things stand the shares are coming to you. That is "
+                "the plan - just make sure the cash is there, and record it with "
+                "**🎡 I was assigned** as soon as it happens (usually the weekend "
+                "after expiration) so every dollar you have collected keeps "
+                "counting towards what the shares cost.")
+        else:
+            gap = (price - strike) / price * 100
+            theme.note(
+                f"**{p.underlying} is at \\${price:,.2f}, {gap:.1f}% above your "
+                f"{strike:g} put.** If it stays here the put expires, no shares "
+                f"arrive and you simply keep the \\${collected:,.0f} you have "
+                "collected. That is a win too - the shares were the plan, not "
+                "the requirement.")
+
+    if not p.has_long_put:
+        theme.note(
+            f"**Nothing is bought underneath this any more.** Your loss no "
+            f"longer stops at the width of the spread: below \\${basis:,.2f} a "
+            f"share it keeps going, \\${shares:,.0f} for every further dollar "
+            f"{p.underlying} falls. That is the trade you chose when you sold "
+            "the long put - it is worth knowing the shape of it.")
+
+
+def _sell_long_leg_form(p, provider, kp: str = "detail") -> None:
+    """Record selling the long put off a credit spread, short put left open.
+
+    Her third way out, and the one the app had no room for. It offered close
+    (both legs) or roll (both legs), so a decision to keep the short put and
+    take the shares had to be logged as a lie - close the spread and open a
+    fresh cash-secured put - which threw away the credit already collected and
+    with it the real cost basis of the shares.
+
+    This keeps it ONE trade: the spread, the leg she sold, the assignment, and
+    every covered call afterwards, so the wheel that follows knows what those
+    shares actually cost.
+    """
+    import datetime as dt
+
+    longs = _sellable_long_puts(p)
+    if not longs:
+        return
+
+    with st.expander("✂️ Sell the long put, keep the short one (for assignment)",
+                     key=f"legwrap_{kp}_{p.trade_id}"):
+        theme.note(
+            "For when you decide not to close and not to roll: you sell the "
+            "long put back, bank what it is worth, and leave the short put "
+            "alone so it can assign you the shares. Do it in thinkorswim "
+            "first, then record the fill here.")
+
+        if len(longs) > 1:
+            labels = [f"the {leg.strike:g} put" for leg in longs]
+            choice = st.selectbox("Which long put did you sell?", labels,
+                                  key=f"legpick_{kp}_{p.trade_id}")
+            leg = longs[labels.index(choice)]
+        else:
+            leg = longs[0]
+            short = (f"{p.assignment_strike:g} short put"
+                     if p.assignment_strike else "short put")
+            st.markdown(components._esc(
+                f"Selling back **the {leg.strike:g} put** - the protection "
+                f"under your {short}."))
+
+        c1, c2 = st.columns(2)
+        sold_on = c1.date_input("Sold on", value=dt.date.today(),
+                                max_value=dt.date.today(),
+                                key=f"legwhen_{kp}_{p.trade_id}",
+                                format=components.DATE_FMT)
+        keep_for_assignment = c2.radio(
+            "And the short put?",
+            ["Leave it - I want to be assigned", "Keep it, I still mean to close it"],
+            key=f"legwhy_{kp}_{p.trade_id}",
+            help="This is the bit nothing else in the log records, and it "
+                 "decides every piece of advice from here. Left for "
+                 "assignment, the app stops running the 50% target and the "
+                 "21-day clock at you and starts tracking what the shares "
+                 "will cost.") == "Leave it - I want to be assigned"
+
+        suggested = _live_leg_mid(provider, p.underlying, leg.strike,
+                                  p.leg_expiration(leg) or p.expiration,
+                                  OptionType.PUT)
+        proceeds = _fill_price_input(
+            "Price you SOLD the long put for",
+            f"legcash_{kp}_{p.trade_id}", int(p.contracts or 1),
+            default_total=suggested,
+            # A long put bought for protection is routinely worth 15.00+ a
+            # share by the time she is doing this, so the typed-a-total guard
+            # would cry wolf on exactly the fills this form is for.
+            total_hint_above=None,
+            help="What the sale paid you, per share - the app does the x100. "
+                 "Prefilled from today's chain when it could be priced.")
+        if suggested:
+            theme.note("**Prefilled from today's chain** for that contract. "
+                       "Change it if your fill said otherwise.")
+
+        after = _after_selling_the_long_put(p, float(proceeds))
+        if proceeds and after["strike"]:
+            st.markdown(components._esc(
+                f"Recording this banks ${proceeds:,.0f} today. If the "
+                f"{after['strike']:g} put then assigns you, you buy "
+                f"{after['shares']} shares for ${after['cash_needed']:,.0f} - "
+                f"and with the ${after['collected']:,.0f} this trade has "
+                f"collected, they cost you ${after['basis']:,.2f} a share."))
+            if keep_for_assignment:
+                st.warning(components._esc(
+                    f"Have ${after['cash_needed']:,.0f} ready. Without the long "
+                    f"put your risk is no longer the ${after['was_max_loss']:,.0f} "
+                    f"this spread could lose - below ${after['basis']:,.2f} a "
+                    f"share the loss keeps going."))
+        note = st.text_input("Note (optional)", key=f"legnote_{kp}_{p.trade_id}")
+
+        if st.button("Record the long put I sold", type="primary",
+                     key=f"legbtn_{kp}_{p.trade_id}"):
+            if not proceeds:
+                st.warning("Type what the sale paid you - it is on your TOS fill.")
+            else:
+                from src.logging_tools.trade_logger import close_leg
+                close_leg(p.trade_id, p.underlying, p.strategy_name,
+                          cash=float(proceeds), strike=float(leg.strike),
+                          option_type="put", side="buy",
+                          for_assignment=keep_for_assignment,
+                          note=note, closed_on=sold_on, account=p.account)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Recorded: the {leg.strike:g} put sold for "
+                    f"${proceeds:,.0f}. "
+                    + (f"Your {after['strike']:g} put is on its own now - the "
+                       f"app is watching for assignment and will want "
+                       f"${after['cash_needed']:,.0f} of cash ready."
+                       if keep_for_assignment else
+                       "The short put is still tracked against your exit rules.")
+                )
+                st.rerun()
+
+
 def _assign_form(p, kp: str = "detail") -> None:
     """Record that a short put was assigned into shares.
 
@@ -573,13 +800,17 @@ def _assign_form(p, kp: str = "detail") -> None:
     strike = strikes[0] if strikes else 0.0
     shares = 100 * max(int(p.contracts or 1), 1)
 
+    collected = round(float(p.open_credit or 0.0) + p.banked_income, 2)
     with st.expander("🎡 I was assigned - I own the shares now",
                      key=f"asg_{kp}_{p.trade_id}"):
         theme.note(
             f"On a wheel this is the plan, not a mistake. Recording it here "
-            f"keeps everything on ONE trade, so the \\${p.credit:,.0f} you "
+            f"keeps everything on ONE trade, so the \\${collected:,.0f} you "
             f"already collected still counts towards what the shares cost you. "
-            f"The app then asks you to sell calls against them.")
+            f"The app then asks you to sell calls against them."
+            + (" That includes what the long put sold for when you took it off "
+               "this spread - it came off the price of these shares too."
+               if p.leg_closes else ""))
         a1, a2 = st.columns(2)
         when = a1.date_input("Assigned on", value=dt.date.today(),
                              max_value=dt.date.today(),
@@ -591,11 +822,11 @@ def _assign_form(p, kp: str = "detail") -> None:
             help="The put you sold. Assignment always happens at its strike, "
                  "whatever the shares are worth that morning.")
         if at_strike:
-            basis = at_strike - (float(p.credit or 0.0) / shares)
+            basis = at_strike - (collected / shares)
             st.markdown(components._esc(
                 f"You will own **{shares} shares** at ${at_strike:g}, costing "
-                f"**${at_strike * shares:,.0f}**. With the ${p.credit:,.0f} "
-                f"premium already collected, your cost basis starts at "
+                f"**${at_strike * shares:,.0f}**. With the ${collected:,.0f} "
+                f"already collected on this trade, your cost basis starts at "
                 f"**${basis:,.2f} a share** - and every call you write from "
                 "here lowers it."))
         note = st.text_input("Note (optional)", key=f"asg_note_{kp}_{p.trade_id}")
@@ -666,16 +897,24 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             key=f"exit_reason_{kp}_{p.trade_id}")
         note = st.text_input("Lesson learned (optional - future you says thanks)",
                              key=f"exit_note_{kp}_{p.trade_id}")
-        # The close banks the capital result. Roll credits were banked on
-        # the days they landed, so they are not counted again here.
+        # The close banks the capital result. Roll credits - and anything a
+        # leg sold off already banked - landed on their own days, so they are
+        # not counted again here.
         realized = p.open_cash + close_cash
-        total = realized + p.roll_income
+        total = realized + p.banked_income
         if p.is_debit:
             st.markdown(components._esc(
                 f"Result: **${total:,.0f}** "
                 f"({'profit' if total >= 0 else 'loss'}) - "
                 f"${-p.open_cash:,.0f} out, ${p.roll_income:,.0f} banked "
                 f"from rolls, ${close_cash:,.0f} back today."))
+        elif p.banked_income:
+            st.markdown(components._esc(
+                f"Result: **${total:,.0f}** "
+                f"({'profit' if total >= 0 else 'loss'}) - "
+                f"${realized:,.0f} on this close, plus the "
+                f"${p.banked_income:,.0f} already banked on this trade "
+                "(rolls, and any leg you sold off)."))
         else:
             st.markdown(components._esc(
                 f"Result: **${realized:,.0f}** "

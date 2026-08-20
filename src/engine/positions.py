@@ -53,6 +53,40 @@ class RollEvent(BaseModel):
     note: str = ""
 
 
+class LegCloseEvent(BaseModel):
+    """One leg taken off on its own, while the rest of the trade stays open.
+
+    Her case, and the reason this exists: a credit spread she decides not to
+    close and not to roll. She SELLS THE LONG PUT - banking whatever the
+    protection is worth now that price has come down to it - and leaves the
+    short put exactly where it is, so it can be assigned and hand her the
+    shares she is happy to own.
+
+    That is a different trade from the moment the fill goes through, and the
+    app has to say so: the loss is no longer capped at the width of the spread,
+    the cash the broker wants is the full strike, and the follow-up from here
+    is a wheel (take the shares, then sell calls against them) rather than a
+    50%-of-credit exit. Recording it as a CLOSE would have thrown the still-open
+    short put away; recording it as a roll would have pretended the short leg
+    moved. It is its own event.
+    """
+
+    closed_on: Optional[date] = None
+    # Signed: positive when taking the leg off PAID her, which is the usual
+    # case here - selling a long put back. Negative when she bought a short
+    # leg back and left the rest of the position open.
+    cash: float = 0.0
+    strike: Optional[float] = None
+    option_type: str = "put"      # the leg she took off
+    side: str = "buy"             # "buy" = a long leg sold, "sell" = a short bought back
+    # True when the point of the exercise is to let the remaining short put be
+    # assigned. This is her INTENTION, and nothing else in the log records it -
+    # the same fill could equally be someone taking the protection off to
+    # squeeze the last dollar out of it, which wants the opposite advice.
+    for_assignment: bool = False
+    note: str = ""
+
+
 class Position(BaseModel):
     """One logged trade and everything known about it."""
 
@@ -105,6 +139,9 @@ class Position(BaseModel):
     open_legs: list[Leg] = Field(default_factory=list)
     underlying_price_at_entry: Optional[float] = None
     rolls: list[RollEvent] = Field(default_factory=list)
+    # Legs taken off one at a time while the trade stayed open - selling the
+    # long put of a credit spread and leaving the short put to be assigned.
+    leg_closes: list[LegCloseEvent] = Field(default_factory=list)
 
     # "open" = being tracked, "closed" = has a close row,
     # "legacy" = logged before the tracker existed (history only).
@@ -189,6 +226,81 @@ class Position(BaseModel):
         return round(sum(r.cash for r in self.rolls), 2)
 
     @property
+    def leg_close_cash(self) -> float:
+        """Cash banked by taking single legs off, counted on the day each one
+        landed - same rule as a roll, because it is the same kind of money."""
+        return round(sum(e.cash for e in self.leg_closes), 2)
+
+    @property
+    def banked_income(self) -> float:
+        """Every dollar this position has already banked while still open:
+        roll credits and legs sold off. This - not roll_income alone - is what
+        the open ledger adds to open_cash, so a spread whose long put has been
+        sold does not report that money as missing."""
+        return round(self.roll_income + self.leg_close_cash, 2)
+
+    @property
+    def awaiting_assignment(self) -> bool:
+        """She took the long leg off and is WAITING to be assigned on the short.
+
+        Not guessed from the shape: she said so when she recorded the fill.
+        The same leftover short put would otherwise be indistinguishable from a
+        naked put she wants out of, and the two need opposite advice - "let it
+        come to you" against "close it".
+
+        False again the moment the shares actually arrive (assigned_strike is
+        set) or the trade is closed: from there the wheel takes over.
+        """
+        if self.status != "open" or self.assigned_strike:
+            return False
+        if not any(e.for_assignment for e in self.leg_closes):
+            return False
+        return bool(self.short_puts)
+
+    @property
+    def short_puts(self) -> list[Leg]:
+        """Every put she is short right now - what can be assigned to her."""
+        return [leg for leg in self.legs
+                if leg.action == Action.SELL and leg.option_type == OptionType.PUT]
+
+    @property
+    def has_long_put(self) -> bool:
+        """True while something bought is still underneath the short put, i.e.
+        the loss stops somewhere. Sell that leg and it does not."""
+        return any(leg.action == Action.BUY and leg.option_type == OptionType.PUT
+                   for leg in self.legs)
+
+    @property
+    def assignment_strike(self) -> Optional[float]:
+        """The strike the shares would arrive at: the HIGHEST short put, which
+        is the one that goes in the money first and the one she is really
+        short once the protection under it is gone."""
+        strikes = [leg.strike for leg in self.short_puts if leg.strike > 0]
+        return max(strikes) if strikes else None
+
+    @property
+    def assignment_cash_needed(self) -> float:
+        """What buying the shares would take: strike x 100 x contracts. The
+        number that has to be sitting in the account, and the reason a spread
+        that becomes a naked put is not a small change."""
+        strike = self.assignment_strike
+        if not strike:
+            return 0.0
+        return round(float(strike) * 100 * max(int(self.contracts or 1), 1), 2)
+
+    @property
+    def assignment_basis(self) -> Optional[float]:
+        """What the shares would really cost her, per share, if assigned today:
+        the strike less every dollar this trade has already banked - the credit
+        she opened for, the long put she sold off, and any roll."""
+        strike = self.assignment_strike
+        if not strike:
+            return None
+        shares = 100 * max(int(self.contracts or 1), 1)
+        collected = float(self.open_credit or 0.0) + self.banked_income
+        return round(float(strike) - collected / shares, 2)
+
+    @property
     def realized_total(self) -> Optional[float]:
         """Every dollar this position has actually banked, start to finish.
 
@@ -196,8 +308,9 @@ class Position(BaseModel):
         roll income collected so far, which is already hers.
         """
         if self.realized_pl is None:
-            return self.roll_income if self.rolls else None
-        return round(self.realized_pl + self.roll_income, 2)
+            banked = self.banked_income
+            return banked if (self.rolls or self.leg_closes) else None
+        return round(self.realized_pl + self.banked_income, 2)
 
     @property
     def is_long_premium(self) -> bool:
@@ -357,6 +470,67 @@ def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
         pos.expiration = None
 
 
+def _match_leg(pos: Position, event: LegCloseEvent) -> Optional[Leg]:
+    """The leg this event took off, out of the ones she still holds.
+
+    Matched on side and type first, then on the nearest strike, so a fill typed
+    a dollar out (or a leg whose strike was corrected later) still finds its
+    leg instead of silently leaving the position with a leg it no longer has.
+    """
+    want_action = Action.SELL if event.side == "sell" else Action.BUY
+    try:
+        want_type = OptionType(event.option_type)
+    except ValueError:
+        want_type = OptionType.PUT
+    legs = [leg for leg in pos.legs
+            if leg.action == want_action and leg.option_type == want_type]
+    if not legs:
+        return None
+    if event.strike is None:
+        return legs[0]
+    return min(legs, key=lambda leg: abs(leg.strike - float(event.strike)))
+
+
+def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
+    """One leg comes off; the rest of the trade carries on.
+
+    Three things change, and all three matter more than the leg itself:
+
+      the ledger   the fill banked cash on its own date, exactly like a roll,
+                   so the month it landed in is the month it counts
+      the credit   she has now collected the opening credit AND what the long
+                   put sold for, so "what have I kept" measures against both.
+                   Without this a spread whose long put paid $1,400 reads as
+                   deeply underwater the moment the short leg is priced.
+      the risk     with nothing bought underneath it, a short put's loss no
+                   longer stops at the width of the spread. Max loss becomes
+                   the whole strike less what she has collected, and the broker
+                   wants the cash-secured amount, not the width.
+    """
+    pos.leg_closes.append(event)
+
+    leg = _match_leg(pos, event)
+    if leg is not None:
+        pos.legs.remove(leg)
+
+    if event.cash > 0:
+        pos.credit = round(pos.credit + event.cash, 2)
+
+    if pos.short_puts and not pos.has_long_put:
+        cash_needed = pos.assignment_cash_needed
+        if cash_needed:
+            # Errs high on a position that still has a call side open (the put
+            # side is now the bigger number by far), which is the right way for
+            # a guardrail to be wrong. Her typed-in TOS BP Effect still wins:
+            # bp_effect reads bp_override before this.
+            pos.buying_power = cash_needed
+            pos.max_loss = round(
+                cash_needed - float(pos.open_credit or 0.0) - pos.banked_income, 2)
+
+    if not pos.legs:
+        pos.expiration = None
+
+
 def _legs_from_json(raw: Any) -> list[Leg]:
     """Legs out of an edit's changes block - same shape the open row stores."""
     return _parse_details(json.dumps({"legs": raw}))[1] if raw else []
@@ -512,6 +686,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     rolls: list[tuple[str, int, RollEvent]] = []
     roll_seq: dict[str, int] = {}
     assigns: list[tuple[str, dict[str, Any]]] = []
+    leg_closes: list[tuple[str, LegCloseEvent]] = []
     closes: list[dict[str, Any]] = []
     edits: list[tuple[str, dict[str, Any]]] = []
 
@@ -546,6 +721,19 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 "strike": _to_float(_get(row, idx, "Legs (strikes)", 3)),
                 "cash": _to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
             }))
+            continue
+
+        if event == "legclose" and trade_id:
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
+            leg_closes.append((trade_id, LegCloseEvent(
+                closed_on=_to_date(_get(row, idx, "Date", 0)),
+                cash=_to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
+                strike=_to_float(_get(row, idx, "Legs (strikes)", 3)),
+                option_type=str(data.get("type") or "put"),
+                side=str(data.get("side") or "buy"),
+                for_assignment=bool(data.get("for_assignment")),
+                note=str(_get(row, idx, "Notes", 11) or ""),
+            )))
             continue
 
         if event == "edit" and trade_id:
@@ -620,6 +808,15 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # roll had already overwritten in place.
     for trade_id, edit in edits:
         _apply_edit(opens.get(trade_id), rolls, trade_id, edit)
+
+    # Legs taken off on their own come before assignment: selling the long put
+    # is what LEAVES the short one able to assign her, so the position has to
+    # be down to that single short put before the shares arrive.
+    for trade_id, lc in sorted(leg_closes,
+                               key=lambda r: r[1].closed_on or date.min):
+        pos = opens.get(trade_id)
+        if pos is not None:
+            _apply_leg_close(pos, lc)
 
     # Assignment next: it turns the put into shares, and every roll after it
     # is a CALL written against those shares.
@@ -793,13 +990,13 @@ def position_value_from_chain(position: Position, chain,
 
     out = {
         "value": round(value, 2),
-        "open_pl": round(position.open_cash + position.roll_income + value, 2),
+        "open_pl": round(position.open_cash + position.banked_income + value, 2),
     }
     if shares_pl is not None:
         # Taking the shares' cost back out of open_cash leaves what the OPTIONS
         # alone cost to put on, so options_pl + shares_pl == open_pl.
         options_cash = position.open_cash + position.shares_cost
-        out["options_pl"] = round(options_cash + position.roll_income
+        out["options_pl"] = round(options_cash + position.banked_income
                                   + options_value, 2)
         out["shares_pl"] = round(shares_pl, 2)
     return out
@@ -828,7 +1025,7 @@ def expiry_value_at(position: Position, price: float) -> float:
 def pl_at(position: Position, price: float) -> float:
     """Her profit or loss if the underlying finished at `price`: every dollar
     already banked, plus what the position would be worth there."""
-    return round(position.open_cash + position.roll_income
+    return round(position.open_cash + position.banked_income
                  + expiry_value_at(position, price), 2)
 
 
@@ -937,13 +1134,19 @@ def strike_cushion(position: Position,
 def cash_events(positions: list[Position]) -> list[dict[str, Any]]:
     """Every dollar actually banked, as dated events, oldest first.
 
-    Two kinds: a "close" banks the position's closing result, and a "roll" banks
-    the credit collected that day. Rolls count on their own date and not at the
-    close, so income from a covered call rolled monthly for a year lands in each
-    of those twelve months - which is how her monthly goal is measured.
+    Three kinds: a "close" banks the position's closing result, a "roll" banks
+    the credit collected that day, and a "legclose" banks what one leg sold for
+    when she took it off and left the rest of the trade running. The last two
+    count on their own date and not at the close, so income from a covered call
+    rolled monthly for a year lands in each of those twelve months - which is
+    how her monthly goal is measured.
     """
     events: list[dict[str, Any]] = []
     for p in positions:
+        for lc in p.leg_closes:
+            if lc.closed_on is not None and lc.cash:
+                events.append({"date": lc.closed_on, "amount": lc.cash,
+                               "kind": "legclose", "position": p})
         for r in p.rolls:
             if r.rolled_on is not None and r.cash:
                 events.append({"date": r.rolled_on, "amount": r.cash,
@@ -981,6 +1184,16 @@ def story(position: Position) -> list[dict[str, Any]]:
         "cash": round(position.open_cash, 2),
         "kind": "open",
     })
+
+    for lc in position.leg_closes:
+        steps.append({
+            "on": lc.closed_on,
+            "what": ("You sold the long leg" if lc.side == "buy"
+                     else "You bought one short leg back"),
+            "detail": lc.note or _leg_close_detail(lc),
+            "cash": round(lc.cash, 2),
+            "kind": "legclose",
+        })
 
     if position.assigned_on is not None:
         # No cash of its own: the shares were paid for at the strike, which the
@@ -1055,6 +1268,19 @@ def _and(items) -> str:
     if len(items) <= 1:
         return "".join(items)
     return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _leg_close_detail(event: LegCloseEvent) -> str:
+    """What came off, and what she was left holding."""
+    what = (f"the {event.strike:g} {event.option_type}"
+            if event.strike else f"the long {event.option_type}")
+    if event.side == "buy":
+        text = f"Sold {what} back"
+    else:
+        text = f"Bought {what} back"
+    if event.for_assignment:
+        text += " - the short put is on its own now, left to be assigned"
+    return text
 
 
 def _roll_detail(roll: RollEvent) -> str:
@@ -1266,6 +1492,17 @@ def monthly_summary(positions: list[Position],
             tag = "both" if (closed_key is not None and closed_key == opened_key) \
                 else "opened"
             e["rows"].append({"position": p, "tag": tag})
+
+        for lc in p.leg_closes:
+            if lc.closed_on is None or not lc.cash:
+                continue
+            e = entry(lc.closed_on)
+            # Banked in realized_pl but NOT in roll_income: this is not a roll,
+            # and the month report's "income from rolls" line would be wrong to
+            # claim it. cash_events counts it under its own kind for the same
+            # reason.
+            e["realized_pl"] += lc.cash
+            e["rows"].append({"position": p, "tag": "legclose", "leg_close": lc})
 
         for r in p.rolls:
             if r.rolled_on is None:

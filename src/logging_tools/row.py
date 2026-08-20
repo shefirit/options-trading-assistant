@@ -4,6 +4,9 @@ so your record looks the same wherever it lands.
 Since the "My trades" tracker was added, the log is an EVENT log:
   - an "open" row when you log a trade
   - a "roll" row (same Trade ID) each time the short call is rolled
+  - a "legclose" row (same Trade ID) when ONE leg comes off and the rest of the
+    trade stays open - selling the long put of a credit spread and leaving the
+    short put to be assigned
   - a "close" row (same Trade ID) when it is closed in the app
 Open positions = open rows that have no matching close row yet.
 
@@ -254,6 +257,70 @@ def build_edit_row(
         "",                           # Realized P&L $ - no money moved
         json.dumps(payload, separators=(",", ":")),
         "",                           # Account - carried inside changes
+    ]
+
+
+def build_leg_close_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    cash: float,
+    strike: Optional[float] = None,
+    option_type: str = "put",
+    side: str = "buy",
+    for_assignment: bool = False,
+    note: str = "",
+    closed_on: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "legclose" event row - one leg came off, the trade carries on.
+
+    Written when she takes a credit spread apart on purpose: sell the long put
+    back, leave the short put open so it can assign her the shares. A "close"
+    row would have ended a trade that is still very much running, and a "roll"
+    row would have claimed the short leg moved when it did not - so this is its
+    own event, on the same Trade ID, and the position stays one story from the
+    spread through the assignment to the covered calls afterwards.
+
+      cash            what the fill PAID her (positive) - selling a long put
+                      back - or cost her (negative), banked on this date
+      for_assignment  she is leaving the short leg to be assigned. Her
+                      intention, which nothing else in the log records and
+                      which decides every piece of advice the app gives from
+                      here: no 50% target, no 21-day roll, have the cash ready.
+
+    The extra facts live in Details JSON rather than in new columns, for the
+    same reason the signed cash does: a new column means redeploying the Apps
+    Script.
+    """
+    side = "sell" if str(side).lower() == "sell" else "buy"
+    option_type = "call" if str(option_type).lower() == "call" else "put"
+    what = f"{strike:g} {option_type}" if strike else f"long {option_type}"
+    if note:
+        text = note
+    elif side == "buy":
+        text = f"Sold the {what} back" + (
+            " and left the short put open to be assigned" if for_assignment else "")
+    else:
+        text = f"Bought the {what} back"
+    return [
+        (closed_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        f"{strike:g}" if strike else "",
+        "", "", "",                   # delta/dte/contracts - on the open row
+        "",                           # Credit $ - this is not premium sold
+        "", "", "",                   # max loss/BP/passed SOP - recomputed on replay
+        text,
+        trade_id,
+        "legclose",
+        "",                           # Expiration - the rest of the trade keeps its own
+        "",                           # Exit Cost $ - not a close
+        round(float(cash), 2),        # Realized P&L $: the cash banked today
+        json.dumps({"type": option_type, "side": side,
+                    "for_assignment": bool(for_assignment)},
+                   separators=(",", ":")),
+        _account(account),
     ]
 
 
