@@ -43,6 +43,17 @@ class ExitSignal(BaseModel):
     notes: list[str] = Field(default_factory=list)  # extra warnings worth seeing
 
 
+def pct_text(pct: float) -> str:
+    """A percentage the way it should read on a card.
+
+    Rounding a real gain to "+0%" reads as "nothing happened". It bites on the
+    financed LEAPS, where the percentages divide by the whole capital committed
+    and an early $3 on $22,740 is genuinely a rounding error - but saying so in
+    words is honest where a bare "+0%" looks like a broken number.
+    """
+    return "under 0.1%" if abs(pct) < 0.05 else f"{pct:+.1f}%"
+
+
 def _strike_notes(position: Position, underlying_price: float,
                   accepts_assignment: bool = False) -> list[str]:
     """Warnings when price is close to - or past - an option you sold.
@@ -267,9 +278,9 @@ def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
     pct = pl / committed * 100
     held = position.days_held(today)
     money = (f"It is worth about ${current_value:,.0f} against the ${paid:,.0f} you "
-             f"paid, so you are {'up' if pl >= 0 else 'down'} ${abs(pl):,.0f} "
-             + (f" - {pct:+.0f}% of the ${committed:,.0f} this trade ties up."
-                if collateral > 0 else f" ({pct:+.0f}%)."))
+             f"paid, so you are {'up' if pl >= 0 else 'down'} ${abs(pl):,.0f}"
+             + (f" - {pct_text(pct)} of the ${committed:,.0f} this trade ties up."
+                if collateral > 0 else f" ({pct_text(pct)})."))
 
     fast_pct = float(exit_cfg.get("fast_profit_pct", 10))
     fast_days = int(exit_cfg.get("fast_profit_days", 7))
@@ -315,7 +326,7 @@ def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
 
     return ExitSignal(
         action="hold", tone="neutral",
-        headline=f"Hold - {pct:+.0f}%",
+        headline=f"Hold - {pct_text(pct)}",
         reason=(f"{money} Not at a take-it level ({fast_pct:g}% inside {fast_days} days, "
                 f"or {quick_pct:g}% inside {quick_days}), so there is nothing to do."),
         notes=notes)

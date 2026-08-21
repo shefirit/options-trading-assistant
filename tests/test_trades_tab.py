@@ -505,3 +505,20 @@ def test_the_correction_it_would_write_carries_both_legs(app_with_rows, monkeypa
     assert sent["changes"]["credit"] == 0.0            # never premium sold
     assert sent["changes"]["max_loss"] == 22740.0
     assert sent["changes"]["buying_power"] == 20625.0
+
+
+def _financed_leaps_row(trade_id="20260821-142826-WFC"):
+    """The corrected shape: a bought call with three puts sold against it."""
+    opened = date.today()
+    expiry = opened + timedelta(days=518)
+    details = {"key": "long_call_leaps", "underlying_price": 84.0,
+               "legs": [{"role": "long_call_leaps", "action": "buy",
+                         "type": "call", "strike": 70.0, "delta": 0.73,
+                         "premium": 21.15, "qty": 1, "dte": 518},
+                        {"role": "financing_put", "action": "sell",
+                         "type": "put", "strike": 75.0, "delta": -0.28,
+                         "premium": 6.25, "qty": 3, "dte": 518}],
+               "open_cash": -240.0}
+    return [opened.isoformat(), "WFC", LEAPS, "70 / 75", 0.28, 518, 1, 0.0,
+            22740.0, 20625.0, "NO", "", trade_id, "open", expiry.isoformat(),
+            "", "", json.dumps(details), "real"]
