@@ -222,9 +222,27 @@ def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
 
     Priority: a fast gain is taken (it is the one this strategy is most likely
     to give back), then the profit target, then the stop, then the theta clock.
+
+    Two different denominators, which matters only on the financed variant:
+    `paid` is the cash that actually left the account and drives the P/L in
+    dollars, while `committed` adds the collateral standing behind any put she
+    sold and is what the percentages divide by. On a plain bought call they are
+    the same number and nothing changes. On a risk reversal they are not even
+    close - $240 of net debit against $22,500 of collateral - and dividing by
+    the debit would call an ordinary week a 200% gain and tell her to sell.
     """
     paid = abs(position.open_cash)
+    committed = position.capital_at_risk or paid
+    collateral = position.short_put_collateral
     notes: list[str] = []
+
+    if collateral > 0:
+        notes.append(
+            f"You sold put(s) to help pay for this call, so ${collateral:,.0f} of "
+            "collateral is tied up behind them until expiration and the profit "
+            "percentages below are measured on that, not on the small net debit. "
+            "Below the put strike this position loses money as fast as owning the "
+            "shares would.")
 
     if dte_left is not None and dte_left <= int(exit_cfg.get("roll_forward_dte", 180)):
         notes.append(
@@ -232,7 +250,7 @@ def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
             "its time value quickly, and that loss accelerates all the way down. "
             "Roll it further out or close it - do not ride it into expiration.")
 
-    if current_value is None or paid <= 0:
+    if current_value is None or committed <= 0:
         return ExitSignal(
             action="hold", tone="neutral",
             headline="Holding - no live price",
@@ -242,12 +260,16 @@ def _long_premium_signal(position: Position, exit_cfg: dict[str, Any],
                     "inside four weeks."),
             notes=notes)
 
-    pl = current_value - paid
-    pct = pl / paid * 100
+    # Signed, so the rare risk reversal that opens for a NET CREDIT still reads
+    # right: there `open_cash` is positive and "value minus what she paid" would
+    # come out short by twice the credit.
+    pl = current_value + position.open_cash
+    pct = pl / committed * 100
     held = position.days_held(today)
     money = (f"It is worth about ${current_value:,.0f} against the ${paid:,.0f} you "
              f"paid, so you are {'up' if pl >= 0 else 'down'} ${abs(pl):,.0f} "
-             f"({pct:+.0f}%).")
+             + (f" - {pct:+.0f}% of the ${committed:,.0f} this trade ties up."
+                if collateral > 0 else f" ({pct:+.0f}%)."))
 
     fast_pct = float(exit_cfg.get("fast_profit_pct", 10))
     fast_days = int(exit_cfg.get("fast_profit_days", 7))

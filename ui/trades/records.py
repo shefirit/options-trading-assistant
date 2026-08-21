@@ -204,14 +204,21 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         day_one_credit = abs(float(p.open_credit if p.open_credit is not None
                                    else (p.credit or 0.0)))
 
+        # A bought LEAPS collects nothing, so a "credit collected" box would sit
+        # there at zero inviting a number that has no meaning on this shape. The
+        # money that IS hers to correct is what the call cost, below - and what
+        # the financing put paid, which the app reads back off the legs.
+        is_bought = basis == "long_premium"
         c4, c5 = st.columns(2)
-        credit = float(c4.number_input(
-            "Credit collected when you opened it $",
-            value=day_one_credit, step=1.0, format="%.2f",
-            key=f"ed_credit_{p.trade_id}",
-            help="What you collected on the DAY YOU OPENED it, for the whole "
-                 "position - not per contract, and not what a later roll paid. "
-                 "Correct a roll in the panel below this one."))
+        credit = day_one_credit
+        if not is_bought:
+            credit = float(c4.number_input(
+                "Credit collected when you opened it $",
+                value=day_one_credit, step=1.0, format="%.2f",
+                key=f"ed_credit_{p.trade_id}",
+                help="What you collected on the DAY YOU OPENED it, for the whole "
+                     "position - not per contract, and not what a later roll paid. "
+                     "Correct a roll in the panel below this one."))
 
         # What she PAID, on the shapes where the credit is only half the story.
         # A PMCC's whole cost basis is the LEAPS, and without a box for it the
@@ -219,14 +226,23 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # number in it - which is exactly the $10 typo that sent her here.
         old_paid = None
         paid = None
-        if basis == "debit":
-            old_paid = round(day_one_credit - float(p.open_cash or 0.0), 2)
+        # What the sold put(s) handed back on the day, off their stored fill
+        # prices. Zero on every shape except a financed LEAPS, where it is the
+        # difference between "the call cost $2,115" and "$240 left the account".
+        put_credit = round(p.short_put_credit, 2) if is_bought else 0.0
+        if basis in ("debit", "long_premium"):
+            base = put_credit if is_bought else day_one_credit
+            old_paid = round(base - float(p.open_cash or 0.0), 2)
             paid = float(st.number_input(
-                "What the long LEAPS cost you $", value=abs(old_paid), step=1.0,
+                "What the call you BOUGHT cost you $" if is_bought
+                else "What the long LEAPS cost you $",
+                value=abs(old_paid), step=1.0,
                 format="%.2f", key=f"ed_paid_{p.trade_id}",
-                help="The debit on the LEAPS fill, for the whole position. On a "
-                     "PMCC this is your cost basis - the credit box above is just "
-                     "the short call you sold against it."))
+                help="The debit on the LEAPS fill, for the whole position - your "
+                     "cost basis for this trade."
+                     + (f" The put(s) you sold against it paid ${put_credit:,.0f}, "
+                        "which the app already has from the legs."
+                        if is_bought and put_credit else "")))
             if abs(paid - abs(old_paid)) > 0.005:
                 bits.append(f"LEAPS cost ${abs(old_paid):,.0f} → ${paid:,.0f}")
         book = c5.selectbox(
@@ -270,7 +286,8 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                 # A corrected LEAPS cost is fed in as the ledger it implies, so
                 # resize_after_edit rebuilds the cost from the corrected figure
                 # rather than the stored one it would otherwise reverse out.
-                old_cash = (round(day_one_credit - paid, 2) if paid_changed
+                old_cash = (round((put_credit if is_bought else day_one_credit)
+                                  - paid, 2) if paid_changed
                             else float(p.open_cash or 0.0))
                 fresh = resize_after_edit(
                     strat_cfg, trade, credit,
@@ -301,7 +318,16 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # credit at the one-contract figure, so the max loss came out right for
         # the wrong reason. The app must not guess that the credit doubled -
         # only her fill knows - but it must not let the mismatch pass unsaid.
-        if "contracts" in changes and abs(credit - day_one_credit) <= 0.005:
+        if "contracts" in changes and is_bought and not paid_changed:
+            # Same trap, other shape: on a bought call the cost basis is the
+            # paid box, and the app scales it per contract rather than guessing
+            # at a fill only she can read.
+            st.warning(
+                f"You changed the contracts but left the call cost at "
+                f"**\\${abs(old_paid or 0.0):,.0f}**. The app has scaled that per "
+                f"contract - if {contracts} contracts actually cost something "
+                "else, correct the box above too.")
+        elif "contracts" in changes and abs(credit - day_one_credit) <= 0.005:
             st.warning(
                 f"You changed the contracts but left the credit at "
                 f"**\\${credit:,.0f}**. That box is the total for the whole "

@@ -188,9 +188,49 @@ class Position(BaseModel):
         return self.open_cash < 0
 
     @property
+    def short_put_collateral(self) -> float:
+        """Cash that has to sit behind put(s) she SOLD: strike x 100 each.
+
+        Not netted against the premium they paid - those are two different
+        questions (what the trade cost, and what must be in the account), and
+        netting them once at the wrong moment counts the credit twice.
+        """
+        per_unit = sum(leg.strike * leg.quantity for leg in self.legs
+                       if leg.action == Action.SELL
+                       and leg.option_type == OptionType.PUT)
+        return per_unit * 100 * self.contracts
+
+    @property
+    def short_put_credit(self) -> float:
+        """What the put(s) she SOLD paid her, from the fill prices on the legs.
+
+        Only meaningful where those prices came from her own fill rather than a
+        chain mid - the LEAPS long call's financing put, which the log records
+        with a zero credit precisely because the money is a discount on the call
+        and not income. The correction panel needs it to work back to what the
+        call itself cost.
+        """
+        per_unit = sum(leg.premium * leg.quantity for leg in self.legs
+                       if leg.action == Action.SELL
+                       and leg.option_type == OptionType.PUT)
+        return round(per_unit * 100 * self.contracts, 2)
+
+    @property
     def capital_at_risk(self) -> float:
-        """The dollars actually tied up - what a return % should divide by."""
-        return abs(self.open_cash) if self.is_debit else self.buying_power
+        """The dollars actually tied up - what a return % should divide by.
+
+        On a LEAPS long call financed by a sold put, the net cash that left the
+        account is a small number - her WFC call cost $2,115 and the puts paid
+        $1,875 back, so $240 - while $22,500 has to stand behind those puts
+        until they expire. Dividing a result by the $240 turns any ordinary move
+        into a triple-digit percentage, so the collateral counts here too. On
+        every other shape this is exactly what it always was.
+        """
+        if not self.is_debit:
+            return self.buying_power
+        if self.is_long_premium:
+            return abs(self.open_cash) + self.short_put_collateral
+        return abs(self.open_cash)
 
     @property
     def bp_effect(self) -> float:
@@ -207,6 +247,12 @@ class Position(BaseModel):
         - Shares bought for a covered call ARE margined. TOS reads 18,312.75
           against her IWM shares, not zero, so "she paid for it" is not the
           test - "is it an option or is it stock" is.
+        - A PUT SHE SOLD is held against her whatever else is in the position.
+          A LEAPS financed by three sold puts is a debit trade with no shares,
+          which the first rule alone would report as zero while TOS holds the
+          whole strike. The stored buying power (strike x 100 less the credit,
+          her cash-secured-put convention) stands in until she types the real
+          figure, and errs LOW by that credit rather than reading nothing.
 
         Broker house margin on stock is not the Reg-T textbook (TOS held 60% of
         her share cost, not 50%), so the app does not invent a rate: it keeps
@@ -216,7 +262,8 @@ class Position(BaseModel):
         """
         if self.bp_override is not None:
             return self.bp_override        # a real BP Effect she read off TOS
-        if self.is_debit and self.shares_cost <= 0:
+        if (self.is_debit and self.shares_cost <= 0
+                and self.short_put_collateral <= 0):
             return 0.0
         return self.buying_power
 

@@ -8,6 +8,7 @@ from src.data.chain import OptionChain, OptionContract
 from src.engine.config_loader import load_strategies
 from src.engine.models import Action, OptionType, Trade
 from src.engine.quick_log import (
+    apply_fill_prices,
     fill_from_chain,
     legs_from_strategy,
     sizing_from_fill,
@@ -171,3 +172,114 @@ def test_sizing_credit_shapes_open_cash_is_just_the_credit():
                          credit_total=500.0)
     assert s["open_cash"] == 500.0
     assert s["buying_power"] == 50 * 100 - 500.0
+
+
+# ===========================================================================
+# The LEAPS long call - the one strategy she BUYS. It was unloggable: the form
+# offered a single box asking for the credit on her fill, so a call that cost
+# $2,115 could only be recorded as a trade that paid her, and the put(s) sold
+# alongside it had nowhere to go at all.
+def test_legs_for_a_financed_leaps_carry_the_sold_puts():
+    """The financing put is deliberately NOT in the strategy's `legs` block, so
+    it can only come from her fill - how many, and at what strike."""
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    assert [l.role for l in legs] == ["long_call_leaps", "financing_put"]
+    call, put = legs
+    assert call.action == Action.BUY and call.option_type == OptionType.CALL
+    assert put.action == Action.SELL and put.option_type == OptionType.PUT
+    assert put.quantity == 3            # three sold against the one call
+    assert put.dte == call.dte == 518   # one trade, one end date
+
+
+def test_the_plain_leaps_still_has_exactly_one_leg():
+    """The variant must never appear unasked."""
+    legs = legs_from_strategy(STRATS["long_call_leaps"], {"long_call_leaps": 70},
+                              dte=518)
+    assert [l.role for l in legs] == ["long_call_leaps"]
+
+
+def test_her_own_fill_prices_beat_the_chain_mids():
+    """She types the two sides of a bought call separately, so those are exact
+    fills - the chain's mid is an estimate of a different moment."""
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    for leg in legs:
+        leg.premium = 99.0              # as if a chain had filled them
+    apply_fill_prices(legs, {"long_call_leaps": 21.15, "financing_put": 6.25})
+    assert [l.premium for l in legs] == [21.15, 6.25]
+
+
+def test_sizing_a_plain_bought_leaps_is_the_debit_and_no_buying_power():
+    legs = legs_from_strategy(STRATS["long_call_leaps"], {"long_call_leaps": 185},
+                              dte=400)
+    s = sizing_from_fill(_trade(legs), STRATS["long_call_leaps"],
+                         credit_total=0.0, leaps_cost_total=3900.0)
+    assert s["open_cash"] == -3900.0    # money OUT to open, like the PMCC
+    assert s["max_loss"] == 3900.0      # it can go to zero, and that is all of it
+    assert s["buying_power"] == 0.0     # bought with cash, nothing held against it
+    assert s["credit"] == 0.0           # there is no credit on a call you bought
+
+
+def test_sizing_a_financed_leaps_counts_the_collateral_not_just_the_debit():
+    """The shape of the trade this whole feature was written for: a call bought
+    for $2,115 with three puts sold against it for $1,875. Only $240 left the
+    account - and $22,500 has to stand behind those puts until they expire.
+    Reporting the $240 as the size of the position is the trap."""
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    s = sizing_from_fill(_trade(legs), STRATS["long_call_leaps"],
+                         credit_total=1875.0, leaps_cost_total=2115.0)
+    assert s["open_cash"] == -240.0            # what actually left the account
+    assert s["max_loss"] == 22740.0            # 240 + the 22,500 promised
+    assert s["buying_power"] == 20625.0        # strike x 300 less the credit
+    assert s["credit"] == 0.0                  # the put credit is not income
+
+
+def test_the_put_credit_is_never_logged_as_premium_sold():
+    """It pays down what the call cost. Counted as a credit it would set a 50%
+    profit target on money she never earned, and show up in the month report as
+    income she did not collect."""
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    s = sizing_from_fill(_trade(legs), STRATS["long_call_leaps"],
+                         credit_total=1875.0, leaps_cost_total=2115.0)
+    assert s["credit"] == 0.0 and s["return_on_risk"] == 0.0
+
+
+def test_correcting_a_financed_leaps_rebuilds_the_call_cost_from_the_legs():
+    """resize_after_edit works backwards from the stored ledger. On every other
+    shape the credit column gives it a foothold; here that column is zero by
+    design, so the put's own fill price on the leg is the only way back to what
+    the call cost."""
+    from src.engine.quick_log import resize_after_edit
+
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    apply_fill_prices(legs, {"long_call_leaps": 21.15, "financing_put": 6.25})
+
+    # Same trade, corrected from 1 contract to 2: everything scales.
+    fresh = resize_after_edit(STRATS["long_call_leaps"], _trade(legs, contracts=2),
+                              credit_total=0.0, old_credit=0.0,
+                              old_open_cash=-240.0, old_shares_cost=0.0,
+                              old_contracts=1)
+    assert fresh["open_cash"] == -480.0
+    assert fresh["max_loss"] == 45480.0
+    assert fresh["buying_power"] == 41250.0
+
+
+def test_correcting_a_plain_leaps_keeps_its_cost():
+    from src.engine.quick_log import resize_after_edit
+
+    legs = legs_from_strategy(STRATS["long_call_leaps"], {"long_call_leaps": 185},
+                              dte=400)
+    fresh = resize_after_edit(STRATS["long_call_leaps"], _trade(legs),
+                              credit_total=0.0, old_credit=0.0,
+                              old_open_cash=-3900.0, old_shares_cost=0.0,
+                              old_contracts=1)
+    assert fresh["open_cash"] == -3900.0 and fresh["max_loss"] == 3900.0

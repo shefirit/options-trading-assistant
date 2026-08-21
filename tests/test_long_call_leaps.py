@@ -757,3 +757,129 @@ def test_the_scanner_respects_a_floor_not_a_band():
 
     # Everything below the floor -> no candidate.
     assert scanner._pick_long_call([contract(230, 0.35, 12.0)], strategy) is None
+
+
+# ===========================================================================
+# LOGGING one, and tracking it afterwards. Until this existed the strategy
+# could be scanned and checked but never recorded: Quick Log's only money box
+# asked for the credit on her fill, and a call she PAID for has none.
+#
+# Invented numbers throughout, but the shape is the one that exposed it: a
+# bought call part-paid for by three sold puts, so the cash that leaves the
+# account is tiny next to what the trade actually commits.
+LOG_OPENED = dt.date(2026, 8, 20)
+LOG_EXPIRY = dt.date(2028, 1, 21)
+LOG_DTE = (LOG_EXPIRY - LOG_OPENED).days
+
+
+def _logged_reversal(puts=3, call_cost=2115.0, put_price=6.25):
+    """One financed LEAPS, all the way through the log and back out."""
+    from src.engine.config_loader import get_strategy
+    from src.engine.positions import parse_rows
+    from src.engine.quick_log import (apply_fill_prices, legs_from_strategy,
+                                      sizing_from_fill)
+    from src.logging_tools.row import COLUMNS, build_row
+
+    strat = get_strategy("long_call_leaps")
+    legs = legs_from_strategy(strat, {"long_call_leaps": 70, "financing_put": 75},
+                              dte=LOG_DTE, financing_puts=puts)
+    apply_fill_prices(legs, {"long_call_leaps": call_cost / 100.0,
+                             "financing_put": put_price})
+    trade = Trade(strategy_key="long_call_leaps", underlying="AMZN", contracts=1,
+                  legs=legs, underlying_price=84.0)
+    size = sizing_from_fill(trade, strat,
+                            credit_total=put_price * 100 * puts,
+                            leaps_cost_total=call_cost)
+    row = build_row(trade, strat["name"], size, False, "", trade_id="L1",
+                    opened_on=LOG_OPENED, expiration_on=LOG_EXPIRY)
+    return parse_rows(COLUMNS, [row])[0], size
+
+
+def test_a_financed_leaps_survives_the_round_trip_through_the_log():
+    """Both legs, the put's quantity, and the ledger all have to come back -
+    the sold puts live in the Details JSON and nowhere else."""
+    p, _ = _logged_reversal()
+    assert [l.role for l in p.legs] == ["long_call_leaps", "financing_put"]
+    assert p.legs[1].quantity == 3
+    assert p.open_cash == -240.0        # 2,115 paid, 1,875 collected back
+    assert p.is_debit and p.is_long_premium
+    assert p.can_track
+
+
+def test_the_collateral_behind_the_puts_is_what_the_trade_ties_up():
+    """$240 left the account; $22,500 is frozen until they expire. Dividing a
+    result by the $240 turns any ordinary week into a triple-digit percentage."""
+    p, _ = _logged_reversal()
+    assert p.short_put_collateral == 22500.0
+    assert p.capital_at_risk == 22740.0
+
+
+def test_a_plain_bought_call_still_measures_against_what_she_paid():
+    """The collateral rule must not disturb the one-leg version."""
+    p, _ = _logged_reversal(puts=0)
+    assert p.short_put_collateral == 0.0
+    assert p.capital_at_risk == 2115.0
+
+
+def test_the_credit_column_stays_empty_on_a_bought_call():
+    """The put credit is a discount on the call, not premium sold. Logged as a
+    credit it would set a 50% profit target on money she never earned."""
+    p, size = _logged_reversal()
+    assert size["credit"] == 0.0
+    assert p.credit == 0.0
+    assert p.short_put_credit == 1875.0     # still recoverable from the legs
+
+
+def test_a_financed_leaps_does_not_shout_take_it_over_pocket_change(exit_cfg):
+    """The trap this pair of denominators exists for. Up $200 on a position
+    that ties up $22,740 is nothing; measured against the $240 net debit it is
+    +83%, and every rule in the exit block would fire at once."""
+    from src.engine import exit_rules
+
+    p, _ = _logged_reversal()
+    # Unwinding today pays her $440 net - $200 more than the $240 she put in.
+    signal = exit_rules.evaluate(p, exit_cfg, current_cost=-440.0,
+                                 today=LOG_OPENED + dt.timedelta(days=3))
+    assert signal.action == "hold"
+    assert "+1%" in signal.reason           # of the capital, not of the debit
+    assert any("22,500" in n for n in signal.notes)
+
+
+def test_a_real_gain_on_a_financed_leaps_still_says_take_it(exit_cfg):
+    """Measuring on capital must not make the exit unreachable either: $5,000
+    of the $22,740 committed, inside a week, is the rule doing its job."""
+    from src.engine import exit_rules
+
+    p, _ = _logged_reversal()
+    signal = exit_rules.evaluate(p, exit_cfg, current_cost=-5240.0,
+                                 today=LOG_OPENED + dt.timedelta(days=4))
+    assert signal.action == "close" and signal.tone == "green"
+
+
+def test_the_plain_bought_call_percentages_are_unchanged(exit_cfg):
+    """No financing put, so `paid` and `committed` are the same number and the
+    reading is exactly what it always was: +12% in 5 days is a take-it."""
+    from src.engine import exit_rules
+
+    p, _ = _logged_reversal(puts=0)
+    signal = exit_rules.evaluate(p, exit_cfg, current_cost=-2368.8,
+                                 today=LOG_OPENED + dt.timedelta(days=5))
+    assert signal.action == "close"
+    assert "12%" in signal.headline
+
+
+def test_the_broker_holds_the_puts_even_though_the_call_was_paid_for():
+    """A bought option ties up no buying power, and that rule alone read this
+    whole position as free. TOS holds the strike behind every put she sold, and
+    the monthly buying-power limit is measured in exactly that."""
+    p, _ = _logged_reversal()
+    assert p.bp_effect == 20625.0           # 22,500 collateral less the credit
+    plain, _ = _logged_reversal(puts=0)
+    assert plain.bp_effect == 0.0           # unchanged: cash, not margin
+
+
+def test_a_typed_bp_effect_still_wins():
+    """Her SOP: where the app and thinkorswim disagree, thinkorswim is right."""
+    p, _ = _logged_reversal()
+    p.bp_override = 22500.0
+    assert p.bp_effect == 22500.0
