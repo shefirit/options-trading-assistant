@@ -156,14 +156,30 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                    help="The underlying's price right now, about 15 minutes "
                         "delayed. This is what decides whether your strikes "
                         "are safe.")
-    cols[1].metric("Credit received", money(p.credit),
-                   help="What the short call paid you - the basis for your "
-                        "50% target." if p.is_debit else None)
-    cols[2].metric("Costs to close now",
-                   money(live["cost_to_close"]) if live.get("cost_to_close")
-                   is not None else "n/a",
-                   help="Buying back the short call alone." if p.is_debit
-                        else None)
+    if p.is_long_premium:
+        cols[1].metric("Credit received", money(p.credit),
+                       help="Nothing, and that is right: you BOUGHT this one. "
+                            "What the put(s) you sold paid you came off the "
+                            "price of the call rather than counting as income.")
+    else:
+        cols[1].metric("Credit received", money(p.credit),
+                       help="What the short call paid you - the basis for your "
+                            "50% target." if p.is_debit else None)
+
+    # Closing a position you only ever bought PAYS her, and the chain math
+    # returns that as a negative cost. Printed raw it read "$-243", which is
+    # the sign convention leaking onto the screen - a minus sign where the
+    # good news was.
+    ctc = live.get("cost_to_close")
+    if ctc is not None and ctc < 0:
+        cols[2].metric("Closing pays you", money(-ctc),
+                       help="You bought this position, so unwinding it puts "
+                            "money back in rather than costing you.")
+    else:
+        cols[2].metric("Costs to close now",
+                       money(ctc) if ctc is not None else "n/a",
+                       help="Buying back the short call alone." if p.is_debit
+                            else None)
     dte_now = p.dte_left()
     cols[3].metric("Days left", dte_now if dte_now is not None else "n/a")
 

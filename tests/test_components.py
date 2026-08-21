@@ -477,3 +477,214 @@ def test_the_two_records_pickers_lead_with_the_date():
                                 realized_pl=1515.0))
     assert closed.startswith("10/08/2026")
     assert "+$1,515" in closed
+
+
+# ===========================================================================
+# The whole-position card, driven directly. AppTest cannot reach this branch -
+# the demo provider will not price a leg 518 days out, so the card exits early
+# at "n/a" and any assertion about its wording passes for the wrong reason.
+# These three faults were all real on Rita's live WFC card.
+import datetime as _dt
+
+import pytest
+
+from src.engine.models import Action, Leg, OptionType
+from src.engine.positions import Position
+
+
+class _Sink(list):
+    def text(self) -> str:
+        return "\n".join(str(v) for _, v in self)
+
+
+class _Col:
+    def __init__(self, sink):
+        self.sink = sink
+
+    def metric(self, label, value=None, **kw):
+        self.sink.append(("metric", f"{label} = {value}"))
+
+
+class _St:
+    """Just enough Streamlit for render_debit_position_card."""
+
+    def __init__(self, sink):
+        self.sink = sink
+
+    def markdown(self, body, **kw):
+        self.sink.append(("markdown", body))
+
+    def columns(self, spec, **kw):
+        n = spec if isinstance(spec, int) else len(spec)
+        return [_Col(self.sink) for _ in range(n)]
+
+
+@pytest.fixture
+def card(monkeypatch):
+    """Render the card into a list of what it said."""
+    from ui import components, theme
+
+    def render(position, live):
+        sink = _Sink()
+        monkeypatch.setattr(components, "st", _St(sink))
+        monkeypatch.setattr(theme, "note", lambda body: sink.append(("note", body)))
+        components.render_debit_position_card(position, live)
+        return sink.text()
+
+    return render
+
+
+def _financed_leaps(open_cash=-240.0):
+    """WFC's shape: one bought call, three puts sold to part-pay for it."""
+    return Position(
+        trade_id="W1", strategy_key="long_call_leaps", underlying="WFC",
+        strategy_name="LEAPS Call (Long Call)", contracts=1,
+        opened=_dt.date(2026, 8, 21), expiration=_dt.date(2028, 1, 21),
+        credit=0.0, open_credit=0.0, open_cash=open_cash,
+        max_loss=22740.0, buying_power=20625.0,
+        legs=[
+            Leg(role="long_call_leaps", action=Action.BUY,
+                option_type=OptionType.CALL, strike=70.0, premium=21.15,
+                quantity=1, dte=518),
+            Leg(role="financing_put", action=Action.SELL,
+                option_type=OptionType.PUT, strike=75.0, premium=6.25,
+                quantity=3, dte=518),
+        ])
+
+
+def _pmcc():
+    return Position(
+        trade_id="P1", strategy_key="poor_mans_covered_call", underlying="SPY",
+        strategy_name="Poor Man's Covered Call (PMCC)", contracts=1,
+        opened=_dt.date(2026, 8, 1), expiration=_dt.date(2026, 9, 18),
+        credit=150.0, open_credit=150.0, open_cash=-3850.0,
+        legs=[
+            Leg(role="long_call_leaps", action=Action.BUY,
+                option_type=OptionType.CALL, strike=400.0, premium=40.0,
+                quantity=1, dte=400),
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=480.0, premium=1.50,
+                quantity=1, dte=32),
+        ])
+
+
+LIVE = {"position_value": 243.0, "open_pl": 3.0}
+
+
+def test_a_bought_call_is_never_given_the_pmcc_advice(card):
+    """It said the 50% target "applies to the short call on its own" and that
+    she holds the long leg "while the short calls earn". There is no short call
+    in this strategy and no 50% target in its SOP."""
+    said = card(_financed_leaps(), LIVE)
+    assert "while the short calls earn" not in said
+    assert "50% profit target applies to the short call" not in said
+    assert "no 50% target and no stop" in said
+    assert "10-20%" in said and "20-40%" in said
+
+
+def test_the_pmcc_keeps_the_sentence_that_was_written_for_it(card):
+    said = card(_pmcc(), {"position_value": 4200.0, "open_pl": 350.0})
+    assert "50% profit target applies to the short call" in said
+
+
+def test_one_gain_is_never_quoted_at_two_different_percentages(card):
+    """$3 read "+0%" in the exit reason (of the $22,740 committed) and "+1.2%"
+    on the card (of the $240 that left the account), four lines apart."""
+    said = card(_financed_leaps(), LIVE)
+    assert "+1.2%" not in said                    # the $240 denominator is gone
+    assert "under 0.1%" in said                   # ...and $3 is not "+0%"
+    assert "$22,740 this trade ties up" in said   # the denominator is named
+    assert "+0%" not in said
+
+
+def test_the_cash_she_put_in_is_still_shown_as_the_cash_she_put_in(card):
+    """Changing the percentage's basis must not restate the $240 itself - that
+    figure is right, and it is what reconciles with thinkorswim."""
+    # &#36; not "$": a raw pair of dollar signs turns Streamlit markdown into
+    # LaTeX, so every money figure in this package is rendered as the entity.
+    assert "Cash you put in = &#36;240" in card(_financed_leaps(), LIVE)
+
+
+def test_a_plain_pmcc_percentage_still_measures_on_what_she_paid(card):
+    """The new basis is for the financed bought call only."""
+    said = card(_pmcc(), {"position_value": 4200.0, "open_pl": 350.0})
+    assert "+9.1%" in said                        # 350 of the 3,850 paid
+    assert "ties up" not in said
+
+
+# ---------------------------------------------------- the numbers behind it
+def _sig():
+    """Just the field _trade_numbers reads off the signal."""
+    from src.engine.exit_rules import ExitSignal
+
+    return ExitSignal(action="hold", headline="Hold", reason="", tone="neutral")
+
+
+def test_closing_a_bought_position_is_not_shown_as_a_negative_cost(monkeypatch):
+    """"Costs to close now: $-243" was the sign convention leaking onto the
+    screen. Unwinding a position she only ever bought PAYS her."""
+    from ui.trades import open_trades
+
+    sink = _Sink()
+    monkeypatch.setattr(open_trades, "st", _St(sink))
+    open_trades._trade_numbers(_financed_leaps(),
+                               {"cost_to_close": -243.0, "position_value": 243.0,
+                                "open_pl": 3.0},
+                               sig=_sig(), strategies={}, px=83.65)
+    said = sink.text()
+    assert "Closing pays you = $243" in said
+    assert "$-243" not in said and "Costs to close now" not in said
+
+
+def test_a_credit_spread_still_says_what_closing_costs(monkeypatch):
+    """The relabel is for bought positions only - on everything she sold,
+    closing really is a cost and the old wording is right."""
+    from src.engine.positions import Position
+    from ui.trades import open_trades
+
+    spread = Position(
+        trade_id="S1", strategy_key="put_credit_spread", underlying="SPX",
+        strategy_name="Put Credit Spread", contracts=1,
+        opened=_dt.date(2026, 8, 1), expiration=_dt.date(2026, 9, 18),
+        credit=300.0, open_credit=300.0, open_cash=300.0,
+        legs=[Leg(role="short_put", action=Action.SELL,
+                  option_type=OptionType.PUT, strike=6300.0, premium=3.0,
+                  quantity=1, dte=45),
+              Leg(role="long_put", action=Action.BUY,
+                  option_type=OptionType.PUT, strike=6250.0, premium=1.0,
+                  quantity=1, dte=45)])
+    sink = _Sink()
+    monkeypatch.setattr(open_trades, "st", _St(sink))
+    open_trades._trade_numbers(spread, {"cost_to_close": 150.0}, sig=_sig(),
+                               strategies={}, px=6400.0)
+    said = sink.text()
+    assert "Costs to close now = $150" in said
+    assert "Closing pays you" not in said
+
+
+def test_a_bought_call_is_not_told_its_zero_credit_came_from_a_short_call(monkeypatch):
+    """The help on that $0 said "what the short call paid you"."""
+    from ui.trades import open_trades
+
+    sink = _Sink()
+    monkeypatch.setattr(open_trades, "st", _St(sink))
+    open_trades._trade_numbers(_financed_leaps(), {"cost_to_close": -243.0},
+                               sig=_sig(), strategies={}, px=83.65)
+    assert "Credit received = $0" in sink.text()
+
+
+def test_a_loss_puts_the_minus_before_the_dollar_sign():
+    """"$-97" is where the sign lands if you format the number straight. Every
+    other money helper in the app writes "-$97"."""
+    from ui.components import _dollars
+
+    assert _dollars(-97) == "-&#36;97"
+    assert _dollars(97) == "&#36;97"
+    assert _dollars(0) == "&#36;0"
+    assert _dollars(-22740) == "-&#36;22,740"
+
+
+def test_the_card_never_prints_a_dollar_sign_followed_by_a_minus(card):
+    said = card(_financed_leaps(), {"position_value": 143.0, "open_pl": -97.0})
+    assert "&#36;-" not in said
+    assert "-&#36;97" in said

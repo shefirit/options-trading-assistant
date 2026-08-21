@@ -990,7 +990,10 @@ def candidate_leg_detail(candidate: Candidate) -> pd.DataFrame:
 
 # ================================================================== risk card
 def _dollars(x: float) -> str:
-    return f"&#36;{x:,.0f}"
+    """Money for the screen. The minus goes BEFORE the dollar sign - "-&#36;97",
+    not "&#36;-97", which is where the sign lands if you format the number
+    straight and is how every other money helper here already writes it."""
+    return f"{'-' if x < 0 else ''}&#36;{abs(x):,.0f}"
 
 
 def render_risk_card(trade, strategy, size: dict, payoff_profile=None,
@@ -1319,12 +1322,23 @@ def render_debit_position_card(position, live: dict) -> None:
     value = live.get("position_value")
     open_pl = live.get("open_pl")
     owns_shares = position.shares_cost > 0
+    # A bought call financed by sold puts is the one shape where the cash that
+    # left the account is not the size of the trade: $240 out, $22,500 frozen
+    # behind the puts. A return measured on the $240 is a real number about a
+    # misleading denominator, and it used to sit four lines under the exit
+    # reason quoting the OTHER denominator - two percentages for one $3.
+    financed = position.is_long_premium and position.short_put_collateral > 0
+    basis = position.capital_at_risk if financed else out
 
     cols = st.columns(4)
     cols[0].metric("Cash you put in", _dollars(out),
                    help=("What left your account to open this: the shares and "
                          "the put side you bought, minus the call credit."
                          if owns_shares else
+                         "What the call cost you, less what the put(s) you sold "
+                         "paid you. The collateral behind those puts is on top "
+                         "of this - see the max loss above."
+                         if financed else
                          "What left your account to open this: the long side "
                          "you bought, minus the call credit you collected."))
     banked = position.roll_income
@@ -1349,10 +1363,15 @@ def render_debit_position_card(position, live: dict) -> None:
                    "above, and every day-count and strike check, still work.")
         return
 
-    pct = (open_pl / out * 100) if out > 0 else 0.0
+    pct = (open_pl / basis * 100) if basis > 0 else 0.0
     cols[3].metric("Profit if closed now", _dollars(open_pl),
                    delta=f"{pct:+.1f}%",
                    help="Everything unwound at today's prices, plus the premium "
+                        "you already banked, minus what you put in, measured "
+                        f"against the ${basis:,.0f} this trade ties up. This is "
+                        "the number the trade is actually worth to you."
+                        if financed else
+                        "Everything unwound at today's prices, plus the premium "
                         "you already banked, minus what you put in. This is the "
                         "number the trade is actually worth to you.")
 
@@ -1384,15 +1403,29 @@ def render_debit_position_card(position, live: dict) -> None:
     tail = ("Your 50% profit target applies to the short call on its own, not "
             "to this number - the long leg is a stock substitute you hold on to "
             "while the short calls earn.")
-    if position.is_uncovered:
+    if position.is_long_premium:
+        # There is no short call in this strategy and no 50% target in its SOP,
+        # so the PMCC line above was describing a trade she is not in. What
+        # this one measures against is the two take-it windows, and the reason
+        # it has no stop is worth repeating on the card that shows a loss.
+        tail = ("This strategy has no 50% target and no stop: you take 10-20% "
+                "if it comes inside a week, or 20-40% inside four weeks, and "
+                "otherwise you sit on the time you paid for.")
+    elif position.is_uncovered:
         # There is no short call to talk about, so the 50% line would be noise.
         tail = ("Nothing is sold against it at the moment, so this is just the "
                 "long leg riding the stock. Selling the next call starts the "
                 "income again and gives your 50% target something to measure.")
+    from src.engine.exit_rules import pct_text
+
+    # Names the denominator the percentage actually used, which on a financed
+    # LEAPS is the capital tied up rather than the cash that left the account.
+    against = (f"the \\${basis:,.0f} this trade ties up" if financed
+               else f"the \\${out:,.0f} you put in")
     theme.note(
         f"Closing everything today would leave you **{word} "
-        f"\\${abs(open_pl):,.0f}** on the \\${out:,.0f} you put in "
-        f"(**{pct:+.1f}%**). " + tail)
+        f"\\${abs(open_pl):,.0f}** on {against} "
+        f"(**{pct_text(pct)}**). " + tail)
 
 
 def render_protection_read(position, read: dict) -> None:

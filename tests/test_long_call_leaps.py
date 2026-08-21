@@ -848,7 +848,8 @@ def test_a_financed_leaps_does_not_shout_take_it_over_pocket_change(exit_cfg):
     signal = exit_rules.evaluate(p, exit_cfg, current_cost=-440.0,
                                  today=LOG_OPENED + dt.timedelta(days=3))
     assert signal.action == "hold"
-    assert "+1%" in signal.reason           # of the capital, not of the debit
+    # Of the capital, not of the debit - which on the debit would read +83%.
+    assert "+0.9% of the $22,740" in signal.reason
     assert any("22,500" in n for n in signal.notes)
 
 
@@ -1009,3 +1010,41 @@ def test_taking_the_puts_off_again_leaves_a_plain_bought_call():
     assert fixed.max_loss == 2115.0
     assert fixed.short_put_collateral == 0.0
     assert fixed.bp_effect == 0.0              # cash, not margin
+
+
+# ------------------------------------------------- what the card actually says
+# Three faults Rita caught on the live WFC card, all of them wording rather
+# than money: advice written for a different strategy, one gain quoted at two
+# different percentages, and a minus sign standing where good news was.
+def test_a_rounding_to_zero_gain_says_so_in_words():
+    """A real $3 printed as "+0%" reads as "nothing happened"."""
+    from src.engine.exit_rules import pct_text
+
+    assert pct_text(0.0132) == "under 0.1%"      # $3 on $22,740
+    assert pct_text(-0.02) == "under 0.1%"
+    assert pct_text(0.9) == "+0.9%"
+    assert pct_text(-25.0) == "-25.0%"
+
+
+def test_the_hold_headline_never_reads_plus_zero(exit_cfg):
+    from src.engine import exit_rules
+
+    p, _ = _logged_reversal()
+    # Worth $243 against the $240 she put in: up $3, which is nothing on
+    # $22,740 of committed capital but is not "+0%".
+    signal = exit_rules.evaluate(p, exit_cfg, current_cost=-243.0,
+                                 today=LOG_OPENED + dt.timedelta(days=3))
+    assert signal.action == "hold"
+    assert "+0%" not in signal.headline
+    assert "under 0.1%" in signal.headline
+    assert "under 0.1% of the $22,740" in signal.reason
+
+
+def test_the_plain_bought_call_still_gets_a_bare_percentage(exit_cfg):
+    """The words-instead-of-a-number case must not spread to ordinary gains."""
+    from src.engine import exit_rules
+
+    p, _ = _logged_reversal(puts=0)
+    signal = exit_rules.evaluate(p, exit_cfg, current_cost=-2200.0,
+                                 today=LOG_OPENED + dt.timedelta(days=30))
+    assert "+4.0%" in signal.reason and "ties up" not in signal.reason
