@@ -251,35 +251,65 @@ def test_the_put_credit_is_never_logged_as_premium_sold():
     assert s["credit"] == 0.0 and s["return_on_risk"] == 0.0
 
 
-def test_correcting_a_financed_leaps_rebuilds_the_call_cost_from_the_legs():
-    """resize_after_edit works backwards from the stored ledger. On every other
-    shape the credit column gives it a foothold; here that column is zero by
-    design, so the put's own fill price on the leg is the only way back to what
-    the call cost."""
-    from src.engine.quick_log import resize_after_edit
+def test_correcting_a_financed_leaps_uses_the_two_fills_in_front_of_her():
+    """There is nothing to reverse out of the ledger on this shape - the Credit
+    column is zero by design - so the panel hands over what the call cost and
+    the put's fill price comes off the leg."""
+    from src.engine.quick_log import resize_bought_call
 
     legs = legs_from_strategy(STRATS["long_call_leaps"],
                               {"long_call_leaps": 70, "financing_put": 75},
                               dte=518, financing_puts=3)
     apply_fill_prices(legs, {"long_call_leaps": 21.15, "financing_put": 6.25})
 
-    # Same trade, corrected from 1 contract to 2: everything scales.
-    fresh = resize_after_edit(STRATS["long_call_leaps"], _trade(legs, contracts=2),
-                              credit_total=0.0, old_credit=0.0,
-                              old_open_cash=-240.0, old_shares_cost=0.0,
-                              old_contracts=1)
-    assert fresh["open_cash"] == -480.0
-    assert fresh["max_loss"] == 45480.0
-    assert fresh["buying_power"] == 41250.0
+    fresh = resize_bought_call(STRATS["long_call_leaps"], _trade(legs), 2115.0)
+    assert fresh["open_cash"] == -240.0
+    assert fresh["max_loss"] == 22740.0
+    assert fresh["buying_power"] == 20625.0
+
+    # Same trade corrected from 1 contract to 2: everything scales with it.
+    doubled = resize_bought_call(STRATS["long_call_leaps"],
+                                 _trade(legs, contracts=2), 4230.0)
+    assert doubled["open_cash"] == -480.0
+    assert doubled["max_loss"] == 45480.0
 
 
-def test_correcting_a_plain_leaps_keeps_its_cost():
+def test_adding_the_puts_to_a_call_logged_without_them():
+    """The repair path. A LEAPS logged before the form could take a financing
+    put carries the call's COST in the credit column, sign the wrong way round
+    - so the ledger it left behind cannot be trusted, and the fresh figures
+    have to come from the fills instead."""
+    from src.engine.quick_log import resize_bought_call
+
+    legs = legs_from_strategy(STRATS["long_call_leaps"],
+                              {"long_call_leaps": 70, "financing_put": 75},
+                              dte=518, financing_puts=3)
+    apply_fill_prices(legs, {"long_call_leaps": 21.15, "financing_put": 6.25})
+    fresh = resize_bought_call(STRATS["long_call_leaps"], _trade(legs), 2115.0)
+    # Was logged as +2,115 collected; it is 240 out of the account.
+    assert fresh["open_cash"] == -240.0
+    assert fresh["credit"] == 0.0
+
+
+def test_the_old_resizer_refuses_a_bought_call_rather_than_guessing():
+    """It used to fall through to the vertical-width default, which reports a
+    bought call's risk as a spread's: max loss zero, buying power zero."""
+    import pytest as _pytest
+
     from src.engine.quick_log import resize_after_edit
 
     legs = legs_from_strategy(STRATS["long_call_leaps"], {"long_call_leaps": 185},
                               dte=400)
-    fresh = resize_after_edit(STRATS["long_call_leaps"], _trade(legs),
-                              credit_total=0.0, old_credit=0.0,
-                              old_open_cash=-3900.0, old_shares_cost=0.0,
-                              old_contracts=1)
+    with _pytest.raises(ValueError):
+        resize_after_edit(STRATS["long_call_leaps"], _trade(legs), credit_total=0.0,
+                          old_credit=0.0, old_open_cash=-3900.0,
+                          old_shares_cost=0.0, old_contracts=1)
+
+
+def test_correcting_a_plain_leaps_keeps_its_cost():
+    from src.engine.quick_log import resize_bought_call
+
+    legs = legs_from_strategy(STRATS["long_call_leaps"], {"long_call_leaps": 185},
+                              dte=400)
+    fresh = resize_bought_call(STRATS["long_call_leaps"], _trade(legs), 3900.0)
     assert fresh["open_cash"] == -3900.0 and fresh["max_loss"] == 3900.0
