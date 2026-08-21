@@ -772,13 +772,12 @@ LOG_EXPIRY = dt.date(2028, 1, 21)
 LOG_DTE = (LOG_EXPIRY - LOG_OPENED).days
 
 
-def _logged_reversal(puts=3, call_cost=2115.0, put_price=6.25):
-    """One financed LEAPS, all the way through the log and back out."""
+def _reversal_row(puts=3, call_cost=2115.0, put_price=6.25):
+    """One financed LEAPS as the log holds it - the open event row."""
     from src.engine.config_loader import get_strategy
-    from src.engine.positions import parse_rows
     from src.engine.quick_log import (apply_fill_prices, legs_from_strategy,
                                       sizing_from_fill)
-    from src.logging_tools.row import COLUMNS, build_row
+    from src.logging_tools.row import build_row
 
     strat = get_strategy("long_call_leaps")
     legs = legs_from_strategy(strat, {"long_call_leaps": 70, "financing_put": 75},
@@ -790,8 +789,16 @@ def _logged_reversal(puts=3, call_cost=2115.0, put_price=6.25):
     size = sizing_from_fill(trade, strat,
                             credit_total=put_price * 100 * puts,
                             leaps_cost_total=call_cost)
-    row = build_row(trade, strat["name"], size, False, "", trade_id="L1",
-                    opened_on=LOG_OPENED, expiration_on=LOG_EXPIRY)
+    return build_row(trade, strat["name"], size, False, "", trade_id="L1",
+                     opened_on=LOG_OPENED, expiration_on=LOG_EXPIRY), size
+
+
+def _logged_reversal(puts=3, call_cost=2115.0, put_price=6.25):
+    """...and the position it comes back out as."""
+    from src.engine.positions import parse_rows
+    from src.logging_tools.row import COLUMNS
+
+    row, size = _reversal_row(puts, call_cost, put_price)
     return parse_rows(COLUMNS, [row])[0], size
 
 
@@ -883,3 +890,122 @@ def test_a_typed_bp_effect_still_wins():
     p, _ = _logged_reversal()
     p.bp_override = 22500.0
     assert p.bp_effect == 22500.0
+
+
+# ---------------------------------------------------- repairing an old one
+# Every LEAPS logged before the form could take a financing put went in as a
+# bare call - and worse, its COST went into the Credit column, so the ledger
+# says the trade paid her. Deleting and re-logging would fix it by throwing the
+# trade's history away. The correction panel adds the missing leg instead.
+def _leaps_logged_the_old_way():
+    """What the log holds for one of those: one leg, and a credit that is
+    really the debit with the sign the other way round."""
+    from src.engine.config_loader import get_strategy
+    from src.engine.positions import parse_rows
+    from src.engine.quick_log import legs_from_strategy
+    from src.logging_tools.row import COLUMNS, build_row
+
+    strat = get_strategy("long_call_leaps")
+    legs = legs_from_strategy(strat, {"long_call_leaps": 70}, dte=LOG_DTE)
+    legs[0].premium = 21.25
+    trade = Trade(strategy_key="long_call_leaps", underlying="AMZN", contracts=1,
+                  legs=legs, underlying_price=84.0)
+    # The old sizing had no long_premium branch: it fell through to the
+    # vertical-width default, so the money came out like this.
+    stale = {"credit": 2125.0, "max_loss": 0.0, "buying_power": 0.0,
+             "open_cash": 2125.0, "shares_cost": 0.0}
+    row = build_row(trade, strat["name"], stale, False, "", trade_id="OLD1",
+                    opened_on=LOG_OPENED, expiration_on=LOG_EXPIRY)
+    return row, parse_rows(COLUMNS, [row])[0]
+
+
+def test_the_shape_of_a_leaps_logged_before_the_form_could_take_the_puts():
+    """Pin what is actually wrong with those rows, so the repair below is
+    testing a real starting point and not an invented one."""
+    _, p = _leaps_logged_the_old_way()
+    assert len(p.legs) == 1                 # the puts are nowhere
+    assert p.open_cash == 2125.0            # reads as money COLLECTED
+    assert p.credit == 2125.0               # and counts as premium sold
+    assert p.max_loss == 0.0
+
+
+def test_adding_the_puts_repairs_the_trade_without_deleting_it():
+    """The correction the panel writes: the same trade id, both legs, and the
+    money rebuilt from the two fills rather than reversed out of a ledger that
+    was wrong to begin with."""
+    from src.engine.config_loader import get_strategy
+    from src.engine.models import Action, Leg, OptionType
+    from src.engine.positions import parse_rows
+    from src.engine.quick_log import resize_bought_call
+    from src.logging_tools.row import COLUMNS, build_edit_row
+
+    row, p = _leaps_logged_the_old_way()
+    strat = get_strategy("long_call_leaps")
+
+    # What the panel builds: the call as it stands, plus the puts she sold.
+    legs = [leg.model_copy(deep=True) for leg in p.open_legs]
+    legs.append(Leg(role="financing_put", action=Action.SELL,
+                    option_type=OptionType.PUT, strike=75.0, premium=6.25,
+                    quantity=3, dte=legs[0].dte))
+    trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
+                  contracts=p.contracts, legs=legs)
+    fresh = resize_bought_call(strat, trade, 2115.0)
+
+    changes = {
+        "legs": [{"role": l.role, "action": l.action.value,
+                  "type": l.option_type.value, "strike": l.strike,
+                  "delta": l.delta, "premium": l.premium, "qty": l.quantity,
+                  "dte": l.dte} for l in legs],
+        "strikes": " / ".join(f"{l.strike:g}" for l in legs),
+        "credit": fresh["credit"], "open_cash": fresh["open_cash"],
+        "max_loss": fresh["max_loss"], "buying_power": fresh["buying_power"],
+    }
+    edit = build_edit_row("OLD1", p.underlying, p.strategy_name, changes,
+                          summary="puts sold 0 -> 3", edited_on=LOG_OPENED)
+
+    fixed = parse_rows(COLUMNS, [row, edit])[0]
+    assert fixed.trade_id == "OLD1"                 # same trade, not a new one
+    assert [l.role for l in fixed.legs] == ["long_call_leaps", "financing_put"]
+    assert fixed.legs[1].quantity == 3
+    assert fixed.open_cash == -240.0                # money OUT, at last
+    assert fixed.credit == 0.0                      # no longer premium sold
+    assert fixed.max_loss == 22740.0
+    assert fixed.short_put_collateral == 22500.0
+    assert fixed.bp_effect == 20625.0
+    assert fixed.is_debit and fixed.can_track
+
+
+def test_taking_the_puts_off_again_leaves_a_plain_bought_call():
+    """Set the count back to 0 and the leg goes away - the same panel has to
+    undo a put entered by mistake, and the money has to follow it."""
+    from src.engine.config_loader import get_strategy
+    from src.engine.positions import parse_rows
+    from src.engine.quick_log import resize_bought_call
+    from src.logging_tools.row import COLUMNS, build_edit_row
+
+    row, _ = _reversal_row()
+    p = parse_rows(COLUMNS, [row])[0]
+
+    legs = [l.model_copy(deep=True) for l in p.open_legs
+            if not (l.action.value == "sell" and l.option_type.value == "put")]
+    trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
+                  contracts=p.contracts, legs=legs)
+    fresh = resize_bought_call(get_strategy("long_call_leaps"), trade, 2115.0)
+    changes = {
+        "legs": [{"role": l.role, "action": l.action.value,
+                  "type": l.option_type.value, "strike": l.strike,
+                  "delta": l.delta, "premium": l.premium, "qty": l.quantity,
+                  "dte": l.dte} for l in legs],
+        "strikes": " / ".join(f"{l.strike:g}" for l in legs),
+        "credit": fresh["credit"], "open_cash": fresh["open_cash"],
+        "max_loss": fresh["max_loss"], "buying_power": fresh["buying_power"],
+    }
+    edit = build_edit_row("L1", p.underlying, p.strategy_name, changes,
+                          summary="puts sold 3 -> 0", edited_on=LOG_OPENED)
+
+    fixed = parse_rows(COLUMNS, [row, edit])[0]
+    assert [l.role for l in fixed.legs] == ["long_call_leaps"]
+    assert fixed.open_cash == -2115.0          # the full cost of the call again
+    assert fixed.max_loss == 2115.0
+    assert fixed.short_put_collateral == 0.0
+    assert fixed.bp_effect == 0.0              # cash, not margin

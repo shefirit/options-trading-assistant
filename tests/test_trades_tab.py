@@ -412,3 +412,96 @@ def test_the_preview_reads_back_what_she_typed_before_saving(app_with_rows):
     page = _page(at)
     assert "Ready to save" in page
     assert any("Save to my log" in (b.label or "") for b in at.button)
+
+
+# ===========================================================================
+# Repairing a LEAPS logged before the form could take its financing puts.
+# Those rows hold one leg and a "credit" that is really the call's cost, so the
+# correction panel has to be able to give a trade a leg it never had - the one
+# thing it could not do - and rebuild the money from the fills while it is at
+# it. Driven through the real app, because the panel's own arithmetic (what
+# the call cost, reversed out of a ledger that is wrong) is where this breaks.
+LEAPS = "LEAPS Call (Long Call)"
+
+
+def _bare_leaps_row(trade_id="20260821-142826-WFC"):
+    opened = date.today()
+    expiry = opened + timedelta(days=518)
+    details = {"key": "long_call_leaps", "underlying_price": 84.0,
+               "legs": [{"role": "long_call_leaps", "action": "buy",
+                         "type": "call", "strike": 70.0, "delta": 0.73,
+                         "premium": 21.25, "qty": 1, "dte": 518}],
+               # The old sizing had no long_premium branch: the debit went in
+               # as a credit and the risk came out as zero.
+               "open_cash": 2125.0}
+    return [opened.isoformat(), "WFC", LEAPS, "70", 0.0, 518, 1, 2125.0, 0.0,
+            0.0, "NO", "", trade_id, "open", expiry.isoformat(), "", "",
+            json.dumps(details), "real"]
+
+
+def _put_boxes(at):
+    return (next(n for n in at.number_input if (n.key or "").startswith("ed_fpn_")),
+            next(n for n in at.number_input if (n.key or "").startswith("ed_fpk_")),
+            next(n for n in at.number_input if (n.key or "").startswith("ed_fppx_")))
+
+
+def test_the_correction_panel_offers_a_place_for_the_puts(app_with_rows):
+    at = app_with_rows([_bare_leaps_row()]).run()
+    assert not at.exception
+    n, k, px = _put_boxes(at)
+    assert n.value == 0 and k.value == 0.0 and px.value == 0.0
+    assert "The put(s) you sold against it" in _page(at)
+    # ...and it asks what the CALL cost, never what credit it collected.
+    assert any("What the call you BOUGHT cost you" in (b.label or "")
+               for b in at.number_input)
+    assert not any("Credit collected" in (b.label or "") for b in at.number_input)
+
+
+def test_adding_the_puts_rebuilds_the_money_from_the_fills(app_with_rows):
+    """$2,115 for the call against three puts at $6.25 is $240 out of the
+    account and $22,740 at risk - and the row said the trade PAID her $2,125."""
+    at = app_with_rows([_bare_leaps_row()]).run()
+    n, k, px = _put_boxes(at)
+    n.set_value(3)
+    k.set_value(75.0)
+    px.set_value(6.25)
+    paid = next(b for b in at.number_input if (b.key or "").startswith("ed_paid_"))
+    paid.set_value(2115.0)
+    at = at.run()
+    assert not at.exception
+    page = _page(at)
+    assert "puts sold 0 → 3" in page
+    assert "$1,875" in page and "$22,500" in page       # collected, and held
+    assert "22,740" in page                             # the new worst case
+
+
+def test_the_correction_it_would_write_carries_both_legs(app_with_rows, monkeypatch):
+    """What actually lands in the sheet: the same trade id, both legs, and a
+    ledger that finally reads as money out."""
+    sent: dict = {}
+
+    from src.logging_tools import trade_logger
+    monkeypatch.setattr(trade_logger, "edit_trade",
+                        lambda *a, **kw: (sent.update(
+                            {"id": a[0], "changes": a[3], "summary": kw.get("summary")}),
+                            ("local", False))[1])
+
+    at = app_with_rows([_bare_leaps_row()]).run()
+    n, k, px = _put_boxes(at)
+    n.set_value(3)
+    k.set_value(75.0)
+    px.set_value(6.25)
+    next(b for b in at.number_input
+         if (b.key or "").startswith("ed_paid_")).set_value(2115.0)
+    at = at.run()
+    next(b for b in at.button if b.key == "ed_go").click().run()
+
+    assert sent["id"] == "20260821-142826-WFC"
+    legs = sent["changes"]["legs"]
+    assert [l["role"] for l in legs] == ["long_call_leaps", "financing_put"]
+    assert legs[1]["qty"] == 3 and legs[1]["strike"] == 75.0
+    assert legs[1]["dte"] == legs[0]["dte"]            # one trade, one end date
+    assert sent["changes"]["open_cash"] == -240.0
+    assert sent["changes"]["credit"] == 0.0            # never premium sold
+    assert sent["changes"]["max_loss"] == 22740.0
+    assert sent["changes"]["buying_power"] == 20625.0

@@ -124,6 +124,40 @@ def _value_at_zero(trade: Trade) -> float:
     return total
 
 
+def sold_put_credit(trade: Trade) -> float:
+    """What the put(s) she SOLD paid her, from the fill prices on the legs.
+
+    On the LEAPS long call this is the financing put, and it is deliberately
+    absent from the log's Credit column - the money is a discount on the call,
+    not income. So the legs are where it lives, and everything that needs to
+    know what the trade really cost reads it from here.
+    """
+    per_unit = sum(leg.premium * leg.quantity for leg in trade.legs
+                   if leg.action == Action.SELL
+                   and leg.option_type == OptionType.PUT)
+    return round(per_unit * 100 * max(int(trade.contracts), 1), 2)
+
+
+def resize_bought_call(strat: dict[str, Any], trade: Trade,
+                       call_cost_total: float) -> dict[str, float]:
+    """Fresh sizing after she corrects - or completes - a bought call.
+
+    resize_after_edit works backwards out of the stored ledger, and on this
+    shape there is nothing to work backwards from: the Credit column is zero by
+    design, so open_cash alone cannot say how much of it was the call and how
+    much was a put sold against it. It does not have to. Both numbers are in
+    front of her on the correction panel - what the call cost, and the put's
+    own fill price on the leg - so this takes them straight.
+
+    That also makes it the repair path for a LEAPS logged before the form could
+    record one: those rows carry the call's cost in the Credit column with the
+    sign the other way round, and reversing THAT ledger would confidently
+    produce a wrong cost. Recomputing from the two fills fixes it.
+    """
+    return sizing_from_fill(trade, strat, sold_put_credit(trade),
+                            leaps_cost_total=float(call_cost_total))
+
+
 def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
                       old_credit: float, old_open_cash: float,
                       old_shares_cost: float, old_contracts: int) -> dict[str, float]:
@@ -144,24 +178,22 @@ def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
     Per-share values are recovered against the OLD contract count and then
     re-multiplied by the new one, which is what makes changing the contracts
     scale the position rather than merely relabel it.
+
+    Not for a bought call - see resize_bought_call. That shape has no credit
+    column to reverse the cost out of, and adding a leg (the financing put she
+    could not record at the time) moves the ledger under the equation anyway.
     """
     basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
     old_contracts = max(int(old_contracts), 1)
 
-    leaps_cost = share_price = protection = None
     if basis == "long_premium":
-        # A bought call logs no credit, so the equation above has nothing to
-        # rearrange: open_cash = put credit - what the call cost, and both of
-        # those are unknowns. The legs carry her fill prices, so the put side
-        # comes off them and the call's cost is what is left of the ledger.
-        # credit_total is the put credit here, not a credit collected.
-        put_credit = sum(l.premium * l.quantity for l in trade.legs
-                         if l.action == Action.SELL
-                         and l.option_type == OptionType.PUT) * 100
-        credit_total = round(put_credit * max(int(trade.contracts), 1), 2)
-        per_contract = (put_credit * old_contracts - float(old_open_cash)) / old_contracts
-        leaps_cost = per_contract * max(int(trade.contracts), 1)
-    elif basis == "debit":
+        raise ValueError(
+            "a bought call is resized by resize_bought_call, which takes what "
+            "the call cost directly - reversing it out of the ledger cannot "
+            "work once a leg has been added")
+
+    leaps_cost = share_price = protection = None
+    if basis == "debit":
         # Per contract, so a corrected contract count scales the cost with it.
         per_contract = (float(old_credit) - float(old_open_cash)) / old_contracts
         leaps_cost = per_contract * max(int(trade.contracts), 1)

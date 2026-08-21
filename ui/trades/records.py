@@ -119,6 +119,85 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
+def _is_sold_put(leg) -> bool:
+    return leg.action.value == "sell" and leg.option_type.value == "put"
+
+
+def _financing_put_block(position, call_legs: list, put_legs: list,
+                         contracts: int, bits: list[str]) -> list:
+    """The put(s) sold against a bought call - add them, change them, drop them.
+
+    This is the one place in the correction panel that can give a trade a leg
+    it never had. It has to be: the LEAPS long call's financing put lives
+    outside the strategy's `legs` block, so every one logged before Quick Log
+    could take it went into the log as a bare call, with the puts - and the
+    collateral behind them - recorded nowhere. Deleting and re-logging would
+    work, but only by throwing away the trade's history to fix a missing leg.
+
+    Returns the put legs as they should now stand (empty when she sets the
+    count to zero, which is how a put entered by mistake comes off again).
+    """
+    from src.engine.models import Action, Leg, OptionType
+
+    st.markdown("**The put(s) you sold against it**")
+    theme.note("Sold puts at the same expiration to help pay for the call? Put "
+               "them in here - the app will work out what the trade really cost "
+               "and what the collateral behind them ties up. Leave the count at "
+               "0 if there were none.")
+    was_n = int(sum(l.quantity for l in put_legs))
+    was_k = float(put_legs[0].strike) if put_legs else 0.0
+    was_px = float(put_legs[0].premium) if put_legs else 0.0
+
+    q1, q2, q3 = st.columns(3)
+    n_puts = int(q1.number_input(
+        "How many you SOLD", min_value=0, max_value=20, value=was_n, step=1,
+        key=f"ed_fpn_{position.trade_id}",
+        help="Per contract of the whole trade. Your SOP allows one per call "
+             "bought and warns at two; past that it fails the check, but a "
+             "trade you have already placed is still recorded as it is."))
+    strike = float(q2.number_input(
+        "Put strike", min_value=0.0, value=was_k, step=1.0, format="%.2f",
+        key=f"ed_fpk_{position.trade_id}"))
+    price = float(q3.number_input(
+        "Price you got for each put", min_value=0.0, value=was_px, step=0.05,
+        format="%.2f", key=f"ed_fppx_{position.trade_id}",
+        help="Per share, for ONE put, the way thinkorswim prints it - 6.25, "
+             "not 625."))
+
+    if n_puts and price:
+        total = price * 100 * n_puts * max(contracts, 1)
+        collateral = strike * 100 * n_puts * max(contracts, 1)
+        theme.note(f"That is **\\${total:,.0f}** collected ({price:.2f} x 100 x "
+                   f"{n_puts * max(contracts, 1)}), against **\\${collateral:,.0f}** "
+                   f"of collateral held until they expire.")
+
+    if n_puts != was_n:
+        bits.append(f"puts sold {was_n} → {n_puts}")
+    elif n_puts and (abs(strike - was_k) > 1e-9 or abs(price - was_px) > 1e-9):
+        bits.append(f"sold put {was_k:g} @ {was_px:.2f} → {strike:g} @ {price:.2f}")
+
+    if not n_puts:
+        return []
+    # Same expiration as the call, which is what her SOP requires and how the
+    # position was priced going in. The stored dte is measured from the day it
+    # was opened, so copying the call's keeps both legs on one end date.
+    dte = next((l.dte for l in call_legs if l.dte is not None), position.dte_at_entry)
+    return [Leg(role="financing_put", action=Action.SELL, option_type=OptionType.PUT,
+                strike=strike, premium=price, quantity=n_puts,
+                dte=int(dte) if dte is not None else None,
+                delta=float(put_legs[0].delta) if put_legs else 0.0)]
+
+
+def _legs_differ(new: list, old: list) -> bool:
+    """True when the legs are not the same trade any more - a strike moved, a
+    price was corrected, or a leg was added or taken away."""
+    def shape(legs):
+        return [(l.role, l.action.value, l.option_type.value, round(l.strike, 4),
+                 int(l.quantity), round(l.premium, 4)) for l in legs]
+
+    return shape(new) != shape(old)
+
+
 def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> None:
     """Fix details typed wrong when the trade was logged.
 
@@ -139,7 +218,7 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         return
     from src.engine.config_loader import get_strategy
     from src.engine.models import Trade
-    from src.engine.quick_log import resize_after_edit
+    from src.engine.quick_log import resize_after_edit, resize_bought_call
 
     with st.expander("✏️ Fix trade details I typed wrong", key="fix_details"):
         theme.note("Wrong strike, wrong number of contracts, wrong date? Correct it "
@@ -176,9 +255,24 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
             changes["contracts"] = contracts
             bits.append(f"contracts {p.contracts} → {contracts}")
 
+        strat_cfg = get_strategy(p.strategy_key) if p.strategy_key else {}
+        basis = str(strat_cfg.get("sizing", {}).get("max_loss_basis", ""))
+        # A bought call has no credit column and can gain a leg here - the
+        # financing put she sold against it, which older rows could not record
+        # at all. Both need knowing before the strike boxes are drawn.
+        is_bought = basis == "long_premium"
+
         # One box per leg, labelled by what the leg IS. A bare list of numbers
         # is unreadable on a four-leg condor.
-        legs = [leg.model_copy(deep=True) for leg in (p.open_legs or p.legs)]
+        original = [leg.model_copy(deep=True) for leg in (p.open_legs or p.legs)]
+        legs = [leg.model_copy(deep=True) for leg in original]
+        # On a bought call the sold puts come out of this row and get their own
+        # block below, where the COUNT and the price can be changed too. Two
+        # boxes for one strike is how a correction panel starts contradicting
+        # itself.
+        put_legs = [l for l in legs if _is_sold_put(l)] if is_bought else []
+        if is_bought:
+            legs = [l for l in legs if not _is_sold_put(l)]
         if legs:
             st.markdown("**Strikes**")
             cols = st.columns(min(len(legs), 4))
@@ -192,8 +286,8 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                     bits.append(f"{label.lower()} {leg.strike:g} → {new:g}")
                     leg.strike = float(new)
 
-        strat_cfg = get_strategy(p.strategy_key) if p.strategy_key else {}
-        basis = str(strat_cfg.get("sizing", {}).get("max_loss_basis", ""))
+        if is_bought:
+            legs = legs + _financing_put_block(p, legs, put_legs, contracts, bits)
 
         # open_credit, NOT credit. Every roll overwrites `credit` with whatever
         # the CURRENT short call sold for, because that is what the 50% profit
@@ -207,8 +301,7 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # A bought LEAPS collects nothing, so a "credit collected" box would sit
         # there at zero inviting a number that has no meaning on this shape. The
         # money that IS hers to correct is what the call cost, below - and what
-        # the financing put paid, which the app reads back off the legs.
-        is_bought = basis == "long_premium"
+        # the financing put paid, which comes off the put block above.
         c4, c5 = st.columns(2)
         credit = day_one_credit
         if not is_bought:
@@ -232,6 +325,11 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         put_credit = round(p.short_put_credit, 2) if is_bought else 0.0
         if basis in ("debit", "long_premium"):
             base = put_credit if is_bought else day_one_credit
+            # abs(), which is what makes this box right on a LEAPS logged
+            # before the form knew it was a purchase: those rows recorded the
+            # call's cost as a CREDIT, so the ledger has the size of it with
+            # the sign the other way round. Saving rebuilds the money from this
+            # figure and the put's fill, which repairs the direction too.
             old_paid = round(base - float(p.open_cash or 0.0), 2)
             paid = float(st.number_input(
                 "What the call you BOUGHT cost you $" if is_bought
@@ -256,10 +354,7 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         why = st.text_input("What was wrong (optional)", key=f"ed_why_{p.trade_id}",
                             placeholder="e.g. typed 2 contracts, only placed 1")
 
-        strike_changed = any(
-            abs(float(a.strike) - float(b.strike)) > 1e-9
-            for a, b in zip(legs, (p.open_legs or p.legs)))
-        if strike_changed:
+        if _legs_differ(legs, original):
             changes["legs"] = [
                 {"role": l.role, "action": l.action.value, "type": l.option_type.value,
                  "strike": l.strike, "delta": l.delta, "premium": l.premium,
@@ -283,18 +378,26 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                 trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
                               contracts=contracts, legs=legs,
                               underlying_price=p.underlying_price_at_entry or 0.0)
-                # A corrected LEAPS cost is fed in as the ledger it implies, so
-                # resize_after_edit rebuilds the cost from the corrected figure
-                # rather than the stored one it would otherwise reverse out.
-                old_cash = (round((put_credit if is_bought else day_one_credit)
-                                  - paid, 2) if paid_changed
-                            else float(p.open_cash or 0.0))
-                fresh = resize_after_edit(
-                    strat_cfg, trade, credit,
-                    old_credit=float(p.open_credit or p.credit or 0),
-                    old_open_cash=old_cash,
-                    old_shares_cost=float(p.shares_cost or 0.0),
-                    old_contracts=int(p.contracts or 1))
+                if is_bought:
+                    # Nothing is reversed out of the stored ledger here, on
+                    # purpose: what the call cost is in the box above and the
+                    # put's fill price is on its leg, so the money is rebuilt
+                    # from the two fills. That is also what repairs a LEAPS
+                    # logged before the form could take one, whose ledger says
+                    # the call PAID her.
+                    fresh = resize_bought_call(strat_cfg, trade, paid or 0.0)
+                else:
+                    # A corrected LEAPS cost is fed in as the ledger it implies,
+                    # so resize_after_edit rebuilds the cost from the corrected
+                    # figure rather than the stored one it would reverse out.
+                    old_cash = (round(day_one_credit - paid, 2) if paid_changed
+                                else float(p.open_cash or 0.0))
+                    fresh = resize_after_edit(
+                        strat_cfg, trade, credit,
+                        old_credit=float(p.open_credit or p.credit or 0),
+                        old_open_cash=old_cash,
+                        old_shares_cost=float(p.shares_cost or 0.0),
+                        old_contracts=int(p.contracts or 1))
                 changes.update({
                     "credit": fresh["credit"], "open_cash": fresh["open_cash"],
                     "max_loss": fresh["max_loss"],
