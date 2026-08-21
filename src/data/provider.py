@@ -794,7 +794,7 @@ class DataProvider:
         """
         from src.engine.positions import position_value_from_chain
 
-        if not position.is_debit:
+        if not position.is_debit and not position.is_long_premium:
             return None      # a credit spread has no long side worth a card
 
         # Usually the LEAPS sits in a different expiration and needs its own

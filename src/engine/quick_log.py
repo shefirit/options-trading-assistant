@@ -17,7 +17,8 @@ from src.engine.models import Action, Leg, OptionType, Trade
 
 
 def legs_from_strategy(strat: dict[str, Any], strikes: dict[str, float],
-                       dte: int, leaps_dte: Optional[int] = None) -> list[Leg]:
+                       dte: int, leaps_dte: Optional[int] = None,
+                       financing_puts: int = 0) -> list[Leg]:
     """One Leg per strategy leg definition - just strikes and dates, no Greeks.
 
     strikes maps role -> strike, e.g. {"short_put": 5000, "long_put": 4975}.
@@ -25,6 +26,13 @@ def legs_from_strategy(strat: dict[str, Any], strikes: dict[str, float],
     PMCC that is the LEAPS call, in the covered-call models it is the
     protective put (and its offsetting short puts), all far-dated while the
     short call is the near monthly. Credit spreads and CSPs never pass it.
+
+    financing_puts adds the put(s) SOLD alongside a LEAPS long call to part-pay
+    for it - the risk reversal variant in config/strategies.yaml. It is not in
+    that strategy's `legs` block on purpose (it is a variant, not the strategy),
+    so it cannot come from the loop above; the count comes from her fill and the
+    strike from strikes["financing_put"]. Same expiration as the call, which is
+    what her SOP requires and what the checklist verifies.
     """
     legs: list[Leg] = []
     for leg_def in strat.get("legs", []):
@@ -38,6 +46,33 @@ def legs_from_strategy(strat: dict[str, Any], strikes: dict[str, float],
             quantity=int(leg_def.get("quantity", 1)),
             dte=int(leaps_dte if far else dte),
         ))
+    if financing_puts > 0:
+        legs.append(Leg(
+            role="financing_put",
+            action=Action.SELL,
+            option_type=OptionType.PUT,
+            strike=float(strikes.get("financing_put", 0.0)),
+            quantity=int(financing_puts),
+            dte=int(dte),
+        ))
+    return legs
+
+
+def apply_fill_prices(legs: list[Leg], prices: dict[str, float]) -> list[Leg]:
+    """Her own fill prices, per role, overwriting whatever the chain guessed.
+
+    fill_from_chain fills every leg from today's mid, which is the best the app
+    can do on a credit spread where she only types ONE net price for the whole
+    order. On a bought call she types each side separately - what the call cost
+    and what the put paid - and those are exact fills rather than estimates, so
+    they must win: the SOP checks that read leg premiums (what the position
+    commits her to, how much of the call the put actually funded) would
+    otherwise report today's market back at her instead of her own trade.
+    """
+    for leg in legs:
+        price = prices.get(leg.role)
+        if price:
+            leg.premium = round(abs(float(price)), 4)
     return legs
 
 
@@ -114,7 +149,19 @@ def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
     old_contracts = max(int(old_contracts), 1)
 
     leaps_cost = share_price = protection = None
-    if basis == "debit":
+    if basis == "long_premium":
+        # A bought call logs no credit, so the equation above has nothing to
+        # rearrange: open_cash = put credit - what the call cost, and both of
+        # those are unknowns. The legs carry her fill prices, so the put side
+        # comes off them and the call's cost is what is left of the ledger.
+        # credit_total is the put credit here, not a credit collected.
+        put_credit = sum(l.premium * l.quantity for l in trade.legs
+                         if l.action == Action.SELL
+                         and l.option_type == OptionType.PUT) * 100
+        credit_total = round(put_credit * max(int(trade.contracts), 1), 2)
+        per_contract = (put_credit * old_contracts - float(old_open_cash)) / old_contracts
+        leaps_cost = per_contract * max(int(trade.contracts), 1)
+    elif basis == "debit":
         # Per contract, so a corrected contract count scales the cost with it.
         per_contract = (float(old_credit) - float(old_open_cash)) / old_contracts
         leaps_cost = per_contract * max(int(trade.contracts), 1)
@@ -173,6 +220,33 @@ def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
         open_cash = credit - cost
         buying_power = max(cost - credit, 0.0)
         max_loss = buying_power
+    elif basis == "long_premium":
+        # A LEAPS bought outright. There is no credit to collect: `credit_total`
+        # here is whatever the optional financing put(s) paid, and that is money
+        # off the price of the call, never income. Recorded as zero credit for
+        # the same reason sizing.estimate does - a 50%-of-credit profit target
+        # measured against it would be meaningless, and the month report would
+        # count it as premium sold.
+        cost = float(leaps_cost_total or 0.0)
+        put_credit = float(credit_total or 0.0)
+        credit = 0.0
+        open_cash = put_credit - cost
+        collateral = sum(l.strike * l.quantity for l in trade.legs
+                         if l.action == Action.SELL
+                         and l.option_type == OptionType.PUT) * 100 * contracts
+        if collateral > 0:
+            # With a put sold, what she COMMITS is the net debit plus the cash
+            # standing behind the put - and that is also the worst case, since a
+            # collapse to zero costs her the call and every cent of the shares
+            # she promised to buy. The broker reserves the strike less the
+            # premium it already handed her, exactly like her cash secured put.
+            max_loss = max(cost - put_credit + collateral, 0.0)
+            buying_power = max(collateral - put_credit, 0.0)
+        else:
+            # The plain one-leg version: what she paid is what she can lose, and
+            # a bought option uses cash rather than buying power.
+            max_loss = cost
+            buying_power = 0.0
     elif basis in ("shares_plus_protection", "ratio_risk"):
         # Covered calls: 100 real shares per contract, plus whatever the put
         # side cost (Model 1's long put, Model 2's put spread; Model 3's ratio
