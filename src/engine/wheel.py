@@ -112,16 +112,18 @@ def assignment_cash(strike: float, contracts: int) -> float:
 def is_wheelable(position) -> bool:
     """Can this position BE assigned into shares?
 
-    Any short put she is prepared to be assigned on - the wheel by name, and a
-    cash-secured put, which is the same trade with a different intention. Both
-    of her SOP entries for these accept assignment rather than defending
-    against it, so both get the button.
+    Any short put she is prepared to be assigned on - the wheel by name, a
+    cash-secured put, which is the same trade with a different intention, and a
+    LEAPS put, which is the same trade again with a year on the clock. All three
+    of her SOP entries accept assignment rather than defending against it, so
+    all three get the button. The LEAPS put page says so explicitly: if assigned,
+    hold the shares or move into a covered call, "the same CSP -> Wheel pattern".
     """
     if getattr(position, "assigned_strike", None):
         return False
     if position.status != "open":
         return False
-    if position.strategy_key in ("wheel", "cash_secured_put"):
+    if position.strategy_key in ("wheel", "cash_secured_put", "leaps_put"):
         return True
     # A credit spread she has stripped the long put off, on purpose, so the
     # short put can assign her. It is not a wheel by name and never will be by

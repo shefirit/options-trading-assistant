@@ -67,6 +67,13 @@ def validate_trade(
         r = rules.check_short_call_target_delta(trade, float(entry["short_call_delta"]))
         if r:
             results.append(r)
+    # A REFERENCE band, not a limit - the LEAPS put, whose page declines to fix a
+    # delta. Reported and never failed; see check_delta_reference.
+    if "delta_reference_min" in entry and "delta_reference_max" in entry:
+        r = rules.check_delta_reference(trade, float(entry["delta_reference_min"]),
+                                        float(entry["delta_reference_max"]))
+        if r:
+            results.append(r)
     if strategy.get("family") == "long_call" and "long_leg_delta_min" in entry:
         # Same floor as the PMCC's but a different message: here the risk being
         # guarded against is buying an out-of-the-money lottery ticket, not

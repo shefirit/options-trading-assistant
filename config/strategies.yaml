@@ -178,6 +178,63 @@ strategies:
     sizing:
       max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
 
+  # ---------------- LEAPS PUT (SELLING LEAPS) ----------------
+  # Her newest strategy, added to the SOP 2026-08-25 from the "Invest with Henry"
+  # video her page cites. Mechanically it is a Cash Secured Put stretched to a
+  # year or more: same sell-to-open, same assignment, same cash set aside. What
+  # changes is the clock, and with it the whole management style - one trade left
+  # alone for months, not a 30-45 day cycle closed at 50%.
+  #
+  # Do NOT confuse it with long_call_leaps below. That one BUYS a call and needs
+  # the stock to move; this one SELLS a put and is paid to wait.
+  #
+  # IMPORTANT - this page is deliberately looser than her other seven. Her own
+  # words on it: "treat the setup rules below as a starting framework to paper
+  # trade and tighten, not settled law." So the numbers here are scan TARGETS and
+  # reported references, not pass/fail rules:
+  #   - the delta is a target the scanner aims at, and a reference the checklist
+  #     comments on. There is NO short_leg_delta_max, because her page explicitly
+  #     declines to set one ("0.11 is just the one example he showed... treat
+  #     ~0.10-0.15 as a rough starting reference, not a hard rule").
+  #   - there is no profit target, no stop and no time exit, because her page
+  #     states none. The strategy is described as passive by design. Do not add
+  #     the CSP's 50% / 2x / 21-day block here to make it look complete - that
+  #     would be inventing rules she has not written.
+  leaps_put:
+    name: "LEAPS Put (Selling LEAPS)"
+    family: single_leg
+    market_outlook: "Neutral / Bullish"
+    difficulty: "Intermediate"
+    underlying_style: us
+    plain_english: "You SELL a put a year or more out on a company you would be glad to own, and set aside the cash to buy 100 shares at that strike. You collect a large premium up front and get paid to be patient. If it finishes above your strike you keep the lot; if not, you buy the shares at a price you already decided was good."
+    stock_criteria:
+      - "A real, growing business - revenue and net income rising quarter after quarter"
+      - "A company you would still want to own a year or two from now, not just today"
+      - "Not a hype or momentum chase"
+      - "Not an ultra-low-volatility name where the premium is too thin to justify locking up the cash"
+      - "Ideally after a run-up that has pulled back or gone sideways, with IV still elevated"
+    tos_hint: "Short put shows as -1 at an expiration a year or more out. Cash needed = strike x 100 per contract, and it stays tied up for the whole time."
+    notion_url: "https://app.notion.com/p/3c703e90e03281c1b79efdccad30baaf"
+    legs:
+      - role: short_put
+        action: sell
+        option_type: put
+    entry:
+      # The strike the scan aims at - deep out of the money. Her page's example
+      # sat at 0.11 delta, roughly half the stock price.
+      short_leg_delta_target: 0.12
+      # REPORTED, never enforced - see the note above. The checklist says where
+      # the delta landed against this band and leaves the judgement to her.
+      delta_reference_min: 0.10
+      delta_reference_max: 0.15
+      dte_min: 300                # her page: ~300-500+ days, a true LEAP
+      dte_max: 550
+      dte_target: 450             # the video's own example ran ~500 days
+    exit:
+      accepts_assignment: true    # no stop, no time exit, no profit target - deliberate, see above
+    sizing:
+      max_loss_basis: cash_secured   # strike * 100 * contracts (minus credit)
+
   # ---------------- LEAPS LONG CALL ----------------
   # The ONLY strategy in this book that is a pure directional BET. Every other
   # one sells premium and wins on time; this one BUYS premium and needs the

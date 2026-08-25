@@ -73,6 +73,12 @@ def _quick_log_form(settings, strategies, provider) -> None:
         # this the only box on offer was "credit price on your fill", and a
         # trade that cost her money could only be logged as one that paid her.
         is_bought = basis == "long_premium"
+        # How far out this strategy's expiration normally sits, so the date box
+        # opens near the right place. A LEAPS put is a year or more out like the
+        # bought call is, and defaulting it to 45 days just means retyping.
+        far_dated = int(strat.get("entry", {}).get("dte_min", 0)) >= 300
+        default_dte = (int(strat["entry"].get("dte_target", 400)) if far_dated
+                       else 400 if is_bought else 45)
         today = dt.date.today()
 
         with st.form("ql_form"):
@@ -85,7 +91,7 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 if not has_far_leg else "Short call expiration (the near one)",
                 # A LEAPS is a year or more out by definition, so opening its
                 # form on a 45-day default just means retyping the date.
-                value=today + dt.timedelta(days=400 if is_bought else 45),
+                value=today + dt.timedelta(days=default_dte),
                 min_value=today,
                 key=f"ql_exp_{strategy_key}", format=components.DATE_FMT)
             opened_on = d2.date_input(

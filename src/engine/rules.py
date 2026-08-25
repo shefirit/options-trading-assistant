@@ -206,6 +206,61 @@ def check_bought_call_delta(trade: Trade, min_delta: float) -> Optional[CheckRes
         message=message, expected=f">= {min_delta:.2f}", actual=f"{d:.3f}")
 
 
+def check_delta_reference(trade: Trade, lo: float, hi: float) -> Optional[CheckResult]:
+    """Where the sold put's delta landed against a REFERENCE band. Never fails.
+
+    This exists for the LEAPS put, and the distinction it draws is the whole
+    point of the check. Her other seven strategies name a delta their SOP
+    enforces; that page does not. Its own words: "0.11 is just the one example
+    he showed... treat ~0.10-0.15 as a rough starting reference for deep OTM on
+    this strategy, not a hard rule, and confirm your own target through paper
+    trading before going live."
+
+    So this reports the number and says which side of the reference it sits on.
+    It must never return FAIL, and there must be no short_leg_delta_max in the
+    leaps_put config for the ordinary delta rule to pick up - putting one there
+    would quietly convert her open question into a rule she never wrote.
+    """
+    puts = [l for l in trade.legs
+            if l.action == Action.SELL and l.option_type == OptionType.PUT]
+    if not puts:
+        return None
+    leg = max(puts, key=lambda l: l.abs_delta)
+    name = f"Delta near the {lo:.2f}-{hi:.2f} reference"
+
+    if delta_missing(leg):
+        return CheckResult(
+            name=name, status=CheckStatus.INFO,
+            message=(f"No delta came through for the {leg.strike:g} put you are selling. "
+                     f"Read it off the chain in thinkorswim - your page uses "
+                     f"{lo:.2f}-{hi:.2f} as a starting reference for how far out of the "
+                     "money to sell, not as a rule."),
+            expected=f"~{lo:.2f}-{hi:.2f}", actual="not available")
+
+    d = leg.abs_delta
+    inside = lo - 1e-9 <= d <= hi + 1e-9
+    if inside:
+        message = (f"The {leg.strike:g} put you are selling has delta {d:.3f} - inside the "
+                   f"{lo:.2f}-{hi:.2f} band your page suggests, so roughly a {d * 100:.0f}% "
+                   "chance of being assigned the shares.")
+    elif d > hi:
+        message = (f"The {leg.strike:g} put you are selling has delta {d:.3f}, above the "
+                   f"{lo:.2f}-{hi:.2f} reference - closer to the money, so more premium and "
+                   f"a higher chance (about {d * 100:.0f}%) of ending up owning the shares. "
+                   "Your page calls that band a starting reference rather than a rule, so "
+                   "this is yours to judge - just be sure you want the stock at that strike "
+                   "a year from now.")
+    else:
+        message = (f"The {leg.strike:g} put you are selling has delta {d:.3f}, below the "
+                   f"{lo:.2f}-{hi:.2f} reference - very deep out of the money. Safer, but "
+                   "check the premium is still worth locking up "
+                   f"${leg.strike * 100 * trade.contracts:,.0f} for the best part of a year.")
+
+    return CheckResult(
+        name=name, status=CheckStatus.PASS if inside else CheckStatus.INFO,
+        message=message, expected=f"~{lo:.2f}-{hi:.2f}", actual=f"{d:.3f}")
+
+
 def check_bought_call_spread(trade: Trade,
                              stale_reason: Optional[str] = None) -> Optional[CheckResult]:
     """What the round trip costs on a call she BUYS. Reported, never enforced.
