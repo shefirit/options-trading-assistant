@@ -522,3 +522,67 @@ def _financed_leaps_row(trade_id="20260821-142826-WFC"):
     return [opened.isoformat(), "WFC", LEAPS, "70 / 75", 0.28, 518, 1, 0.0,
             22740.0, 20625.0, "NO", "", trade_id, "open", expiry.isoformat(),
             "", "", json.dumps(details), "real"]
+
+
+# ---------- the card follows the TRADE, not the row number ----------
+# Streamlit remembers a table selection as a row number, and the open-trades
+# table re-sorts whenever something changes what needs doing first: a corrected
+# expiry, a price refresh, another trade closed. Rita corrected an NDX expiry,
+# the row moved, and the card - with its roll and CLOSE buttons - was showing a
+# different trade.
+def test_a_stale_row_number_still_shows_the_trade_she_was_on():
+    from ui.trades.open_trades import _follow_trade
+
+    # She was on B (row 1). A correction moved it to the top of the list, but
+    # the selection is still sitting on row 1, now C.
+    assert _follow_trade(["B", "A", "C"], raw=1, was_row=1, was_id="B") == 0
+
+
+def test_clicking_a_different_row_picks_that_trade():
+    from ui.trades.open_trades import _follow_trade
+
+    assert _follow_trade(["A", "B", "C"], raw=2, was_row=1, was_id="B") == 2
+
+
+def test_a_trade_that_has_left_the_list_falls_back_to_the_selected_row():
+    from ui.trades.open_trades import _follow_trade
+
+    assert _follow_trade(["A", "C"], raw=1, was_row=1, was_id="B") == 1
+
+
+def test_the_first_look_at_the_page_takes_the_selected_row():
+    from ui.trades.open_trades import _follow_trade
+
+    assert _follow_trade(["A", "B"], raw=0, was_row=None, was_id=None) == 0
+
+
+# ---------- taking back a close that never happened ----------
+def test_a_closed_trade_can_be_put_back_on_the_books(app_with_rows, monkeypatch):
+    """Rita closed a trade she had not closed - the card was showing a different
+    one - and her only way back was deleting the record and rebuilding it.
+
+    The panel appends a reopen row; nothing is deleted. This drives the real
+    widgets, because the guard (tick the box first) is half the feature.
+    """
+    written = {}
+
+    def fake_append(row, mirror=None):
+        written["row"] = row
+        return "local", False
+
+    from src.logging_tools import trade_logger
+    monkeypatch.setattr(trade_logger, "_append", fake_append)
+
+    at = app_with_rows(_closed_row()).run()
+    assert at.button(key="reopen_go").disabled, "the guard has to be ticked first"
+
+    at = at.checkbox(key="reopen_sure_20260801-101500-SPX").set_value(True).run()
+    at = at.button(key="reopen_go").click().run()
+
+    row = written["row"]
+    assert row[COLUMNS.index("Event")] == "reopen"
+    assert row[COLUMNS.index("Trade ID")] == "20260801-101500-SPX"
+    assert row[COLUMNS.index("Account")] == "real"
+    said = [m.value for m in at.success] + [m.value for m in at.markdown]
+    assert any("back in your open trades" in t for t in said)
+

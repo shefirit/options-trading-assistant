@@ -119,6 +119,78 @@ def _fix_close_form(closed: list, labels: list[str]) -> None:
             st.rerun()
 
 
+def _reopen_form(closed: list, labels: list[str]) -> None:
+    """Take back a close that never happened.
+
+    Closing is one primary button on a trade's card, and the card has not always
+    been showing the trade she thought it was: the open-trades table remembers a
+    row NUMBER, the list re-sorts whenever a correction or a price change moves
+    a trade up it, and the buttons underneath then belonged to whatever had
+    taken that row. She corrected an NDX expiry and the trade left her open
+    trades - the close had been recorded against it.
+
+    Until this existed the only way back was DELETE and re-log, which throws
+    away the trade's rolls, its history and its Trade ID to undo one click. This
+    appends instead, like every other correction here: the close row stays in
+    the sheet, the replay stops reading it, and the trade goes back on the books
+    exactly as it stood.
+
+    Top level, never nested inside another expander - two deep and it collapses
+    on every rerun - and keyed, so it stays open while she picks and ticks.
+    """
+    if not closed:
+        return
+    with st.expander("↩️ Put a trade back on the books (I never closed it)",
+                     key="reopen"):
+        theme.note("Closed the wrong trade, or recorded a close for one you have "
+                   "not actually closed yet? This puts it back in your open "
+                   "trades exactly as it was - same rolls, same credit, same "
+                   "history. Nothing is deleted: the app writes a row saying "
+                   "that close did not happen and stops counting it.")
+        p = _pick(closed, labels, "reopen_pick", "Which trade")
+        if p is None:
+            return
+
+        result = float(p.realized_total or 0.0)
+        st.caption(f"{p.underlying} · {p.strategy_name} · closed "
+                   f"{components.fmt_date(p.closed_on)}"
+                   + (f" · {p.exit_reason}" if p.exit_reason else ""))
+        theme.note(f"Putting it back removes **{money(result)}** from your "
+                   f"results and returns it to your open trades, where the app "
+                   f"will price it and watch your exit rules again.")
+        why = st.text_input("What happened (optional)", key=f"reopen_why_{p.trade_id}",
+                            placeholder="e.g. recorded the close on the wrong trade")
+        sure = st.checkbox(f"Yes - {p.underlying} is still open in thinkorswim",
+                           key=f"reopen_sure_{p.trade_id}")
+
+        if st.button("Put it back on the books", type="primary", key="reopen_go",
+                     disabled=not sure):
+            from src.logging_tools.trade_logger import reopen_trade
+            try:
+                _dest, live = reopen_trade(
+                    p.trade_id, p.underlying, p.strategy_name,
+                    note=why.strip(), account=p.account)
+            except Exception as e:
+                st.error(f"Could not put it back: {e}")
+                return
+            st.session_state.pop("trades_rows", None)
+            # The open set has changed, so the pricing pass has to run again -
+            # without this the trade would be back in the list with no price
+            # and no signal until the next three-minute refresh.
+            st.session_state.pop("_priced_positions", None)
+            for k in ("reopen", f"reopen_why_{p.trade_id}",
+                      f"reopen_sure_{p.trade_id}"):
+                st.session_state.pop(k, None)
+            # It is the trade she cares about right now, so it is the one the
+            # card up the page opens on.
+            st.session_state["open_card_id"] = p.trade_id
+            st.session_state["ql_flash"] = (
+                f"↩️ {p.underlying} is back in your open trades - the close is "
+                f"no longer counted. Saved to "
+                f"{'your Google Sheet' if live else 'the local log'}.")
+            st.rerun()
+
+
 def _is_sold_put(leg) -> bool:
     return leg.action.value == "sell" and leg.option_type.value == "put"
 
@@ -445,15 +517,22 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
             try:
                 dest, live = edit_trade(
                     p.trade_id, p.underlying, p.strategy_name, changes,
-                    summary=(why.strip() or "; ".join(bits))[:250])
+                    summary=(why.strip() or "; ".join(bits))[:250],
+                    account=p.account)
             except Exception as e:
                 st.error(f"Could not save the correction: {e}")
                 return
             st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
             for k in list(st.session_state):
                 if k.startswith("ed_") and k.endswith(p.trade_id):
                     st.session_state.pop(k, None)
             st.session_state.pop("fix_details", None)
+            # Correcting an expiry or a credit re-sorts the open-trades table
+            # (urgency first, then days left), and the card up the page follows
+            # the TRADE rather than the row number - so name the trade she just
+            # corrected and it is still the one on screen when she scrolls up.
+            st.session_state["open_card_id"] = p.trade_id
             st.session_state["ql_flash"] = (
                 f"✏️ {p.underlying} corrected: {'; '.join(bits) or 'note updated'}. "
                 f"Saved to {'your Google Sheet' if live else 'the local log'}.")
@@ -544,7 +623,7 @@ def _edit_roll_form(rollable: list, labels: list[str]) -> None:
                 _dest, live = edit_trade(
                     p.trade_id, p.underlying, p.strategy_name, changes,
                     summary=f"Roll {which + 1}: " + "; ".join(bits),
-                    target="roll", roll_index=r.seq)
+                    target="roll", roll_index=r.seq, account=p.account)
             except Exception as e:
                 st.error(f"Could not save the correction: {e}")
                 return
@@ -673,7 +752,9 @@ def _records_section(settings, strategies, provider, closed, legacy, bp_used,
     _story_panel(open_pos, closed)
 
     if fixable:
-        _fix_close_form(fixable, [_closed_label(p) for p in fixable])
+        closed_labels = [_closed_label(p) for p in fixable]
+        _fix_close_form(fixable, closed_labels)
+        _reopen_form(fixable, closed_labels)
 
     # Open trades first: a mistyped detail is usually caught while the trade is
     # still on the books, and correcting it there fixes what the open-trade

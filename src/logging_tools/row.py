@@ -8,7 +8,9 @@ Since the "My trades" tracker was added, the log is an EVENT log:
     trade stays open - selling the long put of a credit spread and leaving the
     short put to be assigned
   - a "close" row (same Trade ID) when it is closed in the app
-Open positions = open rows that have no matching close row yet.
+  - a "reopen" row (same Trade ID) when a close is taken back - it was recorded
+    on the wrong trade, or on one she has not actually closed yet
+Open positions = open rows whose last close-or-reopen row is not a close.
 
 Every event carries SIGNED cash (+ collected, - paid) so the debit strategies
 add up: a PMCC pays money out at open and takes it back in at close, which the
@@ -211,6 +213,7 @@ def build_edit_row(
     edited_on: Optional[date] = None,
     target: str = "open",
     roll_index: Optional[int] = None,
+    account: str = "",
 ) -> list[Any]:
     """The "edit" event row - a correction to details typed wrong earlier.
 
@@ -256,7 +259,51 @@ def build_edit_row(
         "",                           # Exit Cost $ - not a close
         "",                           # Realized P&L $ - no money moved
         json.dumps(payload, separators=(",", ":")),
-        "",                           # Account - carried inside changes
+        # The trade's own book. This cell is what the Apps Script routes on, so
+        # a blank one sent every correction to the Practice tab - including
+        # corrections to real-money trades. The app read them anyway (an edit
+        # finds its trade by Trade ID, whichever tab it sits in), but her sheet
+        # said a real trade had been corrected in the practice book.
+        _account(account),
+    ]
+
+
+def build_reopen_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    note: str = "",
+    reopened_on: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "reopen" event row - that close never happened.
+
+    Closing is one primary button on a card, and the card can be showing a
+    different trade from the one she means (see ui/trades/open_trades.py). Until
+    this existed the only way back from a close recorded on the wrong trade was
+    to DELETE the trade and rebuild it by hand - throwing away its rolls and its
+    history to undo a single click.
+
+    So a close can be taken back the same way everything else here is corrected:
+    by appending, never by rewriting. The replay reads closes and reopens in the
+    order they were written and the last word wins, so this puts the trade back
+    exactly as it stood - same Trade ID, same legs, same rolls - and its result
+    stops counting in the month. Close it again later and the close wins again.
+    """
+    return [
+        (reopened_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        "", "", "", "", "", "", "",   # strikes/delta/dte/contracts/money - unchanged
+        "",
+        note or "Reopened - that close was recorded by mistake",
+        trade_id,
+        "reopen",
+        "",                           # Expiration - the trade keeps its own
+        "",                           # Exit Cost $ - nothing was paid
+        "",                           # Realized P&L $ - and nothing was banked
+        "",                           # Details JSON - nothing to re-price
+        _account(account),
     ]
 
 

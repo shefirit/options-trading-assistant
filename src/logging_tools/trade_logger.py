@@ -12,7 +12,8 @@ from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import (COLUMNS, build_assign_row, build_close_row,
                                    build_edit_row, build_leg_close_row,
-                                   build_roll_row, build_row, new_trade_id)
+                                   build_reopen_row, build_roll_row, build_row,
+                                   new_trade_id)
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -175,6 +176,7 @@ def edit_trade(
     edited_on: Optional[date] = None,
     target: str = "open",
     roll_index: Optional[int] = None,
+    account: str = "",
 ) -> tuple[str, bool]:
     """Correct details typed wrong when the trade was logged.
 
@@ -188,7 +190,29 @@ def edit_trade(
         return "", False
     row = build_edit_row(trade_id, underlying, strategy_name, changes,
                          summary=summary, edited_on=edited_on,
-                         target=target, roll_index=roll_index)
+                         target=target, roll_index=roll_index, account=account)
+    return _append(row)
+
+
+def reopen_trade(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    note: str = "",
+    reopened_on: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Take back a close that never happened (a "reopen" event on the same
+    Trade ID). The trade goes back into the open trades exactly as it stood,
+    and its result stops counting. Returns (destination, went_to_sheet).
+
+    Appended, not deleted, like every other correction here: the close row
+    stays in the sheet as history and the replay simply stops reading it.
+    """
+    if not trade_id:
+        return "", False
+    row = build_reopen_row(trade_id, underlying, strategy_name, note=note,
+                           reopened_on=reopened_on, account=account)
     return _append(row)
 
 
