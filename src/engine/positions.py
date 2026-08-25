@@ -812,6 +812,15 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             )))
             continue
 
+        # Everything above is an event ON a trade; what is left should be the
+        # "open" row that STARTS one (or a legacy row, which names no event at
+        # all). An event this version does not know is skipped rather than read
+        # as an opening: a newer version of the app writing a new kind of row
+        # into the same sheet would otherwise show up here as a phantom open
+        # trade with no strikes and no credit, on the Trade ID of a real one.
+        if event and event != "open" and trade_id:
+            continue
+
         data, legs = _parse_details(_get(row, idx, "Details JSON", 17))
         credit = _to_float(_get(row, idx, "Credit $", 7)) or 0.0
         open_cash = _to_float(data.get("open_cash"))

@@ -818,3 +818,16 @@ def test_a_correction_is_filed_in_the_trades_own_book():
     assert edit[COLUMNS.index("Account")] == "real"
     # And it still applies to the trade, whichever tab it was read from.
     assert parse_rows(COLUMNS, [_opened(), edit])[0].contracts == 2
+
+
+def test_an_event_this_version_does_not_know_is_not_read_as_a_new_trade():
+    """The rows fall through to "this opens a trade" once nothing else matches,
+    so an event added by a newer version - written into the same sheet - used to
+    surface as a phantom open trade carrying a real trade's ID."""
+    future = list(_opened("E1"))
+    future[COLUMNS.index("Event")] = "something_new"
+    future[COLUMNS.index("Notes")] = "written by a later version"
+    positions = parse_rows(COLUMNS, [_opened("E1"), future])
+    assert len(positions) == 1
+    assert positions[0].note == "first note"
+
