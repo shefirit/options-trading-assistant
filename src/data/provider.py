@@ -59,6 +59,21 @@ _DEMO_FILES = {
 }
 
 
+def _worth_keeping(info: dict) -> bool:
+    """Is this company-info answer worth holding for the full hour?
+
+    Yes if it carries real numbers, and yes if the feed at least said outright
+    what the security is - an index has no economics to give and that is not a
+    failure. Everything else is a throttled blank, and a blank cached for an
+    hour is what made two perfectly ordinary mid-caps look broken all morning
+    while the same names loaded fine a minute later.
+    """
+    if not info:
+        return False
+    return (stock_analysis.has_economics(info)
+            or bool(info.get("quoteType") or info.get("typeDisp")))
+
+
 class DataProvider:
     def __init__(self, mode: str, client: Optional[SchwabClient] = None):
         self.mode = mode                 # "schwab" | "yahoo" | "demo"
@@ -334,6 +349,46 @@ class DataProvider:
             cache.clear(f"screen:{cache_key}")   # a throttled download must not stick for 6h
         return out
 
+    # ---------- company info: ONE fetch per name, shared by every panel ----------
+    def _av_overview(self, symbol: str) -> dict:
+        """Alpha Vantage's company snapshot, cached for a day.
+
+        One request per name serves BOTH the fundamentals fallback and the
+        analyst tally, which matters - the free key allows 25 requests a day.
+        """
+        from src.data import alphavantage_client as av
+        if not av.is_configured():
+            return {}
+        return cache.get_or_fetch(f"avinfo:{symbol}", lambda: av.get_overview(symbol),
+                                  86_400, keep=bool)
+
+    def _company_info(self, symbol: str) -> dict:
+        """The company-info dict for `symbol` - Yahoo, falling back to Alpha Vantage.
+
+        Every company panel reads this one: the stats strip, the A-F grade, the
+        fundamentals checks, the price calculator. They used to fetch it
+        SEPARATELY - one copy behind `analysis:SYM`, another behind `info:SYM` -
+        which doubled the load on the single Yahoo endpoint that throttles, and
+        let the two copies disagree on screen. Rita's ACIW showed "Mkt Cap n/a"
+        in the strip and $5.3B in the checks directly below it, from two calls
+        made seconds apart.
+
+        Yahoo blocks this endpoint from datacenter IPs often enough that the
+        hosted app needs a second source, so when nothing usable comes back we
+        ask Alpha Vantage, whose plain keyed API answers from the cloud exactly
+        as it does from her laptop. Anything Yahoo DID send still wins on the
+        merge - it is the fresher of the two.
+        """
+        symbol = symbol.upper()
+
+        def _fetch() -> dict:
+            info = yfinance_client.get_fundamentals(symbol) if self.mode == "yahoo" else {}
+            if stock_analysis.has_economics(info):
+                return info
+            return {**self._av_overview(symbol), **info}
+
+        return cache.get_or_fetch(f"info:{symbol}", _fetch, 3600, keep=_worth_keeping)
+
     # ---------- per-stock fundamental + technical analysis ----------
     def get_stock_analysis(self, symbol: str) -> Optional[StockAnalysis]:
         """Only meaningful with real data (Yahoo). Returns None in demo mode."""
@@ -342,7 +397,7 @@ class DataProvider:
             return None
 
         def _fetch() -> StockAnalysis:
-            info = yfinance_client.get_fundamentals(symbol)
+            info = self._company_info(symbol)
             closes = yfinance_client.get_history_closes(symbol, period="1y")
             # On the hosted app Yahoo often drops the info volume fields; recover
             # them from price history so liquid names aren't wrongly flagged.
@@ -351,7 +406,12 @@ class DataProvider:
                 avg_vol = yfinance_client.get_avg_volume(symbol)
             return stock_analysis.analyze(symbol, info, closes, avg_volume=avg_vol)
 
-        return cache.get_or_fetch(f"analysis:{symbol}", _fetch, 300)
+        # A verdict built on numbers that never arrived is held for seconds, not
+        # minutes: she reads this panel to decide what to sell options on, and
+        # "not enough loaded to grade it" should clear itself on a refresh.
+        return cache.get_or_fetch(
+            f"analysis:{symbol}", _fetch, 300,
+            keep=lambda a: a is not None and not a.data_partial and a.kind != "unknown")
 
     # ---------- upcoming events ----------
     def get_macro_events(self, trade_dte: Optional[int] = None):
@@ -369,15 +429,16 @@ class DataProvider:
         """Earnings/ex-div dates + analyst EPS/revenue estimates - real data only."""
         if self.mode == "yahoo":
             return cache.get_or_fetch(f"earn:{symbol}",
-                                      lambda: yfinance_client.get_earnings_info(symbol), 3600)
+                                      lambda: yfinance_client.get_earnings_info(symbol),
+                                      3600, keep=bool)
         return {}
 
     def get_raw_info(self, symbol: str) -> dict:
-        """Raw Yahoo fundamentals dict (for the key-stats strip)."""
+        """The company-info dict behind the key-stats strip - the SAME fetch the
+        grade and the fundamentals checks read, so they can never disagree."""
         if self.mode != "yahoo":
             return {}
-        return cache.get_or_fetch(f"info:{symbol}",
-                                  lambda: yfinance_client.get_fundamentals(symbol), 3600)
+        return self._company_info(symbol)
 
     def get_price_change(self, symbol: str):
         """(price, today's % change) for one symbol."""
@@ -387,11 +448,25 @@ class DataProvider:
         return (None, None)
 
     def get_analyst_ratings(self, symbol: str) -> dict:
-        """Wall Street buy/hold/sell counts - real data only."""
+        """Wall Street buy/hold/sell counts - real data only.
+
+        Yahoo first, Alpha Vantage's tally behind it. This is the other endpoint
+        the hosted app cannot reach: "No analyst data available for this name"
+        showed on stocks with a dozen analysts covering them, and being empty it
+        then sat in the cache for an hour looking like a fact about the company.
+        """
         if self.mode != "yahoo":
             return {}
-        return cache.get_or_fetch(f"analysts:{symbol}",
-                                  lambda: yfinance_client.get_analyst_ratings(symbol), 3600)
+        symbol = symbol.upper()
+
+        def _fetch() -> dict:
+            out = yfinance_client.get_analyst_ratings(symbol)
+            if any(out.values()):
+                return out
+            return self._av_overview(symbol).get("analystRatings") or {}
+
+        return cache.get_or_fetch(f"analysts:{symbol}", _fetch, 3600,
+                                  keep=lambda r: any((r or {}).values()))
 
     def get_eps_history(self, symbol: str) -> list:
         """Past quarters of expected-vs-delivered earnings.
@@ -707,7 +782,7 @@ class DataProvider:
             earnings, _ = yfinance_client.get_calendar_dates(symbol)
             grade = None
             if config_loader.underlying_kind(symbol) == "stock":   # ETFs have no meaningful grade
-                info = yfinance_client.get_fundamentals(symbol)
+                info = self._company_info(symbol)
                 avg_vol = None
                 if not (info.get("averageVolume") or info.get("averageDailyVolume10Day")):
                     avg_vol = yfinance_client.get_avg_volume(symbol)

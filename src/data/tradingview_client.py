@@ -17,6 +17,10 @@ _EXCHANGE_MAP = {
     "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NAS": "NASDAQ",
     "NYQ": "NYSE", "NYS": "NYSE",
     "PCX": "AMEX", "ASE": "AMEX", "AMX": "AMEX",
+    # Alpha Vantage names the exchange outright, and it is the source behind the
+    # company info whenever Yahoo has refused us - so pass those through too,
+    # otherwise an NYSE name gets tried against NASDAQ first for no reason.
+    "NASDAQ": "NASDAQ", "NYSE": "NYSE", "AMEX": "AMEX",
 }
 # If we cannot tell, try the big ones in turn.
 _FALLBACK_EXCHANGES = ["NASDAQ", "NYSE", "AMEX"]
