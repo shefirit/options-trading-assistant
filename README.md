@@ -195,6 +195,10 @@ tried automatically if present - see `src/logging_tools/sheets_logger.py`.)*
    over to the assignment: what the shares will cost, the cash to have ready, and the wheel
    afterwards. It all stays one trade, so the premium already collected keeps counting
    towards your cost basis.
+8. Recorded a close on the wrong trade? **Correct and look back** at the bottom of the tab
+   has **↩️ Put a trade back on the books** - it goes back into your open trades exactly as
+   it was, rolls and all, and its result stops counting. Nothing is ever deleted from your
+   log; corrections are new rows, and the app reads the latest one.
 
 Any word you do not know is in the **📖 glossary** above the tab bar.
 

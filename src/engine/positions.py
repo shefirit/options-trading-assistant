@@ -5,6 +5,8 @@ The log is an event log, keyed by Trade ID:
   - an "open" row when a trade is logged
   - zero or more "roll" rows when the income leg (the short call) is rolled
   - a "close" row when it is closed in the app
+  - a "reopen" row when a close is taken back - recorded on the wrong trade, or
+    on one she had not actually closed yet
 
 Money is tracked as a signed CASH LEDGER, because the eight strategies come in
 two opposite shapes and the old credit-in/cost-out model only fitted one:
@@ -734,7 +736,11 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     roll_seq: dict[str, int] = {}
     assigns: list[tuple[str, dict[str, Any]]] = []
     leg_closes: list[tuple[str, LegCloseEvent]] = []
-    closes: list[dict[str, Any]] = []
+    # Closes AND reopens, in the order they were written. A close ends the
+    # trade, a reopen after it says that close never happened, and a close
+    # after that ends it again - the last word wins, exactly as a corrected
+    # close already supersedes the figure before it.
+    endings: list[dict[str, Any]] = []
     edits: list[tuple[str, dict[str, Any]]] = []
 
     for row in rows:
@@ -752,7 +758,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             if close_cash is None and exit_cost is not None:
                 # Rows written before the ledger: closing only ever cost money.
                 close_cash = -exit_cost
-            closes.append({
+            endings.append({
+                "kind": "close",
                 "trade_id": trade_id,
                 "closed_on": _to_date(_get(row, idx, "Date", 0)),
                 "exit_cost": exit_cost,
@@ -760,6 +767,10 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 "realized_pl": _to_float(_get(row, idx, "Realized P&L $", 16)),
                 "reason": str(_get(row, idx, "Notes", 11) or ""),
             })
+            continue
+
+        if event == "reopen" and trade_id:
+            endings.append({"kind": "reopen", "trade_id": trade_id})
             continue
 
         if event == "assign" and trade_id:
@@ -799,6 +810,15 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 new_credit=_to_float(_get(row, idx, "Credit $", 7)) or 0.0,
                 note=str(_get(row, idx, "Notes", 11) or ""),
             )))
+            continue
+
+        # Everything above is an event ON a trade; what is left should be the
+        # "open" row that STARTS one (or a legacy row, which names no event at
+        # all). An event this version does not know is skipped rather than read
+        # as an opening: a newer version of the app writing a new kind of row
+        # into the same sheet would otherwise show up here as a phantom open
+        # trade with no strikes and no credit, on the Trade ID of a real one.
+        if event and event != "open" and trade_id:
             continue
 
         data, legs = _parse_details(_get(row, idx, "Details JSON", 17))
@@ -880,16 +900,27 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if pos is not None:
             _apply_roll(pos, roll)
 
-    for c in closes:
-        pos = opens.get(c["trade_id"])
+    for ev in endings:
+        pos = opens.get(ev["trade_id"])
         if pos is None:
             continue
+        if ev["kind"] == "reopen":
+            # She never closed it. Back to exactly how it stood - same legs,
+            # same rolls, same Trade ID - with the recorded result cleared, so
+            # money she never banked stops counting in the month.
+            pos.status = "open"
+            pos.closed_on = None
+            pos.exit_cost = None
+            pos.close_cash = None
+            pos.realized_pl = None
+            pos.exit_reason = ""
+            continue
         pos.status = "closed"
-        pos.closed_on = c["closed_on"]
-        pos.exit_cost = c["exit_cost"]
-        pos.close_cash = c["close_cash"]
-        pos.realized_pl = c["realized_pl"]
-        pos.exit_reason = c["reason"]
+        pos.closed_on = ev["closed_on"]
+        pos.exit_cost = ev["exit_cost"]
+        pos.close_cash = ev["close_cash"]
+        pos.realized_pl = ev["realized_pl"]
+        pos.exit_reason = ev["reason"]
 
     return ordered
 

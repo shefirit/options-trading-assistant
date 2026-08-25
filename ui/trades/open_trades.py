@@ -71,17 +71,61 @@ def _open_section(items, strategies, provider, priced_at) -> None:
         on_select="rerun", selection_mode="single-row-required",
         column_config=components.positions_column_config())
 
-    picked = 0
-    rows = getattr(getattr(event, "selection", None), "rows", None) or []
-    if rows and rows[0] < len(ordered):
-        picked = rows[0]
+    picked, moved = _card_index(ordered, event)
 
     theme.note(
         "**Click any row** to open that trade below - what it is doing, and the "
         "buttons to roll, close or record an assignment. The list is sorted so "
         "whatever needs a decision today is at the top and already open.")
+    if moved:
+        st.info(f"Showing **{ordered[picked]['position'].underlying}** - the one "
+                "you had open. It has moved in the list above (the order follows "
+                "what needs doing first), so the highlighted row is somewhere "
+                "else now. Click any row to switch.")
     st.write("")
     _trade_card(ordered[picked], strategies, provider)
+
+
+def _card_index(ordered, event) -> tuple[int, bool]:
+    """Which trade the card below belongs to - by TRADE, not by row number.
+
+    Streamlit remembers a table selection as a row NUMBER, and this table is
+    sorted by what needs doing first and then by days left. So anything that
+    re-sorts it moves a trade out from under that number while the number stays
+    put: correcting an expiry (which is exactly how Rita lost an NDX trade she
+    had just fixed), a three-minute price refresh changing a signal, or another
+    trade being closed. The card then silently showed a different trade - and
+    the roll, assign and CLOSE buttons on it belonged to that one.
+
+    So the trade she picked is remembered by Trade ID. A row number that has not
+    changed since the last run means she has not clicked anything, and the ID
+    wins; a row number that HAS changed is a fresh choice, and it wins instead.
+
+    Returns (index into `ordered`, whether the highlighted row and the card have
+    come apart) - the caller says so on screen rather than leaving the table
+    pointing one way and the card another.
+    """
+    rows = getattr(getattr(event, "selection", None), "rows", None) or []
+    raw = rows[0] if rows and rows[0] < len(ordered) else 0
+    ids = [it["position"].trade_id for it in ordered]
+    picked = _follow_trade(ids, raw,
+                           st.session_state.get("open_card_row"),
+                           st.session_state.get("open_card_id"))
+    st.session_state["open_card_row"] = raw
+    st.session_state["open_card_id"] = ids[picked] if ids else None
+    return picked, picked != raw
+
+
+def _follow_trade(ids: list, raw: int, was_row, was_id) -> int:
+    """The row the card should show: the remembered TRADE where the row number
+    is stale, the clicked row where it is not.
+
+    Kept apart from session state so the rule itself can be tested - it is the
+    whole of the fix, and it is three lines that are easy to get backwards.
+    """
+    if raw == was_row and was_id in ids:
+        return ids.index(was_id)
+    return raw
 
 
 def _trade_card(it: dict, strategies, provider) -> None:

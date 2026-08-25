@@ -22,7 +22,7 @@ from src.engine.positions import (
     strike_cushion,
 )
 from src.logging_tools.row import (COLUMNS, build_close_row, build_edit_row,
-                                   build_row)
+                                   build_reopen_row, build_row)
 
 
 def _trade() -> Trade:
@@ -735,3 +735,99 @@ def test_correcting_a_pmcc_leaps_cost_scales_with_the_contracts():
                               old_shares_cost=0.0, old_contracts=1)
     assert fresh["open_cash"] == pytest.approx(-18000.0)
     assert fresh["buying_power"] == pytest.approx(18000.0)
+
+
+# ---------- taking back a close that never happened (the "reopen" event) ----------
+def test_a_reopen_puts_the_trade_back_on_the_books():
+    """Her actual complaint: a close landed on a trade she had not closed, and
+    it left her open trades with no way back but deleting the whole record."""
+    closed = build_close_row("E1", "SPX", "Put Credit Spread", 100.0, 200.0,
+                             "Profit target (50%) hit")
+    back = build_reopen_row("E1", "SPX", "Put Credit Spread")
+    p = parse_rows(COLUMNS, [_opened(), closed, back])[0]
+    assert p.status == "open"
+    assert open_positions([p]) == [p]
+    assert closed_positions([p]) == []
+
+
+def test_a_reopen_stops_the_close_counting_as_a_result():
+    """Money she never banked must leave the month with the close."""
+    closed = build_close_row("E1", "SPX", "Put Credit Spread", 100.0, 200.0,
+                             "Profit target (50%) hit")
+    back = build_reopen_row("E1", "SPX", "Put Credit Spread")
+    p = parse_rows(COLUMNS, [_opened(), closed, back])[0]
+    assert p.realized_pl is None
+    assert p.closed_on is None
+    assert p.exit_cost is None
+    assert p.close_cash is None
+    assert p.exit_reason == ""
+
+
+def test_a_reopen_keeps_the_rolls_and_the_corrections():
+    """Back exactly as it stood - that is the whole point of not deleting it."""
+    from src.logging_tools.row import build_roll_row
+
+    rolled = build_roll_row("E1", "SPX", "Put Credit Spread", 90.0,
+                            new_strike=7100.0, new_credit=140.0)
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 2})
+    closed = build_close_row("E1", "SPX", "Put Credit Spread", 100.0, 200.0, "50%")
+    back = build_reopen_row("E1", "SPX", "Put Credit Spread")
+    p = parse_rows(COLUMNS, [_opened(), rolled, edit, closed, back])[0]
+    assert p.status == "open"
+    assert p.contracts == 2
+    assert p.roll_income == 90.0
+    assert len(p.rolls) == 1
+
+
+def test_closing_again_after_a_reopen_closes_it_again():
+    """Last word wins, the same way a corrected close supersedes the first."""
+    first = build_close_row("E1", "SPX", "Put Credit Spread", 100.0, 200.0, "50%")
+    back = build_reopen_row("E1", "SPX", "Put Credit Spread")
+    again = build_close_row("E1", "SPX", "Put Credit Spread", 150.0, 150.0,
+                            "21 DTE time exit")
+    p = parse_rows(COLUMNS, [_opened(), first, back, again])[0]
+    assert p.status == "closed"
+    assert p.realized_pl == 150.0
+    assert p.exit_reason == "21 DTE time exit"
+
+
+def test_a_reopen_for_an_unknown_trade_is_ignored():
+    back = build_reopen_row("GHOST", "SPX", "Put Credit Spread")
+    positions = parse_rows(COLUMNS, [_opened(), back])
+    assert len(positions) == 1
+    assert positions[0].status == "open"
+
+
+def test_a_reopen_row_reads_as_itself_in_the_sheet():
+    back = build_reopen_row("E1", "SPX", "Put Credit Spread", account="real")
+    assert back[COLUMNS.index("Event")] == "reopen"
+    assert back[COLUMNS.index("Trade ID")] == "E1"
+    assert back[COLUMNS.index("Realized P&L $")] == ""
+    assert back[COLUMNS.index("Exit Cost $")] == ""
+    # The Apps Script files a row by this cell, so a real trade's reopen has to
+    # land in the real book rather than in the practice tab.
+    assert back[COLUMNS.index("Account")] == "real"
+
+
+def test_a_correction_is_filed_in_the_trades_own_book():
+    """The sheet routes a row to its tab by the Account cell. Blank meant every
+    correction - to a real trade as much as a practice one - was filed in the
+    practice book."""
+    edit = build_edit_row("E1", "SPX", "Put Credit Spread", {"contracts": 2},
+                          account="real")
+    assert edit[COLUMNS.index("Account")] == "real"
+    # And it still applies to the trade, whichever tab it was read from.
+    assert parse_rows(COLUMNS, [_opened(), edit])[0].contracts == 2
+
+
+def test_an_event_this_version_does_not_know_is_not_read_as_a_new_trade():
+    """The rows fall through to "this opens a trade" once nothing else matches,
+    so an event added by a newer version - written into the same sheet - used to
+    surface as a phantom open trade carrying a real trade's ID."""
+    future = list(_opened("E1"))
+    future[COLUMNS.index("Event")] = "something_new"
+    future[COLUMNS.index("Notes")] = "written by a later version"
+    positions = parse_rows(COLUMNS, [_opened("E1"), future])
+    assert len(positions) == 1
+    assert positions[0].note == "first note"
+
