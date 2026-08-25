@@ -2268,6 +2268,7 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
              "also have positions the app doesn't know about.")
     is_pmcc = strat.get("family") == "diagonal"
     is_long_call = strat.get("family") == "long_call"
+    is_leaps_put = key == "leaps_put"
     want_financing_put = False
     put_ratio = 1
     if is_long_call:
@@ -2305,6 +2306,22 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
                     "the collateral - on a $300 stock that is over $50,000, your whole "
                     "monthly buying power, for one trade. Check the buying-power line on "
                     "every setup before you like the look of the cheaper debit.")
+    elif is_leaps_put:
+        lo, hi = strat["entry"]["dte_min"], strat["entry"]["dte_max"]
+        ref_lo = strat["entry"]["delta_reference_min"]
+        ref_hi = strat["entry"]["delta_reference_max"]
+        theme.note(
+            f"Shows one setup per expiration listed between **{lo} and {hi} days out** - "
+            f"usually two or three, since strikes that far ahead only exist a few times a "
+            f"year - each aimed deep out of the money near **{ref_lo:.2f}-{ref_hi:.2f} "
+            "delta**. This is a Cash Secured Put stretched to a year or more: you collect the "
+            "premium up front, the cash for 100 shares is tied up the whole time, and there is "
+            "no 50% target or 21-day exit to manage - your page calls it passive by design.")
+        theme.note(
+            "⚠️ Your page is deliberately **looser** than your other seven. It calls the delta "
+            f"band a starting reference, not a rule, so the app **reports** where the delta "
+            "lands and never fails a setup on it. Paper trade it and tighten the numbers "
+            "yourself before this goes live.")
     else:
         theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
                    "each at the delta your SOP calls for."
@@ -2367,6 +2384,11 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
             elif is_pmcc:
                 st.info("No setups found. PMCC needs long-dated LEAPS, which some names lack "
                         "(and demo mode has none). Try a large, liquid stock on real data.")
+            elif is_leaps_put:
+                st.info("No setups found. A LEAPS put needs put strikes listed a year or more "
+                        "out, and plenty of names have none that far (demo mode has none at "
+                        "all). Try a large, liquid stock on real data - and check the "
+                        "expiration exists in thinkorswim before you go looking again.")
             else:
                 st.info("No setups found for these names right now.")
         else:

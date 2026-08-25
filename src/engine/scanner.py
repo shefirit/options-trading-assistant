@@ -21,6 +21,10 @@ SCANNABLE_FAMILIES = {"credit_spread", "single_leg"}
 # Families the focused scan_setups() supports - adds covered calls and PMCC.
 SETUP_FAMILIES = SCANNABLE_FAMILIES | {"covered_call", "diagonal", "long_call"}
 
+# The strategies that enter as ONE short put. Same scan, different clocks: the
+# CSP and the Wheel sell 30-45 days out, the LEAPS put a year or more.
+SHORT_PUT_STRATEGIES = {"cash_secured_put", "wheel", "leaps_put"}
+
 # Ignore far-out strikes that are almost worthless (avoids junk candidates).
 MIN_SHORT_DELTA = 0.03
 
@@ -32,6 +36,7 @@ DELTA_NEAR_MISS = 0.03
 def can_scan(strategy_key: str) -> bool:
     """True if the 'Find setups for me' scan supports this strategy."""
     return get_strategy(strategy_key).get("family") in SETUP_FAMILIES
+
 
 
 def _auto_width(underlying_price: float, symbol: Optional[str] = None) -> float:
@@ -237,11 +242,17 @@ def _scan_cash_secured_put(
     chain: OptionChain, contracts: int, max_candidates: int, target_dte: Optional[int] = None,
     strategy_key: str = "cash_secured_put",
 ) -> list[Candidate]:
-    """Also serves the Wheel - its entry is the same single short put, and only
-    the exit rules differ (see the wheel block in strategies.yaml)."""
+    """Also serves the Wheel and the LEAPS put - all three enter as one short
+    put, and what differs is the clock and the exit rules (see their blocks in
+    strategies.yaml).
+
+    The LEAPS put has no delta LIMIT: her page declines to set one, so the band
+    below comes from its scan target instead and nothing is failed on delta.
+    """
     strategy = get_strategy(strategy_key)
     entry = strategy["entry"]
-    limit = float(entry["short_leg_delta_max"])   # ~0.30 for CSP
+    hard_limit = entry.get("short_leg_delta_max")
+    limit = float(hard_limit) if hard_limit is not None else _target_short_delta(strategy)
     dte = _resolve_dte(chain, entry, target_dte)
     if dte is None:
         return []
@@ -254,7 +265,8 @@ def _scan_cash_secured_put(
             underlying_price=chain.underlying_price,
             legs=[_leg("short_put", Action.SELL, put)],
         )
-        cand = _make_candidate(trade, strategy, delta_limit=limit)
+        cand = _make_candidate(trade, strategy,
+                               delta_limit=float(hard_limit) if hard_limit is not None else None)
         if cand:
             out.append(cand)
     return _rank(out, max_candidates)
@@ -288,7 +300,7 @@ def scan(
         return _scan_vertical(chain, strategy_key, OptionType.CALL, w, contracts, max_candidates, target_dte)
     if strategy_key == "iron_condor":
         return _scan_iron_condor(chain, w, contracts, max_candidates, target_dte)
-    if strategy_key in ("cash_secured_put", "wheel"):
+    if strategy_key in SHORT_PUT_STRATEGIES:
         return _scan_cash_secured_put(chain, contracts, max_candidates, target_dte,
                                       strategy_key=strategy_key)
     raise ValueError(f"No scanner wired up for '{strategy_key}'.")
@@ -300,8 +312,16 @@ def scan(
 #  the "Find setups for me" button uses - a short, decision-ready list.
 # ------------------------------------------------------------------
 def _target_short_delta(strategy: dict) -> float:
-    """The delta your SOP aims the short leg at (the limit for spreads, 0.30 for CSP)."""
+    """The delta your SOP aims the short leg at (the limit for spreads, 0.30 for CSP).
+
+    An explicit target wins where one is set. The LEAPS put has one precisely
+    because it has no limit - her page gives ~0.10-0.15 as a reference and says
+    outright that it is not a rule, so there is a strike to aim at but nothing
+    to fail against.
+    """
     entry = strategy.get("entry", {})
+    if "short_leg_delta_target" in entry:
+        return float(entry["short_leg_delta_target"])
     if "short_leg_delta_max" in entry:
         return float(entry["short_leg_delta_max"])
     if "short_call_delta" in entry:
@@ -535,14 +555,17 @@ def _setup_at_dte(strategy_key: str, chain: OptionChain, dte: int, target: float
                             _leg("short_call", Action.SELL, sc), _leg("long_call", Action.BUY, lc)])
         return _make_candidate(trade, strategy, delta_limit=limit)
 
-    if strategy_key in ("cash_secured_put", "wheel"):
+    if strategy_key in SHORT_PUT_STRATEGIES:
         short = _pick_target_short(chain.by(OptionType.PUT, dte), target)
         if not short:
             return None
         trade = Trade(strategy_key=strategy_key, underlying=chain.underlying,
                       contracts=contracts, underlying_price=chain.underlying_price,
                       legs=[_leg("short_put", Action.SELL, short)])
-        return _make_candidate(trade, strategy, delta_limit=limit)
+        # No hard delta limit on the LEAPS put, so nothing to measure it against.
+        hard = strategy["entry"].get("short_leg_delta_max")
+        return _make_candidate(trade, strategy,
+                               delta_limit=float(hard) if hard is not None else None)
     return None
 
 

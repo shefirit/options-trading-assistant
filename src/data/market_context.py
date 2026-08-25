@@ -185,6 +185,22 @@ _PROFILES: dict[str, _Profile] = {
         requires="cash for 100 shares now, and the patience to hold them later",
         reason="Sell puts until you end up owning the shares, then sell calls against "
                "them. A slow repeating income loop, not a one-off trade."),
+    "leaps_put": _Profile(
+        lean=0.7, range_pref=0.2, vol_pref=1.0,
+        name="LEAPS Put (Selling LEAPS)", instrument="us_style", traded_on=_US_ON,
+        requires="the strike x 100 in cash, locked up for a year or more",
+        reason="A cash secured put stretched to a year or more. You are paid the most "
+               "for selling into elevated fear, and the further out you go the more "
+               "the market pays you to wait.",
+        # The highest vol appetite on the board: her page calls volatility the
+        # "secret sauce" and a LEAP's vega runs about 3x a 30-day option's, so
+        # selling into elevated IV that later cools is where the edge is.
+        #
+        # The handicap is not about difficulty - the trade is mechanically her
+        # simplest. It is the capital: one contract can tie up half her monthly
+        # buying power for a year, and her page's own rules are a starting
+        # framework she has not paper traded yet. Findable, never the obvious move.
+        handicap=0.5),
     "poor_mans_covered_call": _Profile(
         lean=1.0, range_pref=0.1, vol_pref=-0.8,
         name="Poor Man's Covered Call", instrument="us_style", traded_on=_US_ON,

@@ -243,10 +243,18 @@ class DataProvider:
         return tiles
 
     def get_leaps_chain(self, underlying: str, target_dte: int = 210) -> Optional[OptionChain]:
-        """A far-dated chain (~7 months out) for a PMCC's long LEAPS. Real data only."""
+        """A far-dated chain for the strategies that trade one: the PMCC's long
+        LEAPS (~7 months), the LEAPS long call (~420 days), the LEAPS put (~450).
+
+        target_dte is part of the cache key, and has to be: this returns ONE
+        expiration - the one nearest the target - so keying on the symbol alone
+        meant whichever strategy scanned first handed its expiration to the next
+        one. A PMCC scan followed by a LEAPS scan on the same name inside five
+        minutes got a 7-month chain and found nothing a year out.
+        """
         underlying = underlying.upper()
         return cache.get_or_fetch(
-            f"leaps:{underlying}",
+            f"leaps:{underlying}:{int(target_dte)}",
             lambda: self._expiration_chain(underlying, target_dte, tradable=True), 300)
 
     # ---------- market read (lightweight - no full option chain fetch) ----------
