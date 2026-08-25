@@ -104,3 +104,101 @@ def get_eps_history(symbol: str, max_quarters: int = 24,
     out = out[:max_quarters]   # Alpha Vantage returns newest-first; keep the recent N
     out.reverse()              # oldest-first for the chart
     return out
+
+
+# Alpha Vantage's OVERVIEW field -> the Yahoo `info` key the app already reads,
+# with how to convert it. Keeping Yahoo's names means every caller - the stats
+# strip, the scorecard, the fundamentals metrics - works on the fallback without
+# knowing it is one.
+_OVERVIEW_MAP: dict[str, tuple[str, str]] = {
+    "MarketCapitalization": ("marketCap", "num"),
+    "PERatio": ("trailingPE", "num"),
+    "ForwardPE": ("forwardPE", "num"),
+    "PriceToSalesRatioTTM": ("priceToSalesTrailing12Months", "num"),
+    "RevenueTTM": ("totalRevenue", "num"),
+    "QuarterlyRevenueGrowthYOY": ("revenueGrowth", "num"),
+    "QuarterlyEarningsGrowthYOY": ("earningsGrowth", "num"),
+    "EPS": ("trailingEps", "num"),
+    "ProfitMargin": ("profitMargins", "num"),
+    "DividendYield": ("dividendYield", "num"),
+    # Dollars per share carries no unit ambiguity, and dividend_yield_pct
+    # prefers it over the yield field for exactly that reason.
+    "DividendPerShare": ("dividendRate", "num"),
+    "Beta": ("beta", "num"),
+    "52WeekHigh": ("fiftyTwoWeekHigh", "num"),
+    "52WeekLow": ("fiftyTwoWeekLow", "num"),
+    "Name": ("shortName", "text"),
+    "Exchange": ("exchange", "text"),
+}
+
+# AssetType -> Yahoo's quoteType, which is what tells a fund from a company.
+_ASSET_TYPES = {"common stock": "EQUITY", "etf": "ETF", "mutual fund": "MUTUALFUND"}
+
+# OVERVIEW carries the Wall Street tally too, which is the OTHER thing Yahoo
+# stops answering from a datacenter IP ("No analyst data available for this
+# name" on every stock on the hosted app). Same request, so reading it here
+# costs nothing extra against the free daily quota.
+_RATING_FIELDS = {
+    "AnalystRatingStrongBuy": "strong_buy",
+    "AnalystRatingBuy": "buy",
+    "AnalystRatingHold": "hold",
+    "AnalystRatingSell": "sell",
+    "AnalystRatingStrongSell": "strong_sell",
+}
+
+
+def get_overview(symbol: str, key: Optional[str] = None) -> dict[str, Any]:
+    """Company fundamentals shaped like Yahoo's `info` dict, or {} on any problem.
+
+    The stand-in for when Yahoo's company-info endpoint refuses a datacenter IP,
+    which on Streamlit Cloud it does often enough that Rita saw two ordinary
+    mid-caps report "did not load" across the whole panel. This endpoint is a
+    plain keyed API, so it answers from the hosted app exactly as it does here.
+
+    NOT a full replacement - there is no average volume here, and the app already
+    recovers that from price history. It covers what the scorecard and the stats
+    strip actually print.
+    """
+    key = key or get_key()
+    if not key:
+        return {}
+    params = urllib.parse.urlencode(
+        {"function": "OVERVIEW", "symbol": symbol.upper(), "apikey": key})
+    try:
+        with urllib.request.urlopen(f"{_BASE}?{params}", timeout=15) as r:
+            data = json.load(r)
+    except Exception:
+        return {}
+    # A rate limit or an unknown ticker comes back as {} or as a "Note" /
+    # "Information" message - either way there is no Symbol in it.
+    if not isinstance(data, dict) or not data.get("Symbol"):
+        return {}
+
+    out: dict[str, Any] = {}
+    for src, (dest, how) in _OVERVIEW_MAP.items():
+        raw = data.get(src)
+        if raw in (None, "", "None", "-"):
+            continue
+        if how == "num":
+            v = _f(raw)
+            if v is not None:
+                out[dest] = v
+        else:
+            out[dest] = str(raw)
+
+    sector = str(data.get("Sector") or "").strip()
+    if sector:
+        out["sector"] = sector.title()   # Alpha Vantage shouts: "TECHNOLOGY"
+    asset = str(data.get("AssetType") or "").strip().lower()
+    if asset in _ASSET_TYPES:
+        out["quoteType"] = _ASSET_TYPES[asset]
+    if out.get("shortName"):
+        out["longName"] = out["shortName"]
+
+    # Nested rather than flattened: these are not a Yahoo `info` field, and
+    # pretending otherwise would let them be read by accident.
+    ratings = {name: int(v) for field, name in _RATING_FIELDS.items()
+               if (v := _f(data.get(field))) is not None}
+    if any(ratings.values()):
+        out["analystRatings"] = ratings
+    return out

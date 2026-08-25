@@ -254,6 +254,17 @@ def classify(info: dict[str, Any]) -> str:
     return "unknown"
 
 
+def has_economics(info: dict[str, Any]) -> bool:
+    """Did this response carry actual NUMBERS about the security?
+
+    Company margins and a sector, or a fund's assets and NAV - either counts.
+    A response with neither is a name and nothing else, which on the hosted app
+    is what a throttled Yahoo call looks like, and is the signal to go and ask
+    Alpha Vantage instead.
+    """
+    return any(info.get(k) is not None for k in _COMPANY_FIELDS + _FUND_FIELDS)
+
+
 def _is_fund(info: dict[str, Any]) -> bool:
     """Kept for callers that only care about the fund case. `unknown` is not a
     fund, so this is False for it - see classify() for the three-way answer."""
