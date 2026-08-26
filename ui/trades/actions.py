@@ -139,56 +139,100 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
                 st.rerun()
 
 
-def _short_call_leg(p):
-    """The call she is short RIGHT NOW - the near-dated short CALL.
+def _short_leg(p, kind: OptionType):
+    """The option of this type she is short RIGHT NOW - the near-dated one.
 
-    Models 2 and 3 also carry short PUTs, which a call roll must never pick up,
-    so this filters on type as well as side. None means nothing is written
-    against the long side at the moment.
+    Filtered on type as well as side because most of the shapes here carry both:
+    models 2 and 3 are short a call and long a put, an iron condor is short
+    both sides at once, and a call roll must never pick a put up. Near-dated
+    because a PMCC's short call sits months in front of its LEAPS.
+
+    None means nothing of that kind is sold at the moment.
     """
-    calls = [l for l in p.legs
-             if l.action == Action.SELL and l.option_type == OptionType.CALL]
-    if not calls:
+    legs = [l for l in p.legs
+            if l.action == Action.SELL and l.option_type == kind]
+    if not legs:
         return None
-    return min(calls, key=lambda l: (l.dte if l.dte is not None else 10**6))
+    return min(legs, key=lambda l: (l.dte if l.dte is not None else 10**6))
 
 
-def _call_label(strike: Optional[float], expiration: Optional[dt.date]) -> str:
+def _short_call_leg(p):
+    """The call she is short right now - the call side of _short_leg()."""
+    return _short_leg(p, OptionType.CALL)
+
+
+def _spread_long_leg(p, short_leg, kind: OptionType):
+    """The bought leg sitting under that short one, when this is a vertical.
+
+    A vertical's two legs share an expiration, and that is what tells this
+    apart from the other bought legs in the book: a PMCC's LEAPS is a long call
+    too, but it expires a year past the call written against it and is nobody's
+    protection. Matching on the short leg's own dte keeps a call roll on a PMCC
+    from dragging the LEAPS along with it - which would rewrite the trade.
+
+    None on a naked short leg: a cash secured put, a covered call's call.
+    """
+    if short_leg is None or short_leg.dte is None:
+        return None
+    return next((l for l in p.legs
+                 if l.action == Action.BUY and l.option_type == kind
+                 and l.dte == short_leg.dte), None)
+
+
+def _rollable_sides(p) -> list[OptionType]:
+    """Which sides of this trade have something SOLD that could be rolled.
+
+    Usually one. An iron condor is short both, and so is a covered call written
+    against shares that also carry a protective put she has sold against - so
+    the form asks which side she rolled rather than guessing, because guessing
+    wrong records the roll against the wrong leg.
+
+    The debit shapes lead with the call: on a PMCC or covered call the call IS
+    the income leg, and it is the only thing that has ever been rolled here.
+    """
+    order = ((OptionType.CALL, OptionType.PUT) if p.is_debit
+             else (OptionType.PUT, OptionType.CALL))
+    return [kind for kind in order if _short_leg(p, kind) is not None]
+
+
+def _leg_label(strike: Optional[float], expiration: Optional[dt.date],
+               word: str = "call") -> str:
     """"the 500 call expiring 2027-01-15" - how she says it out loud.
 
     Used where the sentence has room for it. In a tight row of the money panel
-    the date is noise, so _call_short() gives the same call in three words.
+    the date is noise, so _leg_short() gives the same contract in three words.
     """
     if not strike:
-        return "the call"
-    text = f"the {strike:g} call"
+        return f"the {word}"
+    text = f"the {strike:g} {word}"
     return (f"{text} expiring {components.fmt_date(expiration)}"
             if expiration else text)
 
 
-def _call_short(strike: Optional[float]) -> str:
+def _leg_short(strike: Optional[float], word: str = "call") -> str:
     """"500 call" - the same contract where the line has no room for a date."""
-    return f"{strike:g} call" if strike else "call"
+    return f"{strike:g} {word}" if strike else word
 
 
 def _roll_money_panel(figs, old_short: str, new_short: str,
-                      banked_before: float) -> None:
+                      banked_before: float, tail: str = "") -> None:
     """The money side of a roll, spelled out before she commits to it.
 
     Closing a trade has always ended with "Result: $X (profit)", and that one
     line is why closing feels clear. A roll had nothing of the sort: two dollar
     boxes, no running total, and no answer to the question she actually asks -
-    did the call I just finished make money or lose it? A roll hides that,
-    because the loss on the call being bought back and the credit on the new
+    did the leg I just finished make money or lose it? A roll hides that,
+    because the loss on the option being bought back and the credit on the new
     one arrive netted into a single number that is nearly always positive.
     """
+    word = figs.leg_word
     parts = [
         _money_line(
             f"The {old_short} you bought back",
             f"sold for ${figs.old_credit:,.0f}, cost ${figs.paid_to_close:,.0f} "
             "to buy back",
-            _signed(figs.old_call_result),
-            theme.GREEN if figs.old_call_result >= 0 else theme.RED),
+            _signed(figs.old_leg_result),
+            theme.GREEN if figs.old_leg_result >= 0 else theme.RED),
     ]
     if figs.new_credit:
         parts.append(_money_line(
@@ -209,50 +253,95 @@ def _roll_money_panel(figs, old_short: str, new_short: str,
         f"margin-bottom:4px;'>💵 What this roll does to your money</div>"
         + "".join(parts) + "</div>", unsafe_allow_html=True)
 
-    # The two numbers above look like they disagree whenever the finished call
+    # The two numbers above look like they disagree whenever the finished leg
     # lost money and the order still paid her - which is the normal case on a
-    # roll up and out. Saying why, in the same breath, is the whole point.
-    if figs.old_call_result < 0 <= figs.net_credit:
+    # roll away from trouble. Saying why, in the same breath, is the whole point.
+    if figs.old_leg_result < 0 <= figs.net_credit:
         theme.note(
             f"Both are true: the {old_short} finished "
-            f"\\${abs(figs.old_call_result):,.0f} down, and the order still "
-            f"paid you \\${figs.net_credit:,.0f}, because the new call's "
+            f"\\${abs(figs.old_leg_result):,.0f} down, and the order still "
+            f"paid you \\${figs.net_credit:,.0f}, because the new {word}'s "
             f"\\${figs.new_credit:,.0f} came in at the same moment and more "
-            "than covered it. Rolling turns a losing call into more time, not "
-            "into a loss you have to take today.")
+            f"than covered it. Rolling turns a losing {word} into more time, "
+            "not into a loss you have to take today.")
     after = banked_before + figs.net_credit
     theme.note(f"Premium banked on this trade so far: **\\${after:,.0f}** "
-               f"(\\${banked_before:,.0f} before this roll). Your LEAPS is not "
-               "touched and does not count until you sell it.")
+               f"(\\${banked_before:,.0f} before this roll)." + (f" {tail}" if tail else ""))
+
+
+def _roll_side_choice(p, sides: list, kp: str) -> OptionType:
+    """Which side she rolled, asked only when the trade is short both.
+
+    An iron condor is short a put AND a call, and so is a covered call sold
+    against a put she has written. Rolling is always one side at a time - and
+    recording it against the wrong one moves a leg she never touched, so this
+    asks rather than guesses. Everything else has one answer and no question.
+    """
+    if len(sides) == 1:
+        return sides[0]
+    labels = {OptionType.PUT: "The put side", OptionType.CALL: "The call side"}
+    picked = st.radio(
+        "Which side did you roll?", [labels[k] for k in sides], horizontal=True,
+        key=f"roll_side_{kp}_{p.trade_id}",
+        help="One side at a time - that is how the order fills, and how it is "
+             "recorded. Roll the other side as a second roll if you moved both.")
+    return next(k for k in sides if labels[k] == picked)
 
 
 def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
-    """Record what happened to the short call: rolled in one order, or just
-    bought back with the next one still to come.
+    """Record what happened to the leg she is short: rolled in one order, or
+    just bought back with the next one still to come.
 
-    Either way this keeps ONE position from the LEAPS purchase to the LEAPS
-    sale. Closing and re-logging instead would re-enter the LEAPS as a fresh
-    several-thousand dollar purchase every month and make the results
-    meaningless.
+    Either way this keeps ONE position from the day it was opened to the day it
+    is closed. Closing and re-logging instead would re-enter a PMCC's LEAPS as
+    a fresh several-thousand dollar purchase every month, and would turn a cash
+    secured put rolled four times into five unrelated trades with four losses
+    and no sign that they were the same position all along.
+
+    The form began as a call-only thing, because a PMCC's short call was the
+    only leg the app could roll. Her SOP has always said to roll a threatened
+    put down and out for a credit as well, and until now the only way to record
+    that was to close the trade and log a new one. So the side is decided here
+    and every sentence below follows it.
     """
     import datetime as dt
 
     from src.engine import roll_math
 
-    old_leg = _short_call_leg(p)
-    old_strike = old_leg.strike if old_leg is not None else None
-    old_label = _call_label(old_strike, p.expiration)
-    old_short = _call_short(old_strike)
-    old_credit = float(p.credit or 0.0)
-
-    cost_now = live.get("cost_to_close")
-    contracts = max(int(p.contracts or 1), 1)
+    sides = _rollable_sides(p)
+    if not sides:
+        return          # nothing sold, so there is nothing to roll
 
     # Keyed so it stays open through a rerun. Recording anything on the card
     # used to snap every expander shut and lose her place mid-form.
-    with st.expander("🔄 Roll or close the short call", key=f"roll_{kp}_{p.trade_id}"):
-        # Where this call stands BEFORE she types anything. The first version
-        # only worked out the finished call's result once every box was filled,
+    with st.expander("🔄 Roll it (or buy the short leg back)",
+                     key=f"roll_{kp}_{p.trade_id}"):
+        kind = _roll_side_choice(p, sides, kp)
+        word = kind.value                       # "call" or "put"
+        old_leg = _short_leg(p, kind)
+        old_strike = old_leg.strike if old_leg is not None else None
+        old_long = _spread_long_leg(p, old_leg, kind)
+        spread = old_long is not None
+        # On a spread every price is the SPREAD's price - that is what one
+        # order fills at and what her statement prints - so the word the money
+        # panel uses has to be "spread" and not the short leg's own name.
+        money_word = "spread" if spread else word
+        width = abs((old_strike or 0.0) - old_long.strike) if spread else 0.0
+
+        old_label = _leg_label(old_strike, p.expiration, word)
+        old_short = (f"{old_strike:g}/{old_long.strike:g} {word} spread"
+                     if spread else _leg_short(old_strike, word))
+        old_credit = float(p.credit or 0.0)
+
+        # What closing costs today, as a prefill. Only where it means the leg
+        # being rolled: the priced figure covers every near-dated leg, so on an
+        # iron condor it is BOTH sides at once and would prefill roughly double
+        # the true buy-back of the one side she rolled.
+        cost_now = live.get("cost_to_close") if len(sides) == 1 else None
+        contracts = max(int(p.contracts or 1), 1)
+
+        # Where this leg stands BEFORE she types anything. The first version
+        # only worked out the finished leg's result once every box was filled,
         # which put the explanation after the confusing part instead of before
         # it - she opened the form, saw a wall of zeros, and was no wiser.
         if old_strike:
@@ -261,21 +350,28 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                 so_far = old_credit - float(cost_now)
                 standing = (
                     f" Buying it back costs about ${float(cost_now):,.0f} today, "
-                    f"so as things stand that call is "
+                    f"so as things stand it is "
                     f"{'up' if so_far >= 0 else 'down'} ${abs(so_far):,.0f}.")
+            holding = (f"the {old_strike:g}/{old_long.strike:g} {word} spread"
+                       if spread else old_label)
             st.markdown(components._esc(
-                f"**You are short {old_label}**, sold for ${old_credit:,.0f}."
+                f"**You are short {holding}**, sold for ${old_credit:,.0f}."
                 + standing))
+
         # Her rule, in her words: roll it when the roll pays her a credit; when
-        # it would cost a debit, close the call instead and sell the next one
-        # separately. The two paths are named for that decision, not for the
-        # mechanics.
-        mode = st.radio(
-            "What did you do?",
-            ["Rolled it for a credit (one order)",
-             "Closed the call (I'll sell a new one)"],
-            key=f"roll_mode_{kp}_{p.trade_id}")
-        rolling = mode.startswith("Rolled")
+        # it would cost a debit, close it and sell the next one separately. The
+        # buy-back path only exists where something is LEFT afterwards - the
+        # LEAPS of a PMCC, the shares of a covered call. Buying back a cash
+        # secured put leaves nothing behind, so there it is simply a close, and
+        # offering it here would record a live trade that no longer exists.
+        rolling = True
+        if p.is_debit and kind == OptionType.CALL:
+            mode = st.radio(
+                "What did you do?",
+                ["Rolled it for a credit (one order)",
+                 "Closed the call (I'll sell a new one)"],
+                key=f"roll_mode_{kp}_{p.trade_id}")
+            rolling = mode.startswith("Rolled")
 
         if not rolling:
             theme.note("This records only the call you bought back. Nothing is "
@@ -297,12 +393,12 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                 # The same "did that call make money?" answer the roll path
                 # gives. Bought back on its own it is simple arithmetic, but it
                 # was still nowhere on the screen before she pressed Record.
-                done = roll_math.buy_back_only(old_credit, float(paid))
-                won = done.old_call_result >= 0
+                done = roll_math.buy_back_only(old_credit, float(paid), word)
+                won = done.old_leg_result >= 0
                 st.markdown(components._esc(
                     f"**The {old_short} finishes "
                     f"{'up' if won else 'down'} "
-                    f"${abs(done.old_call_result):,.0f}** - sold for "
+                    f"${abs(done.old_leg_result):,.0f}** - sold for "
                     f"${old_credit:,.0f}, cost ${paid:,.0f} to buy back. "
                     f"${paid:,.0f} comes out of this month's profit."))
             note = st.text_input("Note (optional)", key=f"back_note_{kp}_{p.trade_id}")
@@ -314,7 +410,7 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                     from src.logging_tools.trade_logger import roll_trade
                     roll_trade(p.trade_id, p.underlying, p.strategy_name,
                                cash=-float(paid), note=note, rolled_on=back_on,
-                               account=p.account)
+                               account=p.account, option_type=word)
                     st.session_state.pop("trades_rows", None)
                     st.session_state.pop("_priced_positions", None)
                     st.session_state["ql_flash"] = (
@@ -324,42 +420,68 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                     st.rerun()
             return
 
-        # ---- step 1: the new call ---------------------------------------
+        # ---- step 1: the new leg ----------------------------------------
         # Defaults that are USABLE on arrival. The first version opened with
-        # strike 0.00 and an expiration a month from today - which, on a call
+        # strike 0.00 and an expiration a month from today - which, on a leg
         # expiring further out than that, is a date the form's own validation
-        # then rejects. Roll OUT from the call she holds, not from today.
+        # then rejects. Roll OUT from the contract she holds, not from today.
         base = p.expiration or dt.date.today()
-        floor = max(base + dt.timedelta(days=1), dt.date.today())
-        _step(1, "The new call you sold",
-              "The further-out call - the one you SOLD in the roll. It has to "
-              "expire after the one you bought back.")
-        r1, r2 = st.columns(2)
-        new_strike = r2.number_input(
-            "Strike", min_value=0.0, step=1.0,
-            value=float(old_strike or 0.0),
-            key=f"roll_strike_{kp}_{p.trade_id}",
-            help="Rolling straight out keeps the same strike; rolling up and "
-                 "out raises it. Prefilled with the strike you hold now.")
-        new_exp = r1.date_input(
+        floor = max(base, dt.date.today())
+        away = "up and out raises it" if kind == OptionType.CALL else \
+               "down and out lowers it"
+        _step(1, f"The new {money_word} you sold",
+              f"The further-out {money_word} - the one you SOLD in the roll. "
+              f"Your SOP rolls out in time and away from the money, so it "
+              f"should expire after the one you bought back.")
+        cols = st.columns(3 if spread else 2)
+        new_exp = cols[0].date_input(
             "Expires", value=max(base + dt.timedelta(days=30), floor),
             min_value=floor, key=f"roll_exp_{kp}_{p.trade_id}",
             format=components.DATE_FMT)
+        new_strike = cols[1].number_input(
+            "Strike" if not spread else f"Strike you SOLD",
+            min_value=0.0, step=1.0,
+            value=float(old_strike or 0.0),
+            key=f"roll_strike_{kp}_{p.trade_id}",
+            help=f"Rolling straight out keeps the same strike; rolling {away}. "
+                 f"Prefilled with the strike you hold now.")
+        new_long_strike = None
+        if spread:
+            # The protection moves with it. A spread rolls as ONE order with
+            # four legs, and a new short strike with the old long left behind
+            # would be a position she does not hold and a risk that is not hers.
+            drop = -width if kind == OptionType.PUT else width
+            new_long_strike = cols[2].number_input(
+                "Strike you BOUGHT", min_value=0.0, step=1.0,
+                value=max(float(new_strike) + drop, 0.0),
+                key=f"roll_long_{kp}_{p.trade_id}_{new_strike:g}",
+                help=f"The protection under it. Prefilled to keep your current "
+                     f"{width:g}-wide spread; change it if you rolled to a "
+                     f"different width.")
 
-        new_label = _call_label(new_strike, new_exp)
-        new_short = _call_short(new_strike)
-        suggested = _live_call_mid(provider, p.underlying, new_strike, new_exp)
+        new_short = (f"{new_strike:g}/{new_long_strike:g} {word} spread"
+                     if spread and new_strike and new_long_strike
+                     else _leg_short(new_strike, word))
+        suggested = _live_leg_mid(provider, p.underlying, new_strike, new_exp, kind)
+        if spread and new_long_strike:
+            bought = _live_leg_mid(provider, p.underlying, new_long_strike,
+                                   new_exp, kind)
+            # The spread's own credit: what the short leg pays less what the
+            # protection costs. Either leg missing from the chain makes the
+            # pair meaningless, so offer nothing rather than half of it.
+            suggested = (round(suggested - bought, 2)
+                         if suggested is not None and bought is not None else None)
 
         # ---- step 2: the money ------------------------------------------
-        # A roll ORDER fills at one net price and never prints its two legs, so
+        # A roll ORDER fills at one net price and never prints its legs, so
         # asking outright for a leg price sent her hunting for a figure that
         # was not on her statement. One price is what she will have; the
         # two-price way round is folded away for the times she has both.
         _step(2, "What your fill said",
               f"It is the price your order filled at - one line, ending in "
               f"one number, like ...{p.underlying} {new_strike:g}/"
-              f"{old_strike:g} CALL @1.50. In thinkorswim web it is under "
-              f"Activity, with your other filled orders."
+              f"{old_strike:g} {word.upper()} @1.50. In thinkorswim web it is "
+              f"under Activity, with your other filled orders."
               if old_strike and new_strike else
               "It is the price your order filled at. In thinkorswim web your "
               "filled orders are under Activity.")
@@ -374,49 +496,49 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         # key carries the strike and date because Streamlit ignores value=
         # once a key has been seen, and this default must follow those.
         new_credit = _fill_price_input(
-            f"What the new {new_strike:g} call sold for by itself"
-            if new_strike else "What the new call sold for by itself",
+            f"What the new {new_short} sold for by itself"
+            if new_strike else f"What the new {money_word} sold for by itself",
             f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
             contracts, default_total=suggested,
             help="Not on your fill - a one-order roll only prints the net. The "
-                 "app fills in today's price for that contract, which is close "
-                 "enough. Change it only if your order history happens to list "
-                 "the two legs separately.")
+                 "app fills in today's price for it, which is close enough. "
+                 "Change it only if your order history happens to list the legs "
+                 "separately.")
         if suggested:
             theme.note("**Already filled in for you.** Your fill does not carry "
-                       "this number, so the app priced the contract off today's "
-                       "chain. Leave it as it is unless you know better.")
+                       "this number, so the app priced it off today's chain. "
+                       "Leave it as it is unless you know better.")
         elif new_strike:
-            theme.note("The app could not price that contract just now, so type "
-                       "what it sold for. If you only have the roll's net price, "
-                       "open **My fill shows two prices** below instead.")
-        figs = roll_math.from_net(old_credit, cash, new_credit)
+            theme.note("The app could not price that just now, so type what it "
+                       "sold for. If you only have the roll's net price, open "
+                       "**My fill shows two prices** below instead.")
+        figs = roll_math.from_net(old_credit, cash, new_credit, money_word)
 
         with st.expander("My fill shows two prices, not one",
                          key=f"rolltwo_{kp}_{p.trade_id}"):
-            theme.note("Use this if you closed the old call and sold the new "
-                       "one as two separate orders - then you have two prices "
-                       "rather than one. Some order-history screens also list a "
-                       "spread's legs one per line. Type both and the app works "
-                       "out the net for you.")
+            theme.note(f"Use this if you closed the old {money_word} and sold "
+                       "the new one as two separate orders - then you have two "
+                       "prices rather than one. Some order-history screens also "
+                       "list an order's legs one per line. Type both and the app "
+                       "works out the net for you.")
             paid_back = _fill_price_input(
                 f"Price you paid to buy back the {old_short}",
                 f"roll_paid_{kp}_{p.trade_id}", contracts,
                 default_total=cost_now,
                 help="Prefilled with today's price - change it to your fill.")
             got = _fill_price_input(
-                "Price you got for the new call",
+                f"Price you got for the new {money_word}",
                 f"roll_got_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
                 contracts, default_total=suggested)
             use_legs = st.checkbox(
                 "Use these two prices instead of the one above",
                 key=f"roll_uselegs_{kp}_{p.trade_id}")
             if paid_back and got:
-                legs = roll_math.from_legs(old_credit, paid_back, got)
+                legs = roll_math.from_legs(old_credit, paid_back, got, money_word)
                 theme.note(f"Those two make a net of **{_signed(legs.net_credit)}** "
                            "on the order. It should match the price on your fill.")
             if use_legs:
-                figs = roll_math.from_legs(old_credit, paid_back, got)
+                figs = roll_math.from_legs(old_credit, paid_back, got, money_word)
                 cash, new_credit = figs.net_credit, figs.new_credit
 
         # ---- step 3: what it did, then record ---------------------------
@@ -429,21 +551,29 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         elif cash < 0:
             # Her own rule: roll when it pays a credit, close when it would be
             # a debit. Recorded either way - it is her call, not the app's.
+            escape = ("**Closed the call** above does that."
+                      if p.is_debit and kind == OptionType.CALL else
+                      "Closing it outright is the ✔️ Close button below.")
             theme.note(f"That is a **debit roll** - it cost you "
                        f"\\${abs(cash):,.0f} rather than paying you. You said "
-                       "you would rather close the call and sell a new one when "
-                       "the roll will not pay. **Closed the call** above does "
-                       "that. Recording it as a roll is fine too if that is "
-                       "really what you did.")
+                       f"you would rather close it and start again when the "
+                       f"roll will not pay. {escape} Recording it as a roll is "
+                       "fine too if that is really what you did.")
 
         if new_credit and cash:
-            _roll_money_panel(figs, old_short, new_short, p.roll_income)
+            _roll_money_panel(
+                figs, old_short, new_short, p.roll_income,
+                tail=("Your LEAPS is not touched and does not count until you "
+                      "sell it." if p.is_debit else
+                      "The cash behind this trade stays tied up until it is "
+                      "closed or assigned."))
             # The derived buy-back is the sanity check she CAN judge: she knows
-            # roughly what getting out of the old call cost, even when the new
-            # call's own price came from the app rather than her fill.
-            theme.note(f"Read the other way: buying back {old_label} cost you "
-                       f"about **\\${figs.paid_to_close:,.0f}**. If that looks "
-                       "wrong, the new call's price in step 2 is the one to fix.")
+            # roughly what getting out cost, even when the new leg's own price
+            # came from the app rather than her fill.
+            theme.note(f"Read the other way: buying back the {old_short} cost "
+                       f"you about **\\${figs.paid_to_close:,.0f}**. If that "
+                       f"looks wrong, the new {money_word}'s price in step 2 is "
+                       "the one to fix.")
         else:
             theme.note("Fill in the price from your fill above and this is where "
                        "the app shows what the roll did to your money, before "
@@ -455,36 +585,54 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                                   key=f"roll_when_{kp}_{p.trade_id}", format=components.DATE_FMT)
         note = f2.text_input("Note (optional)", key=f"roll_note_{kp}_{p.trade_id}")
 
+        current_exp = p.expiration or dt.date.today()
+        unchanged = (new_exp == current_exp
+                     and float(new_strike or 0) == float(old_strike or 0)
+                     and (not spread
+                          or float(new_long_strike or 0) == float(old_long.strike)))
+
         if st.button("Record the roll", type="primary", key=f"rollbtn_{kp}_{p.trade_id}"):
             if not new_strike:
-                st.warning("Step 1 needs the strike of the call you sold.")
+                st.warning(f"Step 1 needs the strike of the {word} you sold.")
+            elif spread and not new_long_strike:
+                st.warning("Step 1 needs the strike you BOUGHT as well - a "
+                           "spread rolls both legs, and without it the app "
+                           "would leave your old protection behind.")
             elif not cash:
                 st.warning("Step 2 needs the price from your fill - it is the "
                            "money this roll actually made you.")
             elif not new_credit:
-                st.warning("Step 2 needs what the new call sold for by itself. "
-                           "The app usually fills this in; if it could not price "
-                           "the contract, type it from your Account Trade "
+                st.warning(f"Step 2 needs what the new {money_word} sold for by "
+                           "itself. The app usually fills this in; if it could "
+                           "not price it, type it from your Account Trade "
                            "History.")
             elif figs.impossible:
                 st.warning(figs.impossible)
-            elif new_exp <= (p.expiration or dt.date.today()):
-                st.warning(f"A roll moves the call OUT in time, but "
-                           f"{components.fmt_date(new_exp)} is not after this "
+            elif new_exp < current_exp:
+                st.warning(f"A roll moves the {word} OUT in time, but "
+                           f"{components.fmt_date(new_exp)} is BEFORE this "
                            f"position's current expiration "
-                           f"({components.fmt_date(p.expiration)}). Check the date.")
+                           f"({components.fmt_date(current_exp)}). Check the date.")
+            elif unchanged:
+                # Same strikes, same date: nothing moved, so there is nothing
+                # to record. Saved as it stands it would bank the cash against
+                # a roll that never happened and leave the position identical.
+                st.warning("Nothing has changed - same strike, same expiration. "
+                           "Roll it out in time, away from the money, or both.")
             else:
                 from src.logging_tools.trade_logger import roll_trade
                 roll_trade(p.trade_id, p.underlying, p.strategy_name,
                            float(cash), float(new_strike), new_exp,
                            float(new_credit), note, rolled_on=rolled_on,
-                           account=p.account)
+                           account=p.account, option_type=word,
+                           new_long_strike=(float(new_long_strike)
+                                            if new_long_strike else None))
                 st.session_state.pop("trades_rows", None)
                 st.session_state.pop("_priced_positions", None)
                 st.session_state["ql_flash"] = (
                     f"Roll recorded: {_signed(cash)} banked "
                     f"(${p.roll_income + cash:,.0f} from rolls on this trade so "
-                    f"far), now tracking the {new_strike:g} call expiring "
+                    f"far), now tracking the {new_short} expiring "
                     f"{components.fmt_date(new_exp)}.")
                 st.rerun()
 

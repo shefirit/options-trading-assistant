@@ -1343,12 +1343,12 @@ def render_debit_position_card(position, live: dict) -> None:
                          "you bought, minus the call credit you collected."))
     banked = position.roll_income
     cols[1].metric("Premium banked since", _dollars(banked),
-                   help="Every call you have sold or bought back since opening,"
+                   help="Every leg you have sold or bought back since opening,"
                         " netted. Counted in the month each one happened. It "
-                        "goes negative when you have just paid to close a call "
-                        "and not yet sold the next one."
+                        "goes negative when you have just paid to close one "
+                        "and not yet sold the next."
                         if banked < 0 else
-                        "Net credit from every roll of the short call so far. "
+                        "Net credit from every roll of the short leg so far. "
                         "This money is already yours - it is counted in the "
                         "month each roll happened.")
     cols[2].metric("Worth now",
@@ -1702,6 +1702,22 @@ def render_story(position, steps: list[dict]) -> None:
 
 
 # ================================================================== month view
+def _roll_reason(roll) -> str:
+    """The one line the month's table shows for a roll.
+
+    It names the side, because a put rolled down and out and a call rolled up
+    and out are different decisions and the log used to call both of them
+    "the short call" - which read as a mistake on every put she rolled.
+    """
+    side = "put" if str(roll.option_type).lower() == "put" else "call"
+    if roll.new_strike is None:
+        return f"Bought the short {side} back"
+    if roll.new_long_strike is not None:
+        return (f"Rolled the {side} spread to "
+                f"{roll.new_strike:g}/{roll.new_long_strike:g}")
+    return f"Rolled the short {side} to {roll.new_strike:g}"
+
+
 def _month_result_word(position, tag: str) -> str:
     """One plain-English word for how this trade sits in THIS month's list."""
     if tag == "rolled":
@@ -1752,8 +1768,7 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Closed": roll.rolled_on,
                 "Credit $": roll.new_credit or None,
                 "Result $": roll.cash,
-                "Why closed": (f"Rolled the short call to {roll.new_strike:g}"
-                               if roll.new_strike else "Rolled the short call"),
+                "Why closed": _roll_reason(roll),
             })
             continue
         leg = r.get("leg_close")
@@ -1795,7 +1810,8 @@ def month_trades_column_config():
         "Result": st.column_config.TextColumn(
             help="How this trade ended up. 'Still open' trades are being "
                  "watched in the open-trades list above. 'Rolled' is a short "
-                 "call rolled out - the credit was banked that day. 'Leg sold' "
+                 "leg rolled out - a call, or a put rolled down and out. The "
+                 "credit was banked that day. 'Leg sold' "
                  "is one leg taken off while the trade carried on, usually the "
                  "long put of a spread left to be assigned."),
         "Opened": st.column_config.DateColumn(format=DATE_FMT),

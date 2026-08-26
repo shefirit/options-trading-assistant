@@ -180,7 +180,14 @@ def _trade_card(it: dict, strategies, provider) -> None:
 
         if p.is_uncovered:
             _write_call_form(p, provider)
-        elif p.is_debit:
+        else:
+            # Anything with a leg SOLD can be rolled, and the form works out
+            # which side from the position. It used to be offered on the debit
+            # shapes alone - a PMCC or a covered call - so the trades her exit
+            # rules most often say to roll, a threatened credit spread and a
+            # cash secured put, had no way to record one. Closing and re-logging
+            # was the only route, and it turned one put rolled four times into
+            # five separate trades with four losses between them.
             _roll_form(p, live, provider)
         # Her third way out of a credit spread: sell the long put and let the
         # short one assign you. Offered before the close button, because it is

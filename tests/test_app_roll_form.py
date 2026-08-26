@@ -30,7 +30,7 @@ def test_the_short_call_leg_is_the_call_not_the_leaps(open_pmcc_row):
     leg = actions._short_call_leg(p)
     assert leg is not None
     assert leg.strike == 500.0
-    assert actions._call_label(leg.strike, p.expiration).startswith("the 500 call")
+    assert actions._leg_label(leg.strike, p.expiration, "call").startswith("the 500 call")
 
 
 def test_the_short_call_leg_is_none_when_nothing_is_written(open_pmcc_row):
@@ -74,7 +74,7 @@ def test_my_trades_renders_the_roll_form_for_an_open_pmcc(app_with_one_pmcc):
     snags = [e for e in at.error if "unexpected snag" in str(e.value)]
     assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
     labels = [x.label for x in at.expander]
-    assert any("Roll or close the short call" in l for l in labels), \
+    assert any("Roll it (or buy the short leg back)" in l for l in labels), \
         f"the roll form is missing - expanders were {labels}"
 
 

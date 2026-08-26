@@ -489,7 +489,7 @@ def render_money_math(report: dict) -> None:
         rolls = report.get("roll_income") or 0.0
         rows = [("From trades you closed", _d(report["banked"] - rolls), theme.INK)]
         if rolls:
-            rows.append(("From rolling short calls, banked the day you rolled",
+            rows.append(("From rolling short legs, banked the day you rolled",
                          _d(rolls), theme.INK))
         st.markdown(_panel("MONEY THAT SETTLED THIS MONTH", rows,
                            ("Banked", _d(report["banked"]), theme.GREEN)),
