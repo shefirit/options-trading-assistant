@@ -123,7 +123,7 @@ def test_each_open_trade_appears_once_with_its_own_buttons(app_with_one_pmcc):
     at = app_with_one_pmcc.run()
     assert not at.exception
     labels = [e.label for e in at.expander]
-    assert labels.count("🔄 Roll or close the short call") == 1
+    assert labels.count("🔄 Roll it (or buy the short leg back)") == 1
     assert sum("Close this trade" in l for l in labels) == 1
     assert any("Show the numbers" in l for l in labels)
 

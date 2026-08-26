@@ -157,27 +157,49 @@ def build_roll_row(
     note: str = "",
     rolled_on: Optional[date] = None,
     account: str = "",
+    option_type: str = "call",
+    new_long_strike: Optional[float] = None,
 ) -> list[Any]:
-    """The "roll" event row - the short call changed and cash moved, on the
-    SAME Trade ID.
+    """The "roll" event row - the leg she is short changed and cash moved, on
+    the SAME Trade ID.
 
     This is what keeps one PMCC one position from LEAPS purchase to LEAPS sale
     instead of a chain of unrelated rows with the cost basis re-entered each
-    time. Every field lands in a column she can read in the sheet:
+    time - and the same for a cash secured put rolled down and out month after
+    month, which is one trade with one story, not a new trade every roll. Every
+    field lands in a column she can read in the sheet:
 
-      cash        the net on the TOS fill, banked on this date. Negative when
-                  she only bought the call back and wrote nothing in its place.
-      new_credit  what the NEW short call sold for on its own - the basis the
-                  50% profit target measures against from here
+      cash            the net on the TOS fill, banked on this date. Negative
+                      when she only bought the leg back and wrote nothing in
+                      its place.
+      new_credit      what the NEW short leg sold for on its own - or, on a
+                      spread, what the new spread's own net credit was. The
+                      basis the 50% profit target measures against from here.
+      option_type     which side rolled, "call" or "put". Rows written before
+                      puts could be rolled carry nothing and mean "call".
+      new_long_strike where the protection went when a whole vertical rolled.
 
-    new_strike / new_expiration are left empty when she bought the call back
-    and has not written the next one yet: the position is then uncovered until
-    a later row gives it a new call.
+    new_strike / new_expiration are left empty when she bought the leg back and
+    has not written the next one yet: the position is then uncovered until a
+    later row gives it a new one.
+
+    Only the SHORT strike goes in the Legs column, even on a spread roll. The
+    replay reads that cell as one number, and a "90 / 95" there would parse as
+    nothing at all - which the replay would then take for "bought it back and
+    wrote nothing", quietly deleting a leg she still holds. The pair is spelled
+    out in the note instead, which is what she reads in the sheet anyway.
     """
+    option_type = "put" if str(option_type).lower() == "put" else "call"
     if new_strike is None:
-        text = note or "Bought the short call back - none written yet"
+        text = note or f"Bought the short {option_type} back - none written yet"
+    elif new_long_strike is not None:
+        text = note or (f"Rolled the {option_type} spread to "
+                        f"{new_strike:g}/{new_long_strike:g}")
     else:
-        text = note or f"Rolled the short call to {new_strike:g}"
+        text = note or f"Rolled the short {option_type} to {new_strike:g}"
+    details: dict[str, Any] = {"type": option_type}
+    if new_long_strike is not None:
+        details["long_strike"] = round(float(new_long_strike), 4)
     return [
         (rolled_on or date.today()).isoformat(),
         underlying,
@@ -192,7 +214,11 @@ def build_roll_row(
         new_expiration.isoformat() if new_expiration is not None else "",
         "",                           # Exit Cost $ - not a close
         round(cash, 2),               # Realized P&L $: the cash banked today
-        "",                           # Details JSON - on the open row
+        # Which side rolled, and where its protection went. The trade's own
+        # details stay on the open row - this cell was empty until puts could
+        # be rolled, and using it beats adding a column she would have to
+        # redeploy the Apps Script for.
+        json.dumps(details, separators=(",", ":")),
         _account(account),
     ]
 

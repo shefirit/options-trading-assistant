@@ -77,18 +77,30 @@ def roll_trade(
     note: str = "",
     rolled_on: Optional[date] = None,
     account: str = "",
+    option_type: str = "call",
+    new_long_strike: Optional[float] = None,
 ) -> tuple[str, bool]:
-    """Record that the short call changed (a "roll" event on the same trade).
+    """Record that the leg she is short changed (a "roll" event on the trade).
 
     Returns (destination, went_to_sheet). cash is the net from the TOS fill and
     is banked on rolled_on, which defaults to today.
 
+    option_type is which side she rolled - "call" for a PMCC or covered call,
+    "put" for a cash secured put or the short leg of a put credit spread. It
+    defaults to "call" because that is the only thing rolls used to be, and
+    every row already in her log was one.
+
+    new_long_strike is where the protection ended up when a whole vertical
+    rolled as one order; leave it out on a single-leg roll.
+
     Omit new_strike/new_expiration to record a buy-back with nothing written in
-    its place - the position is uncovered until a later call gives it one.
+    its place - the position is uncovered until a later leg gives it one.
     """
     row = build_roll_row(trade_id, underlying, strategy_name, cash,
                          new_strike, new_expiration, new_credit, note,
-                         rolled_on=rolled_on, account=account)
+                         rolled_on=rolled_on, account=account,
+                         option_type=option_type,
+                         new_long_strike=new_long_strike)
     return _append(row)
 
 

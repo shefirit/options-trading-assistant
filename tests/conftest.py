@@ -69,6 +69,78 @@ def open_pmcc_row():
     return pmcc_row
 
 
+CSP = "Cash Secured Put (CSP)"
+PCS = "Put Credit Spread (Bull Put Spread)"
+
+
+def csp_row(strike: float = 100.0, credit: float = 200.0, contracts: int = 1):
+    """One open cash secured put in the log's own format.
+
+    The shape her SOP most often says to ROLL - down and out for a credit when
+    price comes at the strike - and the shape that had no way to record one.
+    Dated a few weeks out from today so the position is live whenever this runs.
+    """
+    today = date.today()
+    expiry = today + timedelta(days=30)
+    details = {
+        "key": "cash_secured_put",
+        "underlying_price": 108.0,
+        "legs": [
+            {"role": "short_put", "action": "sell", "type": "put",
+             "strike": strike, "delta": -0.28, "premium": credit / 100 / contracts,
+             "qty": 1, "dte": 30},
+        ],
+        "open_cash": round(credit, 2),
+    }
+    collateral = strike * 100 * contracts
+    return [
+        (today - timedelta(days=5)).isoformat(), "SOFI", CSP,
+        f"{strike:g}", 0.28, 30, contracts, credit,
+        round(collateral - credit, 2), round(collateral - credit, 2),
+        "yes", "", "20260201-101500-SOFI", "open", expiry.isoformat(),
+        "", "", json.dumps(details), "real",
+    ]
+
+
+def put_spread_row(short_strike: float = 100.0, long_strike: float = 95.0,
+                   credit: float = 150.0):
+    """One open put credit spread - the two-leg shape, where a roll has to move
+    the protection along with the leg she sold."""
+    today = date.today()
+    expiry = today + timedelta(days=30)
+    details = {
+        "key": "put_credit_spread",
+        "underlying_price": 108.0,
+        "legs": [
+            {"role": "short_put", "action": "sell", "type": "put",
+             "strike": short_strike, "delta": -0.22, "premium": 2.50,
+             "qty": 1, "dte": 30},
+            {"role": "long_put", "action": "buy", "type": "put",
+             "strike": long_strike, "delta": -0.12, "premium": 1.00,
+             "qty": 1, "dte": 30},
+        ],
+        "open_cash": round(credit, 2),
+    }
+    width = abs(short_strike - long_strike) * 100
+    return [
+        (today - timedelta(days=5)).isoformat(), "SOFI", PCS,
+        f"{short_strike:g} / {long_strike:g}", 0.22, 30, 1, credit,
+        round(width - credit, 2), round(width - credit, 2),
+        "yes", "", "20260201-102500-SOFI", "open", expiry.isoformat(),
+        "", "", json.dumps(details), "real",
+    ]
+
+
+@pytest.fixture
+def open_csp_row():
+    return csp_row
+
+
+@pytest.fixture
+def open_put_spread_row():
+    return put_spread_row
+
+
 def _app_with_rows(monkeypatch, rows):
     from streamlit.testing.v1 import AppTest
 
@@ -96,6 +168,19 @@ def app_with_rows(monkeypatch):
 def app_with_one_pmcc(monkeypatch):
     """The app, offline, with that one PMCC open in My trades."""
     return _app_with(monkeypatch, pmcc_row())
+
+
+@pytest.fixture
+def app_with_one_csp(monkeypatch):
+    """The app, offline, with one cash secured put open - the credit shape
+    that could only be CLOSED until rolling stopped being a call-only affair."""
+    return _app_with(monkeypatch, csp_row())
+
+
+@pytest.fixture
+def app_with_one_put_spread(monkeypatch):
+    """The app, offline, with one put credit spread open."""
+    return _app_with(monkeypatch, put_spread_row())
 
 
 @pytest.fixture

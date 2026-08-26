@@ -561,7 +561,9 @@ def _edit_roll_form(rollable: list, labels: list[str]) -> None:
             return
 
         def roll_label(i: int, r) -> str:
-            where = f" → {r.new_strike:g}" if r.new_strike is not None else " (bought back)"
+            side = str(r.option_type or "call")
+            where = (f" → {r.new_strike:g} {side}" if r.new_strike is not None
+                     else f" (bought the {side} back)")
             return (f"{i + 1}. {components.fmt_date(r.rolled_on)}{where}  ·  "
                     f"{'+' if r.cash >= 0 else '-'}${abs(r.cash):,.0f}")
 
@@ -571,15 +573,21 @@ def _edit_roll_form(rollable: list, labels: list[str]) -> None:
             format_func=lambda i: roll_label(i, p.rolls[i]),
             key=f"rl_which_{p.trade_id}")
         r = p.rolls[which]
+        # A roll can be on either side now, so the boxes have to name the one
+        # she actually rolled - "the NEW short call" over a put she rolled down
+        # and out reads as a different fill from the one she is correcting.
+        word = "put" if str(r.option_type).lower() == "put" else "call"
 
         c1, c2 = st.columns(2)
         cash = float(c1.number_input(
             "Cash it actually banked $", value=float(r.cash), step=1.0,
             format="%.2f", key=f"rl_cash_{p.trade_id}_{r.seq}",
-            help="Signed: positive when the roll paid you, negative when buying "
-                 "the call back cost you. Straight off the thinkorswim fill."))
+            help=f"Signed: positive when the roll paid you, negative when "
+                 f"buying the {word} back cost you. Straight off the "
+                 f"thinkorswim fill."))
         new_credit = float(c2.number_input(
-            "What the NEW short call sold for $", value=float(r.new_credit or 0.0),
+            f"What the NEW short {word} sold for $",
+            value=float(r.new_credit or 0.0),
             step=1.0, format="%.2f", key=f"rl_credit_{p.trade_id}_{r.seq}",
             help="Its own premium, not the net of the roll. This is what your "
                  "50% profit target measures against from here."))
@@ -588,7 +596,8 @@ def _edit_roll_form(rollable: list, labels: list[str]) -> None:
         strike = float(c3.number_input(
             "Rolled to strike", value=float(r.new_strike or 0.0), step=1.0,
             format="%.2f", key=f"rl_k_{p.trade_id}_{r.seq}",
-            help="Leave at 0 if you only bought the call back and wrote nothing."))
+            help=f"Leave at 0 if you only bought the {word} back and wrote "
+                 f"nothing."))
         when = c4.date_input("Rolled on", value=r.rolled_on,
                              key=f"rl_when_{p.trade_id}_{r.seq}", format="DD/MM/YYYY")
 
@@ -599,7 +608,7 @@ def _edit_roll_form(rollable: list, labels: list[str]) -> None:
             bits.append(f"cash ${r.cash:,.0f} → ${cash:,.0f}")
         if abs(new_credit - float(r.new_credit or 0.0)) > 0.005:
             changes["credit"] = round(new_credit, 2)
-            bits.append(f"new call's premium ${r.new_credit or 0:,.0f} → ${new_credit:,.0f}")
+            bits.append(f"new {word}'s premium ${r.new_credit or 0:,.0f} → ${new_credit:,.0f}")
         if abs(strike - float(r.new_strike or 0.0)) > 0.005 and strike > 0:
             changes["strikes"] = strike
             bits.append(f"strike {r.new_strike or 0:g} → {strike:g}")

@@ -160,6 +160,32 @@ def test_assignment_cash_leaves_her_account():
     assert wheel.assignment_cash(50.0, 3) == -15000.0
 
 
+# ------------------------------------------------------------------- the story
+def test_the_shares_are_paid_for_on_the_day_they_arrived():
+    """The share purchase used to be folded into the opening line, which dated
+    $5,000 to a day it did not move and buried the put's premium inside the
+    same number. Day one collected $150; the money left five weeks later."""
+    p = _assigned()
+    steps = positions.story(p)
+
+    opened = next(s for s in steps if s["kind"] == "open")
+    assigned = next(s for s in steps if s["kind"] == "assign")
+    assert opened["cash"] == 150.0, "day one was the put's credit, nothing else"
+    assert assigned["cash"] == -5000.0
+    assert assigned["on"] == p.assigned_on
+    # The invariant: the story still adds up to the ledger it came from.
+    assert steps[-1]["running"] == round(p.open_cash, 2)
+
+
+def test_the_premium_tally_holds_the_shares_apart_from_the_calls():
+    """What the wheel is really about: every credit against what the stock
+    cost. The two must never be netted into one figure."""
+    p = _parse(_put_row(), build_assign_row(TRADE, "XYZ", WHEEL, 50.0, 1),
+               _call(55.0, credit=120.0))
+    assert p.premium_collected == 150.0 + 120.0
+    assert p.open_bought_cost == 5000.0
+
+
 # ------------------------------------------------------- what she sees on screen
 def _text(at):
     return " ".join(str(m.value) for m in at.markdown)

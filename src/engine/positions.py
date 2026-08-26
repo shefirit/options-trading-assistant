@@ -37,8 +37,8 @@ from src.engine.models import Action, Leg, OptionType
 
 
 class RollEvent(BaseModel):
-    """One roll of the income leg: buying back the short call you sold and
-    selling a further-out one in its place, usually for a net credit."""
+    """One roll of the income leg: buying back the option you sold and selling
+    a further-out one in its place, usually for a net credit."""
 
     rolled_on: Optional[date] = None
     cash: float = 0.0                        # signed: + collected, - paid
@@ -49,10 +49,29 @@ class RollEvent(BaseModel):
     seq: int = 0
     new_strike: Optional[float] = None
     new_expiration: Optional[date] = None
-    # What the NEW short call sold for on its own. This - not the net cash - is
+    # What the NEW short leg sold for on its own - on a spread, the new
+    # spread's own net credit. This - not the net cash of the roll order - is
     # what the 50%-of-credit profit target measures against from here on.
     new_credit: float = 0.0
+    # WHICH side moved. Rolling used to mean one thing only, the short call of
+    # a PMCC, so every roll row written before this existed is a call - which
+    # is exactly what the default says. A cash secured put rolled down and out
+    # writes "put" here, and without it the replay would hunt for a short call
+    # that does not exist and quietly record a roll that changed nothing.
+    option_type: str = "call"
+    # The protective leg's new strike, when a whole vertical rolled as one
+    # order. A credit spread moves both legs together - the short one out and
+    # down, and the long one underneath it with it - so recording only the
+    # short strike would leave the old protection sitting at the old
+    # expiration and report a risk that is no longer hers.
+    new_long_strike: Optional[float] = None
     note: str = ""
+
+    @property
+    def kind(self) -> OptionType:
+        """The side this roll moved, as the enum the legs are stored with."""
+        return (OptionType.PUT if str(self.option_type).lower() == "put"
+                else OptionType.CALL)
 
 
 class LegCloseEvent(BaseModel):
@@ -216,6 +235,65 @@ class Position(BaseModel):
                        if leg.action == Action.SELL
                        and leg.option_type == OptionType.PUT)
         return round(per_unit * 100 * self.contracts, 2)
+
+    @property
+    def open_premium(self) -> float:
+        """What day one PAID HER, on its own - premium sold, nothing netted off.
+
+        On a PMCC or a covered call `open_credit` is already exactly this: the
+        short call's own income, kept apart from the LEAPS or the shares. The
+        LEAPS long call is the one shape where it is not, because its financing
+        put is deliberately absent from the Credit column - that money is a
+        discount on the call, not income - so it is read off the leg instead.
+        """
+        if self.is_long_premium:
+            return self.short_put_credit
+        return round(float(self.open_credit or 0.0), 2)
+
+    @property
+    def open_bought_cost(self) -> float:
+        """What day one COST HER, on its own - the side she bought.
+
+        Not stored anywhere, and it does not need to be: `open_cash` is the net
+        of the two halves, so the half she paid is whatever is left once the
+        premium she collected comes off it. That is the same rearrangement
+        quick_log.resize_after_edit does going the other way.
+
+        Zero on the credit shapes, and rightly so. A credit spread's stored
+        credit is already the NET of the put sold and the put bought - there is
+        no separate "cost" half to pull out, and inventing one would report the
+        long leg's price as capital she laid out.
+        """
+        return round(self.open_premium - float(self.open_cash or 0.0), 2)
+
+    @property
+    def premium_collected(self) -> float:
+        """Every dollar the option-WRITING side of this trade has banked so far.
+
+        The premium it opened with, plus every roll's net since. Rita's
+        question on her SMH PMCC, and the one number nothing on the screen
+        answered: the story told her what the position was worth net of a LEAPS
+        she still owns, and "premium banked" counted the rolls but not the very
+        first call - because that call's money was netted into the opening line
+        against the LEAPS and had nowhere else to be counted.
+
+        Not the same as a result. The long side she bought is still hers and
+        comes back when she sells it; this is only the renting-it-out half.
+        """
+        return round(self.open_premium + self.banked_income, 2)
+
+    @property
+    def premium_sold(self) -> float:
+        """The same story told GROSS: every option this trade ever sold, at the
+        price it sold for, with nothing taken off for buying them back.
+
+        Bigger than `premium_collected` on anything rolled, and it has to be -
+        the difference between them is what the buy-backs cost. Both are shown,
+        because "how much premium have I collected" fairly means either one and
+        only the pair together says where the gap went.
+        """
+        return round(self.open_premium
+                     + sum(r.new_credit for r in self.rolls), 2)
 
     @property
     def capital_at_risk(self) -> float:
@@ -657,27 +735,57 @@ def _apply_edit(pos: Optional[Position],
             pos.open_legs = [leg.model_copy(deep=True) for leg in legs]
 
 
+def _near_short(pos: Position, kind: OptionType) -> Optional[Leg]:
+    """The nearest-dated option of this type that she is SHORT - the leg a roll
+    of that side moves.
+
+    Nearest-dated because the shapes that carry two of a kind carry them at
+    different expirations. Filtered on type as well as side because model 2 and
+    3 covered calls are short a call AND long a put, and an iron condor is
+    short both sides at once - a put roll must never pick the call up.
+    """
+    legs = [leg for leg in pos.legs
+            if leg.action == Action.SELL and leg.option_type == kind]
+    return (min(legs, key=lambda l: (l.dte if l.dte is not None else 10**6))
+            if legs else None)
+
+
+def _near_long(pos: Position, kind: OptionType) -> Optional[Leg]:
+    """The nearest-dated option of this type she BOUGHT - the protection under
+    a vertical, which rolls along with the short leg it is protecting.
+
+    Nearest-dated for the same reason: on a PMCC the LEAPS is a bought call
+    too, and it is no part of any spread being rolled.
+    """
+    legs = [leg for leg in pos.legs
+            if leg.action == Action.BUY and leg.option_type == kind]
+    return (min(legs, key=lambda l: (l.dte if l.dte is not None else 10**6))
+            if legs else None)
+
+
 def _apply_roll(pos: Position, roll: RollEvent) -> None:
-    """Move the position's short call to wherever this event put it.
+    """Move the position's income leg to wherever this event put it.
 
     Three shapes, all one event because all three are just "cash moved and the
-    short call changed":
+    leg she is short changed":
       rolled      bought one back and sold a later one - the usual case
       bought back new_strike is None: she is now uncovered, holding the long
                   side while she waits for a level to write the next call
       written     she was uncovered and has now sold one, so the leg comes back
 
-    After this the tracker prices the contract she actually holds, counts down
-    to its expiration, and measures the 50% target against its own credit.
+    `roll.option_type` says WHICH side moved. This started life call-only,
+    because the only thing the app could roll was a PMCC's short call - but her
+    SOP tells her to roll a threatened CSP or credit spread down and out for a
+    credit too, and those are puts. A row that says nothing is a call, which is
+    what every roll written before this was.
+
+    After this the tracker prices the contracts she actually holds, counts down
+    to their expiration, and measures the 50% target against the new credit.
     """
     pos.rolls.append(roll)
 
-    # The income leg is the nearest-dated short CALL. Model 2 and 3 also carry
-    # short PUTs, which a call roll must never touch.
-    short_calls = [leg for leg in pos.legs
-                   if leg.action == Action.SELL and leg.option_type == OptionType.CALL]
-    leg = (min(short_calls, key=lambda l: (l.dte if l.dte is not None else 10**6))
-           if short_calls else None)
+    kind = roll.kind
+    leg = _near_short(pos, kind)
 
     if roll.new_strike is None:
         # Bought back with nothing written in its place. Drop the leg: she does
@@ -698,21 +806,102 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
                if roll.new_expiration is not None and pos.opened is not None
                else None)
     if leg is None:
-        # She was uncovered and has written a fresh call against the long side.
+        # She was uncovered and has written a fresh one against the long side.
         pos.legs.append(Leg(
-            role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+            role=f"short_{kind.value}", action=Action.SELL, option_type=kind,
             strike=roll.new_strike, quantity=1, dte=new_dte))
-        return
+    else:
+        _move_leg(leg, roll.new_strike, new_dte)
 
-    leg.strike = roll.new_strike
-    if new_dte is not None:
-        # Keep dte measured from `opened`, the invariant leg_expiration() and
-        # the near/far split both rely on.
-        leg.dte = new_dte
-    # The old contract's delta and premium describe an option she no longer
-    # holds; leaving them would quietly feed a stale delta to the red-flag check.
+    # The protection under it, when a whole vertical rolled as one order. It
+    # goes to the new expiration whether or not its strike changed: both legs
+    # of a spread expire together, and leaving this one behind would have the
+    # app pricing a spread she does not hold.
+    if roll.new_long_strike is not None:
+        long_leg = _near_long(pos, kind)
+        if long_leg is None:
+            pos.legs.append(Leg(
+                role=f"long_{kind.value}", action=Action.BUY, option_type=kind,
+                strike=roll.new_long_strike, quantity=1, dte=new_dte))
+        else:
+            _move_leg(long_leg, roll.new_long_strike, new_dte)
+
+    _reprice_risk(pos)
+
+
+def _move_leg(leg: Leg, strike: float, dte: Optional[int]) -> None:
+    """Point one leg at the contract she holds now.
+
+    dte stays measured from `opened`, the invariant leg_expiration() and the
+    near/far split both rely on. The old contract's delta and premium describe
+    an option she no longer holds; leaving them would quietly feed a stale
+    delta to the red-flag check.
+    """
+    leg.strike = float(strike)
+    if dte is not None:
+        leg.dte = dte
     leg.delta = 0.0
     leg.premium = 0.0
+
+
+def _reprice_risk(pos: Position) -> None:
+    """What this trade can lose now, and what the broker holds against it.
+
+    Max loss and buying power are written on the OPEN row and were never
+    revisited, which was harmless while only a PMCC could be rolled - its
+    numbers do not move. A put's do. Roll a 100-strike cash secured put down to
+    90 and the cash that must sit behind it falls by $1,000; roll a spread out
+    to a wider one and the real risk goes UP while the log still shows the old
+    width. Both figures feed her monthly buying-power guardrail, so a stale one
+    is not cosmetic.
+
+    Only the two shapes whose risk is a plain function of the strikes are
+    recomputed. An iron condor (risk is the wider side), a covered call (the
+    shares) and a PMCC (the LEAPS) keep the numbers they were logged with -
+    guessing at those would be worse than leaving them alone. A BP Effect she
+    typed off thinkorswim still wins over all of this: `bp_effect` reads the
+    override before it ever looks here.
+    """
+    contracts = max(int(pos.contracts or 1), 1)
+    collected = float(pos.open_credit or 0.0) + pos.banked_income
+    calls = [l for l in pos.legs if l.option_type == OptionType.CALL]
+    puts = [l for l in pos.legs if l.option_type == OptionType.PUT]
+
+    if pos.short_puts and not pos.has_long_put and not calls:
+        # Cash secured: the whole strike has to sit there. A CSP, the wheel's
+        # first phase, a LEAPS put.
+        cash_needed = pos.assignment_cash_needed
+        if not cash_needed:
+            return
+        pos.buying_power = cash_needed
+        pos.max_loss = round(max(cash_needed - collected, 0.0), 2)
+        return
+
+    if pos.is_debit:
+        # A PMCC is two CALL legs and nothing else, which is the exact shape of
+        # the vertical below - and reading it as one would report its risk as
+        # the 160 points between the LEAPS and the call written against it
+        # instead of the several thousand dollars the LEAPS cost. Opening for a
+        # credit is what makes a spread a spread here.
+        return
+
+    # A plain two-leg vertical, one side only: risk is the width less what she
+    # has collected, and the broker holds exactly that.
+    for side in (puts, calls):
+        if (calls if side is puts else puts) or len(side) != 2:
+            continue
+        shorts = [l for l in side if l.action == Action.SELL]
+        longs = [l for l in side if l.action == Action.BUY]
+        if len(shorts) != 1 or len(longs) != 1:
+            continue
+        if shorts[0].dte != longs[0].dte:
+            continue    # a diagonal, not a vertical - its risk is not the width
+        width = abs(shorts[0].strike - longs[0].strike) * 100 * contracts
+        if not width:
+            continue
+        pos.max_loss = round(max(width - collected, 0.0), 2)
+        pos.buying_power = pos.max_loss
+        return
 
 
 def _long_side_expiration(pos: Position) -> Optional[date]:
@@ -801,6 +990,11 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
 
         if event == "roll" and trade_id:
             roll_seq[trade_id] = roll_seq.get(trade_id, -1) + 1
+            # Which side moved, and where the protection under it went, live in
+            # Details JSON - a roll row never used the cell, and putting them
+            # there means no new column and no Apps Script redeploy. Absent is
+            # a call, which every roll written before puts could be rolled was.
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
             rolls.append((trade_id, roll_seq[trade_id], RollEvent(
                 rolled_on=_to_date(_get(row, idx, "Date", 0)),
                 cash=_to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
@@ -808,6 +1002,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 new_strike=_to_float(_get(row, idx, "Legs (strikes)", 3)),
                 new_expiration=_to_date(_get(row, idx, "Expiration", 14)),
                 new_credit=_to_float(_get(row, idx, "Credit $", 7)) or 0.0,
+                option_type=str(data.get("type") or "call"),
+                new_long_strike=_to_float(data.get("long_strike")),
                 note=str(_get(row, idx, "Notes", 11) or ""),
             )))
             continue
@@ -1254,14 +1450,7 @@ def story(position: Position) -> list[dict[str, Any]]:
     minus money out so far, not a result.
     """
     steps: list[dict[str, Any]] = []
-
-    steps.append({
-        "on": position.opened,
-        "what": "You opened the trade",
-        "detail": _open_detail(position),
-        "cash": round(position.open_cash, 2),
-        "kind": "open",
-    })
+    steps.extend(_opening_steps(position))
 
     for lc in position.leg_closes:
         steps.append({
@@ -1274,25 +1463,24 @@ def story(position: Position) -> list[dict[str, Any]]:
         })
 
     if position.assigned_on is not None:
-        # No cash of its own: the shares were paid for at the strike, which the
-        # close already accounts for. It is here because a wheel makes no sense
-        # without the day the put turned into stock.
+        # The day the put turned into stock, carrying the cash that bought it.
+        # It used to sit here at zero with the share purchase folded into the
+        # opening line instead - which dated thousands of dollars to a day they
+        # did not move and buried the put's premium inside the same number.
         steps.append({
             "on": position.assigned_on,
             "what": "Assigned",
             "detail": (f"The {position.assigned_strike:g} put was assigned - "
                        f"you own the shares from here"
                        if position.assigned_strike else "Assigned into shares"),
-            "cash": 0.0,
+            "cash": round(-position.shares_cost, 2),
             "kind": "assign",
         })
 
     for r in position.rolls:
         steps.append({
             "on": r.rolled_on,
-            "what": ("You sold a call" if r.new_strike is not None and r.cash > 0
-                     else "You bought the call back" if r.new_strike is None
-                     else "You rolled the call"),
+            "what": _roll_what(r),
             "detail": r.note or _roll_detail(r),
             "cash": round(r.cash, 2),
             "kind": "roll",
@@ -1317,18 +1505,87 @@ def story(position: Position) -> list[dict[str, Any]]:
     return steps
 
 
-def _open_detail(position: Position) -> str:
-    """What she actually bought and sold on day one, in strikes."""
+def _opening_steps(position: Position) -> list[dict[str, Any]]:
+    """Day one, as one row or as two.
+
+    ONE row on the credit shapes, where the opening fill IS a single number:
+    a spread's credit is already the net of the put sold and the put bought,
+    and splitting that would report the long leg as capital she laid out.
+
+    TWO rows on the debit shapes, and this is the point. A PMCC opens by buying
+    a LEAPS and selling a call against it, and the log holds only the NET of
+    the two - one large minus with the call's premium invisible inside it. So
+    the panel's "money you collected" total left out the first call she ever
+    sold on the trade, while every call after it counted. Her question,
+    exactly: how much premium have I collected, separately from what the long
+    call cost?
+
+    The two rows sum to open_cash, so the running total and the headline are
+    untouched - this only stops the story netting two different things into one
+    number on the one screen built to take a trade apart.
+    """
+    # A wheel's shares were NOT bought on day one - they arrived the day the put
+    # was assigned, and the story has its own line for that. Held out of both
+    # halves so the money shows on the date it actually left her account, which
+    # is the same complaint one step further on: the opening line was carrying a
+    # share purchase that happened weeks later.
+    later = position.shares_cost if position.assigned_on is not None else 0.0
+    premium = position.open_premium
+    bought = round(position.open_bought_cost - later, 2)
+
+    if premium <= 0 or bought <= 0:
+        return [{
+            "on": position.opened,
+            "what": "You opened the trade",
+            "detail": _open_detail(position),
+            "cash": round(position.open_cash + later, 2),
+            "kind": "open",
+        }]
+
+    return [
+        {
+            "on": position.opened,
+            "what": _bought_what(position),
+            "detail": _open_detail(position, side=Action.BUY),
+            "cash": round(-bought, 2),
+            "kind": "open",
+        },
+        {
+            "on": position.opened,
+            "what": "You sold the first premium against it",
+            "detail": _open_detail(position, side=Action.SELL),
+            "cash": round(premium, 2),
+            "kind": "open_sold",
+        },
+    ]
+
+
+def _bought_what(position: Position) -> str:
+    """The headline on the row for what she laid out on day one."""
+    if position.shares_cost > 0:
+        return "You bought the shares"
+    return "You bought the long side"
+
+
+def _open_detail(position: Position, side: Optional[Action] = None) -> str:
+    """What she actually bought and sold on day one, in strikes.
+
+    `side` narrows it to one half, for the trades whose opening is told as two
+    rows - what she bought, then what she sold against it.
+    """
     legs = position.open_legs or position.legs
-    bought = [leg for leg in legs if leg.action == Action.BUY]
-    sold = [leg for leg in legs if leg.action == Action.SELL]
+    bought = [leg for leg in legs
+              if leg.action == Action.BUY and side is not Action.SELL]
+    sold = [leg for leg in legs
+            if leg.action == Action.SELL and side is not Action.BUY]
+    shares = position.shares_cost > 0 and side is not Action.SELL
 
     def names(group) -> str:
         return "the " + _and(f"{leg.strike:g} {leg.option_type.value}"
                              for leg in group)
 
     parts = []
-    if position.shares_cost > 0:
+    if shares:
         parts.append(f"Bought {position.contracts * 100} shares")
     if bought:
         parts.append(("bought " if parts else "Bought ") + names(bought))
@@ -1361,11 +1618,35 @@ def _leg_close_detail(event: LegCloseEvent) -> str:
     return text
 
 
-def _roll_detail(roll: RollEvent) -> str:
+def _roll_what(roll: RollEvent) -> str:
+    """The headline on a roll's line in the story.
+
+    Three different moves land in the same event, and the old test for them -
+    "cash is positive, so she sold one" - called every ordinary roll a sale.
+    On Rita's SMH that put "You sold a call" above a line reading "Rolled the
+    short call to 650", so the story contradicted itself four times over.
+
+    What tells them apart is in the numbers: writing a fresh one banks exactly
+    what it sold for, because nothing was bought back. A roll banks less than
+    that - the difference IS the buy-back.
+    """
+    word = "put" if str(roll.option_type).lower() == "put" else "call"
     if roll.new_strike is None:
-        return "Bought the short call back - nothing written in its place"
+        return f"You bought the {word} back"
+    if abs(roll.cash - roll.new_credit) < 0.005:
+        return f"You sold a {word}"
+    return f"You rolled the {word}"
+
+
+def _roll_detail(roll: RollEvent) -> str:
+    word = "put" if str(roll.option_type).lower() == "put" else "call"
+    if roll.new_strike is None:
+        return f"Bought the short {word} back - nothing written in its place"
     when = f" expiring {roll.new_expiration:%d/%m/%Y}" if roll.new_expiration else ""
-    return f"Short call is now the {roll.new_strike:g}{when}"
+    if roll.new_long_strike is not None:
+        return (f"The {word} spread is now the {roll.new_strike:g}/"
+                f"{roll.new_long_strike:g}{when}")
+    return f"Short {word} is now the {roll.new_strike:g}{when}"
 
 
 def performance(positions: list[Position], today: Optional[date] = None) -> dict[str, Any]:

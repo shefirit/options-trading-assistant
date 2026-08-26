@@ -1342,15 +1342,28 @@ def render_debit_position_card(position, live: dict) -> None:
                          "What left your account to open this: the long side "
                          "you bought, minus the call credit you collected."))
     banked = position.roll_income
+    # SINCE opening, deliberately: the call sold ON the opening day is already
+    # inside "Cash you put in" to its left, because that is the one number the
+    # log stores for day one. Counting it here as well would show the same
+    # premium twice on one row of four figures. The whole tally, with the two
+    # halves pulled apart, is in "See one trade from start to finish".
     cols[1].metric("Premium banked since", _dollars(banked),
-                   help="Every call you have sold or bought back since opening,"
+                   help="Every leg you have sold or bought back since opening,"
                         " netted. Counted in the month each one happened. It "
-                        "goes negative when you have just paid to close a call "
-                        "and not yet sold the next one."
+                        "goes negative when you have just paid to close one "
+                        "and not yet sold the next. The call you sold on the "
+                        "opening day is not in here - it is already netted into "
+                        "Cash you put in."
                         if banked < 0 else
-                        "Net credit from every roll of the short call so far. "
-                        "This money is already yours - it is counted in the "
-                        "month each roll happened.")
+                        f"Net credit from every roll of the short leg since you "
+                        f"opened it - {_dollars(banked)} so far, already yours "
+                        f"and counted in the month each roll happened. The call "
+                        f"you sold on the OPENING day is not in here: it is "
+                        f"netted into Cash you put in. For the whole premium "
+                        f"tally with the long side held apart "
+                        f"({_dollars(position.premium_collected)} on this "
+                        f"trade), open Correct and look back → See one trade "
+                        f"from start to finish.")
     cols[2].metric("Worth now",
                    _dollars(value) if value is not None else "n/a",
                    help="What unwinding every leg would pay you at today's "
@@ -1609,6 +1622,61 @@ def _story_row(n: str, when: str, what: str, detail: str, cash,
             f'{amount}</div>')
 
 
+def _premium_panel(position, closed: bool) -> None:
+    """How much premium this trade has collected, apart from the long side.
+
+    Rita, on her SMH PMCC: the story showed the long call as a minus lumped in
+    with the first short call, and she wanted the premium on its own. It was
+    not a display quirk - the opening fill really is one netted number in the
+    log, so the first call she sold on a PMCC was invisible everywhere. The
+    story now tells day one as two lines, and this adds up what the writing
+    side has actually paid her over the life of the trade.
+
+    Only on the shapes that HAVE a long side to keep separate. On a credit
+    spread the credit is the whole trade and this would just repeat the
+    headline.
+    """
+    if position.open_bought_cost <= 0:
+        return
+    sold = position.premium_sold
+    kept = position.premium_collected
+    if sold <= 0:
+        return
+
+    rows = [_story_row("", "", "The first one you sold", "",
+                       position.open_premium, "ota-story-sum")]
+    rolled = round(sold - position.open_premium, 2)
+    if rolled:
+        rows.append(_story_row("", "", "Sold on rolls since",
+                               "at the price each one sold for", rolled))
+    if abs(sold - kept) > 0.005:
+        rows.append(_story_row("", "", "Paid to buy them back", "",
+                               round(kept - sold, 2)))
+    rows.append(_story_row("", "", "Premium collected so far", "", kept,
+                           "ota-story-final"))
+
+    st.markdown(
+        f'<div class="ota-story">'
+        f'<div class="ota-story-head"><div class="ota-story-title">'
+        f'&#128176; Premium collected, on its own</div>'
+        f'<div class="ota-story-when">What the options you SOLD have paid you '
+        f'- the long side you bought is not in this</div></div>'
+        + "".join(rows) + '</div>', unsafe_allow_html=True)
+
+    what = "shares" if position.shares_cost > 0 else "long call"
+    owned = ("they are still yours and the money comes back when you sell them"
+             if position.shares_cost > 0 else
+             "it is still yours and the money comes back when you sell it")
+    tail = (" The last one was bought back inside your closing fill, so it "
+            "shows in the result above rather than here." if closed else "")
+    # \\$ rather than the &#36; the HTML above uses: a raw pair of dollar signs
+    # turns Streamlit's markdown into LaTeX and garbles the line.
+    theme.note(
+        f"Your {what} cost **\\${position.open_bought_cost:,.0f}**. That is "
+        f"capital, not premium - {owned}, which is why it is kept out of this "
+        f"tally.{tail}")
+
+
 def render_story(position, steps: list[dict]) -> None:
     """One trade from the first fill to the last, as a list she can read.
 
@@ -1681,6 +1749,8 @@ def render_story(position, steps: list[dict]) -> None:
     st.markdown(f'<div class="ota-story">{head}{body}{summary}</div>',
                 unsafe_allow_html=True)
 
+    _premium_panel(position, closed)
+
     if closed:
         # The opening line covers every leg she opened with, which thinkorswim
         # may well show as two or three separate fills seconds apart. Without
@@ -1702,6 +1772,22 @@ def render_story(position, steps: list[dict]) -> None:
 
 
 # ================================================================== month view
+def _roll_reason(roll) -> str:
+    """The one line the month's table shows for a roll.
+
+    It names the side, because a put rolled down and out and a call rolled up
+    and out are different decisions and the log used to call both of them
+    "the short call" - which read as a mistake on every put she rolled.
+    """
+    side = "put" if str(roll.option_type).lower() == "put" else "call"
+    if roll.new_strike is None:
+        return f"Bought the short {side} back"
+    if roll.new_long_strike is not None:
+        return (f"Rolled the {side} spread to "
+                f"{roll.new_strike:g}/{roll.new_long_strike:g}")
+    return f"Rolled the short {side} to {roll.new_strike:g}"
+
+
 def _month_result_word(position, tag: str) -> str:
     """One plain-English word for how this trade sits in THIS month's list."""
     if tag == "rolled":
@@ -1752,8 +1838,7 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Closed": roll.rolled_on,
                 "Credit $": roll.new_credit or None,
                 "Result $": roll.cash,
-                "Why closed": (f"Rolled the short call to {roll.new_strike:g}"
-                               if roll.new_strike else "Rolled the short call"),
+                "Why closed": _roll_reason(roll),
             })
             continue
         leg = r.get("leg_close")
@@ -1795,7 +1880,8 @@ def month_trades_column_config():
         "Result": st.column_config.TextColumn(
             help="How this trade ended up. 'Still open' trades are being "
                  "watched in the open-trades list above. 'Rolled' is a short "
-                 "call rolled out - the credit was banked that day. 'Leg sold' "
+                 "leg rolled out - a call, or a put rolled down and out. The "
+                 "credit was banked that day. 'Leg sold' "
                  "is one leg taken off while the trade carried on, usually the "
                  "long put of a spread left to be assigned."),
         "Opened": st.column_config.DateColumn(format=DATE_FMT),

@@ -680,41 +680,110 @@ def test_story_runs_open_to_close_and_lands_on_the_result():
     p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
     steps = story(p)
 
-    assert [s["kind"] for s in steps] == ["open", "roll", "close"]
-    assert [s["cash"] for s in steps] == [OPEN_CASH, ROLL_CASH, CLOSE_CASH]
+    assert [s["kind"] for s in steps] == ["open", "open_sold", "roll", "close"]
+    assert [s["cash"] for s in steps] == [-LEAPS_COST, CALL_CREDIT,
+                                          ROLL_CASH, CLOSE_CASH]
     # The invariant the whole feature rests on: the last running total IS the
     # headline result, so the story and the table can never disagree.
     assert steps[-1]["running"] == p.realized_total == RESULT
-    assert steps[0]["running"] == OPEN_CASH
+    assert steps[1]["running"] == OPEN_CASH
+
+
+def test_day_one_tells_the_leaps_and_the_call_apart():
+    """Rita, on her SMH PMCC: the opening line showed the long call as a minus
+    with the first short call buried inside it, so the panel's "money you
+    collected" left out the very first call she sold on the trade. The log
+    holds only the net, so the two halves have to be worked back out of it."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
+    bought, sold = story(p)[0], story(p)[1]
+
+    assert bought["cash"] == -LEAPS_COST
+    assert sold["cash"] == CALL_CREDIT
+    assert bought["cash"] + sold["cash"] == OPEN_CASH,         "the two halves must still be the fill the log recorded"
+    assert "100 call" in bought["detail"] and "130" not in bought["detail"]
+    assert "130 call" in sold["detail"] and "100" not in sold["detail"]
+
+
+def test_a_credit_spread_still_opens_on_one_line():
+    """Its credit is already the net of the put sold and the put bought.
+    Splitting that would report the long leg as capital she laid out."""
+    p = parse_rows(COLUMNS, [_spread_row(), _spread_close_row()])[0]
+    assert [s["kind"] for s in story(p)] == ["open", "close"]
 
 
 def test_story_names_the_strikes_she_opened_with_not_the_rolled_ones():
     """`legs` is mutated in place by a roll, so the day-one short strike is
     gone by the time anyone reads it back."""
     p = parse_rows(COLUMNS, [_open_row(), _roll_row(), _close_row()])[0]
-    opened = story(p)[0]["detail"]
-    assert opened == "Bought the 100 call, sold the 130 call"
+    opened = " ".join(s["detail"] for s in story(p) if s["kind"].startswith("open"))
+    assert "Bought the 100 call" in opened and "Sold the 130 call" in opened
     assert "135" not in opened       # where the roll moved it later
 
 
 def test_story_on_an_open_trade_stops_at_the_last_roll():
     p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
     steps = story(p)
-    assert [s["kind"] for s in steps] == ["open", "roll"]
+    assert [s["kind"] for s in steps] == ["open", "open_sold", "roll"]
     assert steps[-1]["running"] == OPEN_CASH + ROLL_CASH
+
+
+def test_a_roll_is_not_called_a_sale():
+    """The old test was "cash is positive, so she sold one", which named every
+    ordinary roll a sale - putting "You sold a call" above a line reading
+    "Rolled the short call to 135". Writing a FRESH one banks exactly what it
+    sold for; a roll banks less, and the difference is the buy-back."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
+    rolled = next(s for s in story(p) if s["kind"] == "roll")
+    assert rolled["what"] == "You rolled the call"
+
+    fresh = build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
+                           cash=210.0, new_strike=135.0,
+                           new_expiration=ROLL_EXP, new_credit=210.0,
+                           rolled_on=date(2026, 4, 6))
+    written = next(s for s in story(parse_rows(COLUMNS, [_open_row(), fresh])[0])
+                   if s["kind"] == "roll")
+    assert written["what"] == "You sold a call"
 
 
 def test_story_shows_a_buy_back_with_nothing_written_as_money_out():
     back = build_roll_row("P1", "MSFT", "Poor Man's Covered Call (PMCC)",
                           cash=-120.0, rolled_on=date(2026, 4, 6))
     steps = story(parse_rows(COLUMNS, [_open_row(), back])[0])
-    assert steps[1]["what"] == "You bought the call back"
-    assert steps[1]["cash"] == -120.0
-    assert steps[1]["running"] == OPEN_CASH - 120.0
+    assert steps[2]["what"] == "You bought the call back"
+    assert steps[2]["cash"] == -120.0
+    assert steps[2]["running"] == OPEN_CASH - 120.0
 
 
-def test_story_of_a_credit_spread_starts_positive():
-    """The mirror image: a spread collects up front and pays to close."""
+# --------------------------------------------- premium, apart from the long side
+def test_premium_collected_counts_the_first_call_and_every_roll():
+    """The question she asked outright: how much premium have I collected,
+    separately from what the long call cost? "Premium banked" counted the
+    rolls and not the opening call, because that call's money was netted into
+    the opening line and had nowhere else to be counted."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
+    assert p.roll_income == ROLL_CASH
+    assert p.premium_collected == CALL_CREDIT + ROLL_CASH
+    assert p.open_bought_cost == LEAPS_COST
+
+
+def test_premium_sold_is_the_gross_and_says_so_by_being_bigger():
+    """Gross: every call at the price it sold for. The gap between this and
+    what she kept is exactly what buying the old ones back cost."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
+    assert p.premium_sold == CALL_CREDIT + ROLL_NEW_CREDIT
+    assert p.premium_sold > p.premium_collected
+
+
+def test_a_credit_spread_has_no_long_side_to_keep_separate():
+    """Its long put is paid for out of the credit, not laid out as capital -
+    so there is nothing to hold apart and the panel stays off."""
+    p = parse_rows(COLUMNS, [_spread_row()])[0]
+    assert p.open_bought_cost == 0.0
+
+
+def _spread_row() -> list:
+    """A put credit spread's opening row - the mirror shape, where the credit
+    is already the net of the put sold and the put bought."""
     trade = Trade(
         strategy_key="put_credit_spread", underlying="MSFT", contracts=1,
         legs=[
@@ -725,12 +794,19 @@ def test_story_of_a_credit_spread_starts_positive():
         ])
     size = {"credit": 200.0, "max_loss": 300.0, "buying_power": 300.0,
             "open_cash": 200.0}
-    row = build_row(trade, "Put Credit Spread", size, True, "", trade_id="S1",
-                    opened_on=OPENED, expiration_on=SHORT_EXP)
-    close = build_close_row("S1", "MSFT", "Put Credit Spread", exit_cost=90.0,
-                            realized_pl=110.0, reason="Profit target (50%) hit",
-                            closed_on=date(2026, 3, 20), close_cash=-90.0)
-    steps = story(parse_rows(COLUMNS, [row, close])[0])
+    return build_row(trade, "Put Credit Spread", size, True, "", trade_id="S1",
+                     opened_on=OPENED, expiration_on=SHORT_EXP)
+
+
+def _spread_close_row() -> list:
+    return build_close_row("S1", "MSFT", "Put Credit Spread", exit_cost=90.0,
+                           realized_pl=110.0, reason="Profit target (50%) hit",
+                           closed_on=date(2026, 3, 20), close_cash=-90.0)
+
+
+def test_story_of_a_credit_spread_starts_positive():
+    """The mirror image: a spread collects up front and pays to close."""
+    steps = story(parse_rows(COLUMNS, [_spread_row(), _spread_close_row()])[0])
     assert steps[0]["cash"] == 200.0          # collected, not paid
     assert steps[-1]["cash"] == -90.0        # paying to close is the mirror
     assert steps[-1]["running"] == 110.0
