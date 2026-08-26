@@ -237,6 +237,65 @@ class Position(BaseModel):
         return round(per_unit * 100 * self.contracts, 2)
 
     @property
+    def open_premium(self) -> float:
+        """What day one PAID HER, on its own - premium sold, nothing netted off.
+
+        On a PMCC or a covered call `open_credit` is already exactly this: the
+        short call's own income, kept apart from the LEAPS or the shares. The
+        LEAPS long call is the one shape where it is not, because its financing
+        put is deliberately absent from the Credit column - that money is a
+        discount on the call, not income - so it is read off the leg instead.
+        """
+        if self.is_long_premium:
+            return self.short_put_credit
+        return round(float(self.open_credit or 0.0), 2)
+
+    @property
+    def open_bought_cost(self) -> float:
+        """What day one COST HER, on its own - the side she bought.
+
+        Not stored anywhere, and it does not need to be: `open_cash` is the net
+        of the two halves, so the half she paid is whatever is left once the
+        premium she collected comes off it. That is the same rearrangement
+        quick_log.resize_after_edit does going the other way.
+
+        Zero on the credit shapes, and rightly so. A credit spread's stored
+        credit is already the NET of the put sold and the put bought - there is
+        no separate "cost" half to pull out, and inventing one would report the
+        long leg's price as capital she laid out.
+        """
+        return round(self.open_premium - float(self.open_cash or 0.0), 2)
+
+    @property
+    def premium_collected(self) -> float:
+        """Every dollar the option-WRITING side of this trade has banked so far.
+
+        The premium it opened with, plus every roll's net since. Rita's
+        question on her SMH PMCC, and the one number nothing on the screen
+        answered: the story told her what the position was worth net of a LEAPS
+        she still owns, and "premium banked" counted the rolls but not the very
+        first call - because that call's money was netted into the opening line
+        against the LEAPS and had nowhere else to be counted.
+
+        Not the same as a result. The long side she bought is still hers and
+        comes back when she sells it; this is only the renting-it-out half.
+        """
+        return round(self.open_premium + self.banked_income, 2)
+
+    @property
+    def premium_sold(self) -> float:
+        """The same story told GROSS: every option this trade ever sold, at the
+        price it sold for, with nothing taken off for buying them back.
+
+        Bigger than `premium_collected` on anything rolled, and it has to be -
+        the difference between them is what the buy-backs cost. Both are shown,
+        because "how much premium have I collected" fairly means either one and
+        only the pair together says where the gap went.
+        """
+        return round(self.open_premium
+                     + sum(r.new_credit for r in self.rolls), 2)
+
+    @property
     def capital_at_risk(self) -> float:
         """The dollars actually tied up - what a return % should divide by.
 
@@ -1391,14 +1450,7 @@ def story(position: Position) -> list[dict[str, Any]]:
     minus money out so far, not a result.
     """
     steps: list[dict[str, Any]] = []
-
-    steps.append({
-        "on": position.opened,
-        "what": "You opened the trade",
-        "detail": _open_detail(position),
-        "cash": round(position.open_cash, 2),
-        "kind": "open",
-    })
+    steps.extend(_opening_steps(position))
 
     for lc in position.leg_closes:
         steps.append({
@@ -1411,25 +1463,24 @@ def story(position: Position) -> list[dict[str, Any]]:
         })
 
     if position.assigned_on is not None:
-        # No cash of its own: the shares were paid for at the strike, which the
-        # close already accounts for. It is here because a wheel makes no sense
-        # without the day the put turned into stock.
+        # The day the put turned into stock, carrying the cash that bought it.
+        # It used to sit here at zero with the share purchase folded into the
+        # opening line instead - which dated thousands of dollars to a day they
+        # did not move and buried the put's premium inside the same number.
         steps.append({
             "on": position.assigned_on,
             "what": "Assigned",
             "detail": (f"The {position.assigned_strike:g} put was assigned - "
                        f"you own the shares from here"
                        if position.assigned_strike else "Assigned into shares"),
-            "cash": 0.0,
+            "cash": round(-position.shares_cost, 2),
             "kind": "assign",
         })
 
     for r in position.rolls:
         steps.append({
             "on": r.rolled_on,
-            "what": ("You sold a call" if r.new_strike is not None and r.cash > 0
-                     else "You bought the call back" if r.new_strike is None
-                     else "You rolled the call"),
+            "what": _roll_what(r),
             "detail": r.note or _roll_detail(r),
             "cash": round(r.cash, 2),
             "kind": "roll",
@@ -1454,18 +1505,87 @@ def story(position: Position) -> list[dict[str, Any]]:
     return steps
 
 
-def _open_detail(position: Position) -> str:
-    """What she actually bought and sold on day one, in strikes."""
+def _opening_steps(position: Position) -> list[dict[str, Any]]:
+    """Day one, as one row or as two.
+
+    ONE row on the credit shapes, where the opening fill IS a single number:
+    a spread's credit is already the net of the put sold and the put bought,
+    and splitting that would report the long leg as capital she laid out.
+
+    TWO rows on the debit shapes, and this is the point. A PMCC opens by buying
+    a LEAPS and selling a call against it, and the log holds only the NET of
+    the two - one large minus with the call's premium invisible inside it. So
+    the panel's "money you collected" total left out the first call she ever
+    sold on the trade, while every call after it counted. Her question,
+    exactly: how much premium have I collected, separately from what the long
+    call cost?
+
+    The two rows sum to open_cash, so the running total and the headline are
+    untouched - this only stops the story netting two different things into one
+    number on the one screen built to take a trade apart.
+    """
+    # A wheel's shares were NOT bought on day one - they arrived the day the put
+    # was assigned, and the story has its own line for that. Held out of both
+    # halves so the money shows on the date it actually left her account, which
+    # is the same complaint one step further on: the opening line was carrying a
+    # share purchase that happened weeks later.
+    later = position.shares_cost if position.assigned_on is not None else 0.0
+    premium = position.open_premium
+    bought = round(position.open_bought_cost - later, 2)
+
+    if premium <= 0 or bought <= 0:
+        return [{
+            "on": position.opened,
+            "what": "You opened the trade",
+            "detail": _open_detail(position),
+            "cash": round(position.open_cash + later, 2),
+            "kind": "open",
+        }]
+
+    return [
+        {
+            "on": position.opened,
+            "what": _bought_what(position),
+            "detail": _open_detail(position, side=Action.BUY),
+            "cash": round(-bought, 2),
+            "kind": "open",
+        },
+        {
+            "on": position.opened,
+            "what": "You sold the first premium against it",
+            "detail": _open_detail(position, side=Action.SELL),
+            "cash": round(premium, 2),
+            "kind": "open_sold",
+        },
+    ]
+
+
+def _bought_what(position: Position) -> str:
+    """The headline on the row for what she laid out on day one."""
+    if position.shares_cost > 0:
+        return "You bought the shares"
+    return "You bought the long side"
+
+
+def _open_detail(position: Position, side: Optional[Action] = None) -> str:
+    """What she actually bought and sold on day one, in strikes.
+
+    `side` narrows it to one half, for the trades whose opening is told as two
+    rows - what she bought, then what she sold against it.
+    """
     legs = position.open_legs or position.legs
-    bought = [leg for leg in legs if leg.action == Action.BUY]
-    sold = [leg for leg in legs if leg.action == Action.SELL]
+    bought = [leg for leg in legs
+              if leg.action == Action.BUY and side is not Action.SELL]
+    sold = [leg for leg in legs
+            if leg.action == Action.SELL and side is not Action.BUY]
+    shares = position.shares_cost > 0 and side is not Action.SELL
 
     def names(group) -> str:
         return "the " + _and(f"{leg.strike:g} {leg.option_type.value}"
                              for leg in group)
 
     parts = []
-    if position.shares_cost > 0:
+    if shares:
         parts.append(f"Bought {position.contracts * 100} shares")
     if bought:
         parts.append(("bought " if parts else "Bought ") + names(bought))
@@ -1498,11 +1618,35 @@ def _leg_close_detail(event: LegCloseEvent) -> str:
     return text
 
 
-def _roll_detail(roll: RollEvent) -> str:
+def _roll_what(roll: RollEvent) -> str:
+    """The headline on a roll's line in the story.
+
+    Three different moves land in the same event, and the old test for them -
+    "cash is positive, so she sold one" - called every ordinary roll a sale.
+    On Rita's SMH that put "You sold a call" above a line reading "Rolled the
+    short call to 650", so the story contradicted itself four times over.
+
+    What tells them apart is in the numbers: writing a fresh one banks exactly
+    what it sold for, because nothing was bought back. A roll banks less than
+    that - the difference IS the buy-back.
+    """
+    word = "put" if str(roll.option_type).lower() == "put" else "call"
     if roll.new_strike is None:
-        return "Bought the short call back - nothing written in its place"
+        return f"You bought the {word} back"
+    if abs(roll.cash - roll.new_credit) < 0.005:
+        return f"You sold a {word}"
+    return f"You rolled the {word}"
+
+
+def _roll_detail(roll: RollEvent) -> str:
+    word = "put" if str(roll.option_type).lower() == "put" else "call"
+    if roll.new_strike is None:
+        return f"Bought the short {word} back - nothing written in its place"
     when = f" expiring {roll.new_expiration:%d/%m/%Y}" if roll.new_expiration else ""
-    return f"Short call is now the {roll.new_strike:g}{when}"
+    if roll.new_long_strike is not None:
+        return (f"The {word} spread is now the {roll.new_strike:g}/"
+                f"{roll.new_long_strike:g}{when}")
+    return f"Short {word} is now the {roll.new_strike:g}{when}"
 
 
 def performance(positions: list[Position], today: Optional[date] = None) -> dict[str, Any]:
