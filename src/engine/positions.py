@@ -377,10 +377,29 @@ class Position(BaseModel):
 
         False again the moment the shares actually arrive (assigned_strike is
         set) or the trade is closed: from there the wheel takes over.
+
+        A later ROLL takes it back too. Rolling the short put out is the
+        opposite decision - she is managing the contract rather than letting it
+        come to her - and it moves the very strike and date the plan is built
+        on. Rita hit this on NBIS: the long put came off on the 20th "left to
+        be assigned", the short put was rolled down and out six days later, and
+        the card was still counting out $38,000 for shares while the put sat
+        12% out of the money with fifty days on it - the 50% target, the 21-day
+        clock and the stop all suppressed behind a decision she had reversed.
+
+        Only a roll that WRITES a new short put counts. Buying the old one back
+        and writing nothing leaves no short put to be assigned on, which the
+        last line already answers.
         """
         if self.status != "open" or self.assigned_strike:
             return False
-        if not any(e.for_assignment for e in self.leg_closes):
+        marked = [e.closed_on for e in self.leg_closes if e.for_assignment]
+        if not marked:
+            return False
+        said_on = max((d for d in marked if d is not None), default=None)
+        if said_on is not None and any(
+                r.new_strike is not None and r.rolled_on is not None
+                and r.rolled_on > said_on for r in self.rolls):
             return False
         return bool(self.short_puts)
 
