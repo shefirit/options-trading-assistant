@@ -48,12 +48,19 @@ def _delete_control(trade_id, what: str, key: str) -> None:
 
 def _live_leg_mid(provider, underlying: str, strike: float,
                   expiration: dt.date,
-                  option_type: OptionType = OptionType.CALL) -> Optional[float]:
-    """Today's mid for one contract in dollars per contract, or None.
+                  option_type: OptionType = OptionType.CALL,
+                  contracts: int = 1) -> Optional[float]:
+    """Today's mid for that leg in dollars for the WHOLE position, or None.
 
     Used to prefill what a leg is worth so she does not have to dig per-leg
     prices out of thinkorswim: what a freshly sold call went for, and what the
     long put she is about to sell back is fetching today.
+
+    Every money box it feeds asks for the position's total, so the contract
+    count belongs here rather than at each call. Left out, the prefill on three
+    contracts arrived a third of its real size - right on one contract, which
+    is why it went unnoticed - and on a roll that turned a perfectly good chain
+    price into one the form's own arithmetic then rejected.
     """
     import datetime as dt
 
@@ -74,14 +81,14 @@ def _live_leg_mid(provider, underlying: str, strike: float,
          and abs(c.strike - strike) < 1e-6), None)
     if contract is None or contract.mid <= 0:
         return None
-    return round(contract.mid * 100, 2)
+    return round(contract.mid * 100 * max(int(contracts), 1), 2)
 
 
 def _live_call_mid(provider, underlying: str, strike: float,
-                   expiration: dt.date) -> Optional[float]:
-    """Today's mid for one call - the call side of _live_leg_mid."""
+                   expiration: dt.date, contracts: int = 1) -> Optional[float]:
+    """Today's mid for the calls she holds - the call side of _live_leg_mid."""
     return _live_leg_mid(provider, underlying, strike, expiration,
-                         OptionType.CALL)
+                         OptionType.CALL, contracts)
 
 
 def _write_call_form(p, provider, kp: str = "detail") -> None:
@@ -104,7 +111,8 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
                             value=dt.date.today() + dt.timedelta(days=30),
                             min_value=dt.date.today(),
                             key=f"write_exp_{kp}_{p.trade_id}", format=components.DATE_FMT)
-        suggested = _live_call_mid(provider, p.underlying, strike, exp)
+        suggested = _live_call_mid(provider, p.underlying, strike, exp,
+                                   int(p.contracts or 1))
         credit = _fill_price_input(
             "Credit price on your fill",
             f"write_credit_{kp}_{p.trade_id}_{strike:g}_{exp}",
@@ -462,10 +470,11 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         new_short = (f"{new_strike:g}/{new_long_strike:g} {word} spread"
                      if spread and new_strike and new_long_strike
                      else _leg_short(new_strike, word))
-        suggested = _live_leg_mid(provider, p.underlying, new_strike, new_exp, kind)
+        suggested = _live_leg_mid(provider, p.underlying, new_strike, new_exp,
+                                  kind, contracts)
         if spread and new_long_strike:
             bought = _live_leg_mid(provider, p.underlying, new_long_strike,
-                                   new_exp, kind)
+                                   new_exp, kind, contracts)
             # The spread's own credit: what the short leg pays less what the
             # protection costs. Either leg missing from the chain makes the
             # pair meaningless, so offer nothing rather than half of it.
@@ -492,19 +501,41 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                  "not the dollar total. The app does the x100. If the roll cost "
                  "you money instead of paying you, type a minus in front.")
 
-        # Prefilled from the chain, so the common case is "leave it alone". The
-        # key carries the strike and date because Streamlit ignores value=
-        # once a key has been seen, and this default must follow those.
+        # Prefilled from the chain, so the common case is "leave it alone" -
+        # unless the chain's answer argues with her fill, in which case her
+        # fill wins and the number is worked forward from the buy-back. The app
+        # used to fill in an impossible figure and then refuse the roll over
+        # it, which left her fixing a number she had never typed.
+        pre = roll_math.new_credit_prefill(suggested, cost_now, cash)
+        # The key carries the strike, the date and which way this was worked
+        # out, because Streamlit ignores value= once a key has been seen and
+        # the worked-forward default moves with the fill price above it.
+        stamp = "chain" if pre.from_chain else f"net{pre.total:g}"
         new_credit = _fill_price_input(
             f"What the new {new_short} sold for by itself"
             if new_strike else f"What the new {money_word} sold for by itself",
-            f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}",
-            contracts, default_total=suggested,
+            f"roll_credit_{kp}_{p.trade_id}_{new_strike:g}_{new_exp}_{stamp}",
+            contracts, default_total=pre.total,
             help="Not on your fill - a one-order roll only prints the net. The "
-                 "app fills in today's price for it, which is close enough. "
-                 "Change it only if your order history happens to list the legs "
+                 "app fills it in for you, which is close enough. Change it "
+                 "only if your order history happens to list the legs "
                  "separately.")
-        if suggested:
+        if pre.total and not pre.from_chain:
+            missing = suggested is None
+            theme.note(
+                f"**Worked out from your own fill.** "
+                + (f"The app could not price the new {money_word} on today's "
+                   f"chain, so it used your order instead. "
+                   if missing else
+                   f"Today's chain priced the new {money_word} BELOW the "
+                   f"{_signed(cash)} this roll paid you, which would mean "
+                   f"buying back the {old_short} paid you money. Your fill "
+                   f"cannot argue with itself, so the app used that instead. ")
+                + f"Buying back the {old_short} costs about "
+                  f"\\${float(cost_now):,.0f} today, and the roll paid you "
+                  f"\\${abs(cash):,.0f} on top. Change it if your order "
+                  f"history lists the legs separately.")
+        elif pre.total:
             theme.note("**Already filled in for you.** Your fill does not carry "
                        "this number, so the app priced it off today's chain. "
                        "Leave it as it is unless you know better.")
@@ -872,7 +903,7 @@ def _sell_long_leg_form(p, provider, kp: str = "detail") -> None:
 
         suggested = _live_leg_mid(provider, p.underlying, leg.strike,
                                   p.leg_expiration(leg) or p.expiration,
-                                  OptionType.PUT)
+                                  OptionType.PUT, int(p.contracts or 1))
         proceeds = _fill_price_input(
             "Price you SOLD the long put for",
             f"legcash_{kp}_{p.trade_id}", int(p.contracts or 1),
