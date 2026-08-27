@@ -326,3 +326,65 @@ def test_it_still_says_where_she_stands_in_dollars():
     sig = exit_rules.evaluate(p, EXIT, current_cost=2600.0, underlying_price=95.0)
     assert sig.pl_dollars == 1700.0 - 2600.0
     assert sig.profit_pct is None
+
+
+# ------------------------------------------- and when she changes her mind
+def _rows_then_rolled(rolled_on: date | None = None, new_strike: float | None = 95.0,
+                      for_assignment: bool = True):
+    """The long put sold "leave it to be assigned", then the short put rolled.
+
+    Two decisions on the same trade, and the second one contradicts the first.
+    """
+    rows = _rows(for_assignment=for_assignment)
+    rows.append(build_roll_row(
+        "T1", "XYZ", "Put Credit Spread", 140.0,
+        new_strike=new_strike,
+        new_expiration=date.today() + timedelta(days=45),
+        new_credit=520.0, option_type="put",
+        rolled_on=rolled_on or date.today() - timedelta(days=1)))
+    return rows
+
+
+def test_rolling_the_short_put_takes_back_leave_it_to_be_assigned():
+    """She said let it come to me, then rolled it down and out six days later.
+    Rolling IS the decision to manage it, so the assignment plan - and the
+    silence it imposes on every exit rule - has to give way."""
+    p = parse_rows(COLUMNS, _rows_then_rolled())[0]
+    assert p.short_puts and p.status == "open"
+    assert not p.awaiting_assignment
+
+
+def test_the_exit_rules_start_running_again_after_that_roll():
+    """The plan suppresses the 50% target, the 21-day clock and the stop on
+    purpose. Once she has rolled, they are what she needs back."""
+    p = parse_rows(COLUMNS, _rows_then_rolled())[0]
+    # $100 to close against the $520 the rolled put sold for: the 50% target
+    # her SOP runs on, which the assignment plan had been silencing.
+    sig = exit_rules.evaluate(p, EXIT, current_cost=100.0, underlying_price=112.0)
+    assert sig.action == "profit"
+    assert "assign" not in (sig.reason or "").lower()
+
+
+def test_a_roll_BEFORE_she_said_it_does_not_take_it_back():
+    """Order is the whole point: a roll she made first, then decided to let the
+    remaining put assign, leaves the decision standing."""
+    rows = _rows_then_rolled(rolled_on=date.today() - timedelta(days=5))
+    p = parse_rows(COLUMNS, rows)[0]
+    assert p.awaiting_assignment
+
+
+def test_buying_the_put_back_is_not_a_change_of_mind():
+    """A roll that writes nothing in its place leaves no short put at all -
+    there is nothing left to be assigned on, which is a different answer
+    reached a different way."""
+    rows = _rows_then_rolled(new_strike=None)
+    p = parse_rows(COLUMNS, rows)[0]
+    assert not p.short_puts
+    assert not p.awaiting_assignment
+
+
+def test_a_roll_on_a_trade_she_never_marked_changes_nothing():
+    """Selling the long put to squeeze the last of it out was never an
+    assignment plan, so a roll after it has nothing to take back."""
+    p = parse_rows(COLUMNS, _rows_then_rolled(for_assignment=False))[0]
+    assert not p.awaiting_assignment
