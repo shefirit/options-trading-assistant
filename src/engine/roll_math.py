@@ -70,6 +70,47 @@ class RollFigures:
         return ""
 
 
+@dataclass(frozen=True)
+class Prefill:
+    """A suggested "what did the new leg sell for on its own?", and where it
+    came from - the two answers read differently enough on screen to be worth
+    telling apart.
+    """
+
+    total: float | None      # dollars for the whole position, or None
+    from_chain: bool         # True = today's chain, False = worked from her fill
+
+
+def new_credit_prefill(chain_price: float | None, cost_to_close: float | None,
+                       net_credit: float) -> Prefill:
+    """What to put in that box before she types anything.
+
+    Today's chain is the obvious answer and usually the right one. But it
+    prices the leg NOW, knows nothing about the order she actually filled, and
+    on a thin or stale quote it can come back lower than the credit the roll
+    paid her - which says the buy-back paid her too, and the form then refuses
+    the roll over a number it filled in itself.
+
+    Her own fill answers the same question and cannot contradict itself: the
+    new leg's premium is what getting out of the old one costs plus the cash
+    the order put in her account. So that way round is used whenever the
+    chain's answer cannot be squared with her fill.
+
+    Both figures are TOTAL dollars for the whole position, like everything else
+    here. A chain price that is impossible with nothing to replace it is handed
+    back unchanged - better that she sees the warning and fixes it than that
+    the app invents a number.
+    """
+    chain = round(float(chain_price), 2) if chain_price is not None else None
+    if chain is not None and (not net_credit or chain >= float(net_credit)):
+        return Prefill(chain, True)
+    worked = (round(float(cost_to_close) + float(net_credit), 2)
+              if cost_to_close is not None and net_credit else None)
+    if worked is not None and worked > 0:
+        return Prefill(worked, False)
+    return Prefill(chain, True)
+
+
 def from_net(old_credit: float, net_credit: float, new_credit: float,
              leg_word: str = "call") -> RollFigures:
     """Build the figures from the NET price on her fill (the usual case).
