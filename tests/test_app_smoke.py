@@ -80,9 +80,11 @@ def test_market_tab_new_sections_render_in_demo(demo_app):
     assert not at.exception
     all_md = " ".join(str(m.value) for m in at.markdown)
     assert "Today's brief" in all_md
-    # Renamed from "Strategy fit today": the ranking is a multi-week read, so
-    # "today" made a correct, unchanged answer look stuck.
-    assert "Which strategy fits the market now" in all_md
+    # Renamed twice, for the same reason both times: the ranking is a multi-week
+    # read. "Strategy fit today" made a correct, unchanged answer look stuck, and
+    # "fits the market now" still promised today a few inches under a chip that
+    # reads today very differently. The horizon is in the heading now.
+    assert "Which strategy fits this market (a multi-week read)" in all_md
     # And it must show the reasoning behind the order, not just the order.
     # (Demo has no price history, so it states the read without the numbers -
     # the live path prints the measured gap.)

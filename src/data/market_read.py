@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.data.market_context import daily_sentiment
+from src.data.market_context import MILD_MOVE, daily_sentiment, weighted_change
 
 # Used when config/settings.yaml has no market_read block - these reproduce
 # the app's original behavior exactly (verdict amber at 20, red at 28).
@@ -94,7 +94,8 @@ _TREND_WORDS = {
 
 def build_brief(index_changes: list[Optional[float]], vix: Optional[float],
                 trend: str, pulse_rows: list[dict], next_event,
-                cfg: dict[str, float], underlying: str = "SPX") -> str:
+                cfg: dict[str, float], underlying: str = "SPX",
+                symbols: Optional[list[str]] = None) -> str:
     """A few plain-English sentences reading the market today - built entirely
     from numbers the tab already has, so it costs no extra fetch.
 
@@ -105,7 +106,7 @@ def build_brief(index_changes: list[Optional[float]], vix: Optional[float],
     parts: list[str] = []
 
     # 1. The day's move and mood (reuses the same read as the chips above).
-    _label, note = daily_sentiment(index_changes, vix)
+    _label, note = daily_sentiment(index_changes, vix, symbols)
     if note:
         parts.append(note)
 
@@ -149,6 +150,62 @@ def _takeaway(vix: Optional[float], next_event, cfg: dict[str, float]) -> str:
                 "worth checking whether a trade pays enough to bother.")
     return ("For your premium selling: conditions look comfortable for your usual "
             "21-45 day trades.")
+
+
+# ------------------------------------------------------------------ two clocks
+_TREND_DIR = {"up": 1, "down": -1}
+
+
+def horizon_note(index_changes: list[Optional[float]],
+                 trend: str, trend_spread: Optional[float], trend_band: float,
+                 symbols: Optional[list[str]] = None,
+                 underlying: str = "SPX") -> str:
+    """One line for when TODAY and the multi-week strategy board disagree.
+
+    The Market tab reads two clocks at once. The verdict card, the "Today:"
+    chip and the brief are all one day old; the strategy board scores the
+    20-vs-50-day gap and the VIX and ignores today completely, on purpose - a
+    moving-average read that flipped on every red day would be the flip-flopping
+    this section was rebuilt to stop doing.
+
+    Both answers are honest, but the tab prints them a few inches apart with
+    nothing between them, so a red chip sitting above a stack of bullish
+    strategies reads as the app contradicting itself rather than as two answers
+    to two different questions. This is the sentence that connects them.
+
+    Returns "" when the two agree, or when either is unreadable - the line is
+    only worth screen space on the days it explains something.
+    """
+    lean = _TREND_DIR.get(trend)
+    today = weighted_change(index_changes, symbols)
+    if lean is None or today is None or abs(today) < MILD_MOVE:
+        return ""
+    if (today > 0) == (lean > 0):
+        return ""
+
+    way_today = "down" if today < 0 else "up"
+    way_board = "up" if lean > 0 else "down"
+    note = (f"**Today is {way_today} ({today:+.2f}%), but this ranking is leaning "
+            f"{way_board}** - and that is not a mistake. The board is a "
+            f"**multi-week** read of {underlying}'s 20- and 50-day averages, so a "
+            "single day does not move it. ")
+
+    # How far the gap would actually have to close, when the numbers are there
+    # to say it. Schwab and demo have no price history, so they get the read
+    # without a number rather than a made-up one.
+    move = None
+    if trend_spread is not None and trend_band and (trend_spread > 0) == (lean > 0):
+        move = abs(trend_spread) - abs(trend_band)
+    if move is not None and move > 0.0005:
+        give = "give up" if lean > 0 else "make up"
+        pts = move * 100
+        unit = "percentage point" if f"{pts:.1f}" == "1.0" else "percentage points"
+        note += (f"{underlying}'s 20-day average would have to {give} about "
+                 f"**{pts:.1f} {unit}** against its 50-day before this order changes.")
+    else:
+        note += ("The two averages are close to the line where the read flips, so "
+                 "this one can change soon.")
+    return note
 
 
 # ------------------------------------------------------------------ sector pulse
