@@ -448,23 +448,61 @@ def context_from_chain(
     return build_context(chain.underlying, chain.underlying_price, vix, trend, _atm_iv(chain))
 
 
-def daily_sentiment(index_changes: list[Optional[float]], vix: Optional[float]) -> tuple[str, str]:
+# The tiles are not equally interesting. She trades SPX, so a quarter-percent
+# there matters more than a rough day in the Russell - and a flat mean let RUT,
+# far and away the noisiest of the three, drag the label on its own. A -0.24 /
+# -0.68 / -1.18 day averaged to -0.70% and printed "Strongly negative" while
+# the S&P was down a quarter of a percent.
+INDEX_WEIGHTS: dict[str, float] = {"SPX": 3.0, "NDX": 2.0, "RUT": 1.0}
+
+# How big the weighted move has to be to earn the loudest label. This was 0.6,
+# which one soft small-cap day cleared routinely. A day worth the word "strongly"
+# is a bigger one than that.
+STRONG_MOVE = 0.9
+MILD_MOVE = 0.15
+
+
+def weighted_change(index_changes: list[Optional[float]],
+                    symbols: Optional[list[str]] = None) -> Optional[float]:
+    """Today's move across the index tiles as one number, or None.
+
+    With `symbols` (the tile symbols, in the same order as `index_changes`) the
+    indexes are weighted by INDEX_WEIGHTS; without them it is a plain mean, so
+    a caller that only has the numbers still gets an honest answer.
+    """
+    pairs = [(sym, c) for sym, c in
+             zip(symbols or [None] * len(index_changes), index_changes)
+             if c is not None]
+    if not pairs:
+        return None
+    weights = [INDEX_WEIGHTS.get((sym or "").upper(), 1.0) if symbols else 1.0
+               for sym, _c in pairs]
+    total = sum(weights)
+    if total <= 0:
+        return None
+    return sum(w * c for w, (_sym, c) in zip(weights, pairs)) / total
+
+
+def daily_sentiment(index_changes: list[Optional[float]], vix: Optional[float],
+                    symbols: Optional[list[str]] = None) -> tuple[str, str]:
     """One-line read of how the market feels TODAY, from the big indexes + VIX.
 
     Returns (label, note) - e.g. ("🙂 Mildly positive and calm", "...").
-    """
-    changes = [c for c in index_changes if c is not None]
-    if not changes:
-        return "😐 No read yet", "Live daily changes are unavailable right now."
-    avg = sum(changes) / len(changes)
 
-    if avg >= 0.6:
+    Pass `symbols` (the tile symbols behind `index_changes`) to weight the
+    indexes by how much they actually matter to her - see INDEX_WEIGHTS.
+    """
+    avg = weighted_change(index_changes, symbols)
+    if avg is None:
+        return "😐 No read yet", "Live daily changes are unavailable right now."
+
+    if avg >= STRONG_MOVE:
         mood, icon = "Strongly positive", "😄"
-    elif avg >= 0.15:
+    elif avg >= MILD_MOVE:
         mood, icon = "Mildly positive", "🙂"
-    elif avg > -0.15:
+    elif avg > -MILD_MOVE:
         mood, icon = "Flat / mixed", "😐"
-    elif avg > -0.6:
+    elif avg > -STRONG_MOVE:
         mood, icon = "Mildly negative", "🙁"
     else:
         mood, icon = "Strongly negative", "😨"
@@ -479,7 +517,10 @@ def daily_sentiment(index_changes: list[Optional[float]], vix: Optional[float]) 
     else:
         calm, calm_note = " and nervous", "Fear is elevated - premiums are rich but moves are bigger."
 
-    note = (f"The big indexes are averaging {avg:+.2f}% today. {calm_note}").strip()
+    # Say when the number is weighted, so "-0.54%" cannot be checked against a
+    # plain mean of the three tiles and look like an arithmetic bug.
+    how = " (weighted toward the S&P)" if symbols else ""
+    note = (f"The big indexes are averaging {avg:+.2f}% today{how}. {calm_note}").strip()
     return f"{icon} {mood}{calm}", note
 
 

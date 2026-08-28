@@ -434,7 +434,11 @@ def _tab_market(settings, provider, strategies) -> None:
         tiles = provider.get_market_tiles()
 
     components.render_market_tiles(tiles, market_open)
-    changes = [t["change_pct"] for t in tiles if t["symbol"] != "VIX"]
+    index_tiles = [t for t in tiles if t["symbol"] != "VIX"]
+    changes = [t["change_pct"] for t in index_tiles]
+    # Carried, not assumed from position: the daily read weights SPX above RUT,
+    # and pairing by index would break silently if TILE_SYMBOLS ever changed.
+    change_syms = [t["symbol"] for t in index_tiles]
     if not market_open:
         st.markdown(theme.chip("◷ Showing last close - market closed today", "amber"),
                     unsafe_allow_html=True)
@@ -459,7 +463,7 @@ def _tab_market(settings, provider, strategies) -> None:
             st.markdown(f"<div style='margin-top:10px;font-size:1.05rem'>{why}</div>",
                         unsafe_allow_html=True)
 
-    sent_label, _sent_note = daily_sentiment(changes, ctx.vix)
+    sent_label, _sent_note = daily_sentiment(changes, ctx.vix, change_syms)
     low = sent_label.lower()
     sent_tone = "green" if "positive" in low else "red" if "negative" in low else "amber"
     nxt_ev = events[0] if events else None
@@ -481,14 +485,16 @@ def _tab_market(settings, provider, strategies) -> None:
             pulse_rows = []
 
     st.divider()
-    _soft(_market_brief_section, changes, ctx, pulse_rows, events, settings, what="market brief")
+    _soft(_market_brief_section, changes, ctx, pulse_rows, events, settings,
+          change_syms, what="market brief")
     st.divider()
     # The same cached series the trend read already used, so this is free.
     try:
         fit_closes = provider.get_history_closes(MARKET_READ_SYMBOL)
     except Exception:
         fit_closes = []
-    _soft(_market_fit_section, ctx, strategies, fit_closes, what="strategy board")
+    _soft(_market_fit_section, ctx, strategies, fit_closes, changes, change_syms,
+          what="strategy board")
     st.divider()
     _soft(_market_radar_section, events, what="economic radar")
     st.divider()
@@ -511,7 +517,8 @@ def _soft(render, *args, what: str) -> None:
                    "works. Try again in a minute.")
 
 
-def _market_fit_section(ctx, strategies, closes=None) -> None:
+def _market_fit_section(ctx, strategies, closes=None, changes=None,
+                        change_syms=None) -> None:
     """Every strategy in the SOP ranked on trend and volatility, with the numbers
     that produced the order.
 
@@ -523,11 +530,15 @@ def _market_fit_section(ctx, strategies, closes=None) -> None:
     label is a multi-week read. Both inputs are continuous now, and the board
     covers the whole SOP.
     """
-    st.markdown("### 🧭 Which strategy fits the market now")
+    # The horizon is in the heading, not just in the prose below it. "fits the
+    # market now" promised TODAY, a few inches under a chip that reads today
+    # very differently - which is what made a correct board look broken.
+    st.markdown("### 🧭 Which strategy fits this market (a multi-week read)")
     theme.note("Your whole strategy book, ranked on **trend** (which way the "
                "market is leaning, and how hard) and **volatility** (how much it "
                "is swinging). These are reasons, not instructions - you check the "
                "winner in 🎯 Find a trade and you decide.")
+    _market_horizon_note(ctx, changes, change_syms)
     _market_fit_evidence(ctx, closes)
     board = getattr(ctx, "board", None) or ctx.suggestions
     if board:
@@ -540,6 +551,23 @@ def _market_fit_section(ctx, strategies, closes=None) -> None:
         st.session_state["build_underlyings"] = ["SPX"]
         st.session_state["_prev_build_strategy"] = best_key
         st.success("Loaded into **🎯 Find a trade** - open that tab to scan it.")
+
+
+def _market_horizon_note(ctx, changes=None, change_syms=None) -> None:
+    """Said out loud on the days the two clocks disagree.
+
+    The chip above says how today felt; this board says how the last six weeks
+    read. On a red day inside an uptrend they point opposite ways, and until now
+    nothing on the tab admitted that - so the board read as wrong rather than as
+    an answer to a different question.
+    """
+    from src.data import market_read
+
+    note = market_read.horizon_note(changes or [], ctx.trend, ctx.trend_spread,
+                                    ctx.trend_band, change_syms,
+                                    underlying=ctx.underlying)
+    if note:
+        theme.note(note)
 
 
 def _market_fit_evidence(ctx, closes=None) -> None:
@@ -623,7 +651,8 @@ def _market_fit_track_record(ctx, closes) -> None:
                f"**{hist['trend']}** for {held}.")
 
 
-def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:
+def _market_brief_section(changes, ctx, pulse_rows, events, settings,
+                          change_syms=None) -> None:
     """A plain-English read of the market today, built from the numbers already
     on this tab (no extra fetch)."""
     from src.data import market_read
@@ -632,7 +661,7 @@ def _market_brief_section(changes, ctx, pulse_rows, events, settings) -> None:
     cfg = market_read.read_cfg(settings)
     big = market_read.next_big_event(events)
     brief = market_read.build_brief(changes, ctx.vix, ctx.trend, pulse_rows, big, cfg,
-                                    underlying=MARKET_READ_SYMBOL)
+                                    underlying=MARKET_READ_SYMBOL, symbols=change_syms)
     theme.note(brief)
 
 

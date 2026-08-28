@@ -13,6 +13,7 @@ from src.data.market_context import (
     daily_sentiment,
     trend_from_prices,
     trend_history,
+    weighted_change,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "spx_chain.json"
@@ -278,6 +279,50 @@ def test_daily_sentiment_negative_nervous():
     label, _ = daily_sentiment([-1.2, -0.9, -1.5], vix=30.0)
     assert "negative" in label.lower()
     assert "nervous" in label.lower()
+
+
+# ---- the weighted daily read ------------------------------------------
+# A flat mean of SPX/NDX/RUT let the Russell, much the noisiest of the three,
+# pick the label on its own. This is the real day that prompted the change.
+
+def test_a_soft_small_cap_day_is_not_strongly_negative():
+    """SPX -0.24, NDX -0.68, RUT -1.18 with the VIX flat at 14.5.
+
+    A flat mean made that -0.70% and, against the old -0.60 threshold, printed
+    "Strongly negative" while the S&P was down a quarter of a percent. Both
+    halves of the fix show up here: the weighting pulls the number to -0.54,
+    and -0.70 would no longer clear the bar either way.
+    """
+    changes, syms = [-0.24, -0.68, -1.18], ["SPX", "NDX", "RUT"]
+    assert weighted_change(changes) == pytest.approx(-0.70, abs=0.005)
+    assert weighted_change(changes, syms) == pytest.approx(-0.543, abs=0.005)
+    label, note = daily_sentiment(changes, vix=14.5, symbols=syms)
+    assert "mildly negative" in label.lower()
+    assert "-0.54%" in note and "weighted" in note
+
+
+def test_weighting_follows_the_index_she_actually_trades():
+    # SPX down hard while the other two hold up still reads negative...
+    down, _ = daily_sentiment([-1.5, 0.1, 0.2], vix=16.0, symbols=["SPX", "NDX", "RUT"])
+    assert "negative" in down.lower()
+    # ...and the mirror image reads positive, which a flat mean would not.
+    up, _ = daily_sentiment([1.5, -0.1, -0.2], vix=16.0, symbols=["SPX", "NDX", "RUT"])
+    assert "positive" in up.lower()
+
+
+def test_strongly_needs_a_bigger_move_than_it_used_to():
+    syms = ["SPX", "NDX", "RUT"]
+    assert "mildly" in daily_sentiment([-0.7] * 3, vix=16.0, symbols=syms)[0].lower()
+    assert "strongly" in daily_sentiment([-1.1] * 3, vix=16.0, symbols=syms)[0].lower()
+
+
+def test_weighted_change_handles_gaps_and_unknown_symbols():
+    assert weighted_change([], []) is None
+    assert weighted_change([None, None], ["SPX", "NDX"]) is None
+    # A missing tile drops out; the rest keep their own weights.
+    assert weighted_change([-1.0, None, -1.0], ["SPX", "NDX", "RUT"]) == pytest.approx(-1.0)
+    # An unrecognised ticker still counts, at weight 1.
+    assert weighted_change([2.0, 0.0], ["ZZZZ", "SPX"]) == pytest.approx(0.5)
 
 
 def test_daily_sentiment_flat_and_missing_data():

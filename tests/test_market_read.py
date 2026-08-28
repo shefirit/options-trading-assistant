@@ -125,6 +125,72 @@ def test_brief_survives_missing_vix_and_empty_pulse():
     assert isinstance(text, str) and text.strip()
 
 
+# ------------------------------------------------------------------ two clocks
+# The Market tab reads today AND the last six weeks, and prints them inches
+# apart. On a red day inside an uptrend that looked like a contradiction.
+
+_SYMS = ["SPX", "NDX", "RUT"]
+
+
+def test_a_red_day_inside_an_uptrend_says_so():
+    note = market_read.horizon_note([-0.24, -0.68, -1.18], "up", 0.0197, 0.01, _SYMS)
+    assert "Today is down" in note
+    assert "leaning up" in note
+    assert "multi-week" in note
+    # The gap is 1.97% and it takes 1% to call a direction, so ~1.0 point of it
+    # would have to go before the ranking moves.
+    assert "1.0 percentage point**" in note   # singular at exactly one
+    assert "give up" in note
+
+
+def test_a_green_day_inside_a_downtrend_says_so_the_other_way():
+    note = market_read.horizon_note([0.9, 1.1, 1.4], "down", -0.025, 0.01, _SYMS)
+    assert "Today is up" in note
+    assert "leaning down" in note
+    assert "make up" in note and "1.5 percentage points" in note
+
+
+def test_no_note_when_the_two_reads_agree():
+    assert market_read.horizon_note([-0.8, -0.9, -1.0], "down", -0.02, 0.01, _SYMS) == ""
+    assert market_read.horizon_note([0.8, 0.9, 1.0], "up", 0.02, 0.01, _SYMS) == ""
+
+
+def test_no_note_on_a_quiet_day_or_an_unreadable_one():
+    # A flat day contradicts nothing, so the line would only be noise.
+    assert market_read.horizon_note([0.05, -0.03, 0.01], "up", 0.02, 0.01, _SYMS) == ""
+    # No trend to disagree with, and no changes to disagree from.
+    assert market_read.horizon_note([-1.0, -1.0, -1.0], "sideways", 0.002, 0.01, _SYMS) == ""
+    assert market_read.horizon_note([-1.0, -1.0, -1.0], "unknown", None, 0.01, _SYMS) == ""
+    assert market_read.horizon_note([None, None, None], "up", 0.02, 0.01, _SYMS) == ""
+
+
+def test_the_note_states_the_read_when_there_is_no_gap_to_measure():
+    """Schwab and demo have no price history, so trend_spread is None. Say the
+    horizon anyway rather than inventing a number."""
+    note = market_read.horizon_note([-0.8, -0.9, -1.0], "up", None, 0.01, _SYMS)
+    assert "multi-week" in note
+    assert "percentage points" not in note
+
+
+def test_the_note_weights_the_indexes_like_the_chip_above_it():
+    """A small-cap-only wobble is not a contradiction worth a paragraph.
+
+    The S&P up, the Nasdaq flat, the Russell down 1.2%: a flat mean calls that
+    -0.35% and fires the note, but weighted it is -0.13% - too quiet to be
+    disagreeing with anything, and the chip above will say the same.
+    """
+    day = [0.15, 0.0, -1.20]
+    assert market_read.horizon_note(day, "up", 0.02, 0.01, _SYMS) == ""
+    assert market_read.horizon_note(day, "up", 0.02, 0.01) != ""   # unweighted
+
+
+def test_the_brief_weights_the_indexes_when_it_is_given_the_symbols():
+    cfg = market_read.read_cfg({})
+    brief = market_read.build_brief([-0.24, -0.68, -1.18], 14.5, "up", [], None, cfg,
+                                    symbols=_SYMS)
+    assert "-0.54%" in brief
+
+
 # ------------------------------------------------------------------ sector pulse
 def test_pulse_rows_from_batch_history_shape():
     history = {"SPY": ([100.0, 101.0], [1.0, 1.0]), "QQQ": ([50.0], [1.0])}
