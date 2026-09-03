@@ -1048,3 +1048,181 @@ def test_the_plain_bought_call_still_gets_a_bare_percentage(exit_cfg):
     signal = exit_rules.evaluate(p, exit_cfg, current_cost=-2200.0,
                                  today=LOG_OPENED + dt.timedelta(days=30))
     assert "+4.0%" in signal.reason and "ties up" not in signal.reason
+
+
+# ===========================================================================
+# RENTING THE LEAPS OUT. Rita holds a bought LEAPS call and wants to sell a
+# call against it - the PMCC move, on a trade her log calls a LEAPS long call.
+# The app had no way to record that: "Sell a call against it" was offered only
+# where `is_uncovered` was true, and this strategy was deliberately excluded
+# from it because a bare LEAPS wants the opposite advice.
+#
+# So the shape has to decide from here, not the strategy key alone. The day the
+# call is sold the position IS a PMCC, and the exit rules that manage it have
+# to come from the PMCC page - the LEAPS page has no 50% target and no 21-day
+# clock, because it never expected a short call to exist.
+WRITE_EXP = dt.date(2026, 9, 18)
+
+
+def _written_call(puts=3, strike=90.0, credit=180.0, expiration=WRITE_EXP):
+    """The financed LEAPS with one call written against it, replayed through
+    the log exactly as the app records it."""
+    from src.engine.positions import parse_rows
+    from src.logging_tools.row import COLUMNS, build_roll_row
+
+    row, _ = _reversal_row(puts)
+    roll = build_roll_row("L1", "AMZN", "LEAPS Call (Long Call)", cash=credit,
+                          new_strike=strike, new_expiration=expiration,
+                          new_credit=credit, rolled_on=LOG_OPENED,
+                          note="Sold the 90 call against it")
+    return parse_rows(COLUMNS, [row, roll])[0]
+
+
+def test_a_bare_leaps_is_offered_the_write_a_call_action():
+    """The gate the whole feature hangs off. A bought LEAPS is not
+    `is_uncovered` - that message is written for a PMCC between calls - but it
+    is still a long call with nothing sold against it."""
+    p, _ = _logged_reversal()
+    assert p.is_long_premium is True
+    assert p.is_uncovered is False
+    assert p.has_short_call is False
+    assert p.can_write_call is True
+
+
+def test_writing_a_call_puts_the_leg_on_the_position():
+    p = _written_call()
+    assert p.has_short_call is True
+    assert [(l.action, l.option_type, l.strike) for l in p.legs
+            if l.action == Action.SELL and l.option_type == OptionType.CALL] \
+        == [(Action.SELL, OptionType.CALL, 90.0)]
+    # The tracker now counts down to the CALL, not to the LEAPS 500 days out.
+    assert p.expiration == WRITE_EXP
+    assert p.credit == 180.0
+
+
+def test_the_written_call_stops_it_being_a_bare_bought_call():
+    """Every "there is no short call here" branch has to turn off together, or
+    the card offers to write a second one and the exit rules keep reading the
+    LEAPS take-it windows."""
+    p = _written_call()
+    assert p.is_long_premium is False
+    assert p.can_write_call is False
+    assert p.is_uncovered is False       # something IS sold against it
+
+
+def test_a_written_call_is_managed_by_the_pmcc_rules():
+    """The reason the key matters: the LEAPS page has no profit target and no
+    time exit, so left on its own key the call she has to manage would report
+    "hold" all the way to expiration."""
+    from src.engine.config_loader import load_strategies
+
+    p = _written_call()
+    assert p.effective_strategy_key == "poor_mans_covered_call"
+    exits = load_strategies()[p.effective_strategy_key]["exit"]
+    assert exits["profit_target_pct"] == 50
+    assert exits["time_exit_dte"] == 21
+
+
+def test_the_fifty_percent_target_measures_against_the_written_call():
+    from src.engine import exit_rules
+    from src.engine.config_loader import load_strategies
+
+    p = _written_call()
+    cfg = load_strategies()[p.effective_strategy_key]["exit"]
+    # $180 collected, $80 to buy back - 56% kept, with 24 days still to run.
+    signal = exit_rules.evaluate(p, cfg, current_cost=80.0,
+                                 today=LOG_OPENED + dt.timedelta(days=5))
+    assert signal.action == "profit"
+
+
+def test_the_twenty_one_day_clock_now_runs_on_the_written_call():
+    """The other half of borrowing the PMCC's rules: a bought LEAPS on its own
+    has no time exit at all, and the call written against it must have one."""
+    from src.engine import exit_rules
+    from src.engine.config_loader import load_strategies
+
+    p = _written_call()
+    cfg = load_strategies()[p.effective_strategy_key]["exit"]
+    signal = exit_rules.evaluate(p, cfg, current_cost=150.0,
+                                 today=LOG_OPENED + dt.timedelta(days=14))
+    assert signal.action == "time"      # 15 days left on the call
+
+
+def test_the_collateral_does_not_come_back_when_she_writes_a_call():
+    """The money side keys off how the trade was OPENED and must not move: the
+    three sold puts still freeze $22,500 whatever is written against the call."""
+    p = _written_call()
+    assert p.is_leaps_call_trade is True
+    assert p.short_put_collateral == 22500.0
+    assert p.capital_at_risk == 22740.0
+
+
+def test_the_calls_credit_is_banked_on_top_of_the_puts():
+    """premium_collected reads the financing puts off the legs (they are absent
+    from the Credit column on purpose) and adds every roll since. Losing either
+    half here would under-report what the trade has actually collected."""
+    p = _written_call()
+    assert p.open_premium == 1875.0            # 3 puts at 6.25
+    assert p.banked_income == 180.0            # the call she just wrote
+    assert p.premium_collected == 2055.0
+
+
+def test_a_plain_pmcc_between_calls_is_unaffected():
+    """can_write_call has to keep offering the form where it always did."""
+    from src.engine.positions import Position
+
+    leaps = Leg(role="long_call_leaps", action=Action.BUY,
+                option_type=OptionType.CALL, strike=100.0, quantity=1, dte=400)
+    p = Position(trade_id="P9", strategy_key="poor_mans_covered_call",
+                 underlying="MSFT", contracts=1, legs=[leaps],
+                 open_cash=-4000.0, opened=TODAY, expiration=EXPIRY)
+    assert p.is_uncovered is True
+    assert p.is_long_premium is False
+    assert p.can_write_call is True
+    assert p.effective_strategy_key == "poor_mans_covered_call"
+
+
+# ---------------------------------------------------- and it has to RENDER
+# The properties above are only half of it: the action she was missing is a
+# form on the card, and a gate that never fires would pass every test in this
+# file while showing her nothing.
+def _live_reversal_row(account: str = "real"):
+    """The financed LEAPS as an open row, dated so it is live whenever this
+    runs - the fixtures above are pinned to August 2026 and would age out."""
+    from src.logging_tools.row import COLUMNS
+
+    opened = dt.date.today() - dt.timedelta(days=10)
+    expiry = dt.date.today() + dt.timedelta(days=500)
+    row, _ = _reversal_row()
+    row = list(row)
+    row[COLUMNS.index("Date")] = opened.isoformat()
+    row[COLUMNS.index("Expiration")] = expiry.isoformat()
+    row[COLUMNS.index("DTE")] = (expiry - opened).days
+    row[COLUMNS.index("Account")] = account
+    return row
+
+
+def test_my_trades_offers_the_write_a_call_form_on_a_bought_leaps(app_with_rows):
+    at = app_with_rows([_live_reversal_row()]).run()
+    assert not at.exception
+    snags = [e for e in at.error if "unexpected snag" in str(e.value)]
+    assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
+    labels = [x.label for x in at.expander]
+    assert any("Sell a call against the LEAPS" in l for l in labels), \
+        f"the form she asked for is missing - expanders were {labels}"
+
+
+def test_the_expiration_box_cannot_be_set_past_the_leaps(app_with_rows):
+    """A call sold past the long call's own expiration is covered by nothing.
+    The box caps there rather than letting her record a naked call by accident."""
+    from src.engine.positions import parse_rows
+    from src.logging_tools.row import COLUMNS
+    from ui.trades import actions
+
+    row = _live_reversal_row()
+    _, cover_exp = actions._covering_call(parse_rows(COLUMNS, [row])[0])
+    at = app_with_rows([row]).run()
+    assert not at.exception
+    box = next(d for d in at.date_input if (d.key or "").startswith("write_exp_"))
+    assert box.max == cover_exp             # the long call she is writing against
+    assert box.max > dt.date.today()

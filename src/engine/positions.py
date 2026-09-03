@@ -246,7 +246,7 @@ class Position(BaseModel):
         put is deliberately absent from the Credit column - that money is a
         discount on the call, not income - so it is read off the leg instead.
         """
-        if self.is_long_premium:
+        if self.is_leaps_call_trade:
             return self.short_put_credit
         return round(float(self.open_credit or 0.0), 2)
 
@@ -308,7 +308,7 @@ class Position(BaseModel):
         """
         if not self.is_debit:
             return self.buying_power
-        if self.is_long_premium:
+        if self.is_leaps_call_trade:
             return abs(self.open_cash) + self.short_put_collateral
         return abs(self.open_cash)
 
@@ -459,15 +459,42 @@ class Position(BaseModel):
         return round(self.realized_pl + self.banked_income, 2)
 
     @property
-    def is_long_premium(self) -> bool:
-        """A trade that is nothing but bought options - the LEAPS long call.
+    def is_leaps_call_trade(self) -> bool:
+        """This trade STARTED as a bought LEAPS call, whatever has happened to
+        it since.
 
-        Distinct from `is_uncovered`, which it would otherwise look exactly like.
-        A PMCC between short calls is TEMPORARILY not earning and wants its next
-        call written; this one has no short leg by design and never will. They
-        need opposite advice, so the strategy key decides rather than the shape.
+        The money questions - what the financing puts paid, how much cash the
+        trade really ties up - are settled by how it was opened and never
+        change. Selling a call against the LEAPS later does not give her the
+        put collateral back, so those properties ask this rather than
+        `is_long_premium`, which is about the shape she is holding today.
         """
         return self.strategy_key == "long_call_leaps"
+
+    @property
+    def has_short_call(self) -> bool:
+        """A call she has SOLD is part of the position right now."""
+        return any(leg.action == Action.SELL
+                   and leg.option_type == OptionType.CALL
+                   for leg in self.legs)
+
+    @property
+    def is_long_premium(self) -> bool:
+        """Nothing but bought options - a LEAPS long call with nothing written
+        against it.
+
+        Distinct from `is_uncovered`, which it would otherwise look exactly
+        like. A PMCC between short calls is TEMPORARILY not earning and wants
+        its next call written; a bare LEAPS is a directional bet with its own
+        take-it windows and no 50% target to measure. They need opposite
+        advice, so the two are kept apart.
+
+        Shape-aware since Rita wrote a call against her WFC LEAPS: from the day
+        that call is sold she IS renting the long call out, so the 50% target
+        and the 21-day clock apply again and this has to stop being true. See
+        `effective_strategy_key`.
+        """
+        return self.is_leaps_call_trade and not self.has_short_call
 
     @property
     def is_uncovered(self) -> bool:
@@ -479,9 +506,37 @@ class Position(BaseModel):
         long side is exposed both ways, so the card says so instead of running
         exit rules against a call that isn't there.
         """
-        return (self.is_debit and not self.is_long_premium and not any(
-            leg.action == Action.SELL and leg.option_type == OptionType.CALL
-            for leg in self.legs))
+        return (self.is_debit and not self.is_long_premium
+                and not self.has_short_call)
+
+    @property
+    def can_write_call(self) -> bool:
+        """She is holding a long call with nothing sold against it, so the
+        action open to her today is writing one.
+
+        Two shapes arrive here and they are the same offer: a PMCC or covered
+        call sitting between short calls, and a bought LEAPS she has decided to
+        start renting out.
+        """
+        return self.is_uncovered or self.is_long_premium
+
+    @property
+    def effective_strategy_key(self) -> str:
+        """The strategy this position is actually RUNNING today.
+
+        Only one thing changes it: a bought LEAPS call with a short call
+        written against it is a Poor Man's Covered Call by shape, whatever the
+        row says it was logged as. That matters because the exit rules come
+        from the strategy - and the LEAPS page has no 50% target and no 21-day
+        exit, because it never expected a short call to manage. The PMCC page
+        has both, and they are what the written call needs.
+
+        The trade keeps its own name and its own money on the card. This is
+        about which exit rules to run, nothing else.
+        """
+        if self.is_leaps_call_trade and self.has_short_call:
+            return "poor_mans_covered_call"
+        return self.strategy_key
 
     @property
     def far_legs(self) -> list[Leg]:

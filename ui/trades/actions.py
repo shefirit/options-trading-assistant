@@ -91,26 +91,82 @@ def _live_call_mid(provider, underlying: str, strike: float,
                          OptionType.CALL, contracts)
 
 
+def _covering_call(p):
+    """The long call this position would be writing against, and when it ends.
+
+    The furthest-dated call she BOUGHT: on a PMCC and on a bought LEAPS that is
+    the stock substitute, and it is the whole of what makes a call she sells
+    covered. Returns (leg, expiration) or (None, None).
+    """
+    longs = [leg for leg in p.legs
+             if leg.action == Action.BUY and leg.option_type == OptionType.CALL]
+    if not longs:
+        return None, None
+    leg = max(longs, key=lambda l: (l.dte if l.dte is not None else -1))
+    return leg, p.leg_expiration(leg)
+
+
 def _write_call_form(p, provider, kp: str = "detail") -> None:
-    """She is uncovered: record the new call she has just written."""
+    """She holds a long call with nothing sold against it: record the new call
+    she has just written.
+
+    Two positions arrive here. A PMCC or covered call between short calls, which
+    is the rhythm the form was built for - and a bought LEAPS call she has
+    decided to start renting out, which her SOP files as a different strategy
+    but which is the same fill, the same credit and the same 50% target from
+    the moment the call is sold.
+    """
     import datetime as dt
 
-    with st.expander("➕ Sell a call against it (records the credit)",
-                     key=f"writewrap_{kp}_{p.trade_id}", expanded=True):
+    cover, cover_exp = _covering_call(p)
+    title = ("➕ Sell a call against the LEAPS (records the credit)"
+             if p.is_long_premium else
+             "➕ Sell a call against it (records the credit)")
+
+    with st.expander(title, key=f"writewrap_{kp}_{p.trade_id}", expanded=True):
         theme.note("Sell it in thinkorswim first, then write the fill down "
                    "here. Your SOP's PMCC sells about 30 days out at delta "
                    "0.30. The credit is banked in this month's profit and the "
                    "app starts watching the new call.")
+        if p.is_long_premium and cover is not None:
+            # This is not the strategy she logged, and pretending otherwise
+            # would hide the two things that make it safe or not.
+            when = (f" ({components.fmt_date(cover_exp)})" if cover_exp else "")
+            theme.note(
+                f"You logged this as a bought LEAPS. Selling a call against it "
+                f"makes it a **Poor Man's Covered Call** in shape, and the app "
+                f"will manage it that way from here: 50% of the credit is the "
+                f"target and 21 days is the clock, both on the call you sell - "
+                f"not on the {cover.strike:g} call you own. Two things keep it "
+                f"covered: sell **no more calls than the "
+                f"{cover.quantity * max(int(p.contracts or 1), 1)} you hold**, "
+                f"and pick an expiration **before your {cover.strike:g} call "
+                f"runs out{when}**. Anything past that date is a naked call.")
         w1, w2, w3 = st.columns(3)
         sold_on = w1.date_input("Sold on", value=dt.date.today(),
                                 max_value=dt.date.today(),
                                 key=f"write_when_{kp}_{p.trade_id}", format=components.DATE_FMT)
         strike = w2.number_input("Strike you SOLD", min_value=0.0, step=1.0,
                                  key=f"write_strike_{kp}_{p.trade_id}")
+        # Capped at the long call's own expiration: a call sold past that date
+        # is not covered by anything, and the cap says so before she can pick it
+        # rather than after she has recorded the fill.
+        default_exp = dt.date.today() + dt.timedelta(days=30)
+        max_exp = None
+        if cover_exp is not None and cover_exp > dt.date.today():
+            max_exp = cover_exp
+            default_exp = min(default_exp, cover_exp)
         exp = w3.date_input("Expiration",
-                            value=dt.date.today() + dt.timedelta(days=30),
-                            min_value=dt.date.today(),
+                            value=default_exp,
+                            min_value=dt.date.today(), max_value=max_exp,
                             key=f"write_exp_{kp}_{p.trade_id}", format=components.DATE_FMT)
+        if cover is not None and strike and strike < cover.strike:
+            st.warning(components._esc(
+                f"You are selling the {strike:g} call while the call you own is "
+                f"at {cover.strike:g}. That caps this trade below what you paid "
+                f"for the long call, so the best case is a loss. Selling above "
+                f"{cover.strike:g} is the shape your SOP's PMCC describes - but "
+                f"if this is the fill you actually took, record it as it is."))
         suggested = _live_call_mid(provider, p.underlying, strike, exp,
                                    int(p.contracts or 1))
         credit = _fill_price_input(

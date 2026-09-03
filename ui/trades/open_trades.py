@@ -178,7 +178,10 @@ def _trade_card(it: dict, strategies, provider) -> None:
         with st.expander("🔢 Show the numbers", key=f"num_{p.trade_id}"):
             _trade_numbers(p, live, sig, strategies, px)
 
-        if p.is_uncovered:
+        if p.can_write_call:
+            # is_uncovered alone left the bought LEAPS out: it has no short call
+            # by shape, so the app had nothing to offer her when she decided to
+            # start renting it out. can_write_call covers both.
             _write_call_form(p, provider)
         else:
             # Anything with a leg SOLD can be rolled, and the form works out

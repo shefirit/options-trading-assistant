@@ -27,7 +27,10 @@ def _load_trade_log() -> tuple[list, list, str]:
 
 
 def _exit_cfg_for(pos, strategies) -> dict:
-    strat = strategies.get(pos.strategy_key)
+    # effective_strategy_key, not strategy_key: a bought LEAPS call with a call
+    # written against it is being run as a PMCC now, and the LEAPS page has no
+    # 50% target and no 21-day exit to manage that call with.
+    strat = strategies.get(pos.effective_strategy_key)
     if strat is None:   # older row - find the strategy by its display name
         strat = next((s for s in strategies.values()
                       if s.get("name") == pos.strategy_name), None)
