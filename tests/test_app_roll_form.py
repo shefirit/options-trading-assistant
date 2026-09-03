@@ -149,3 +149,90 @@ def test_an_impossible_pair_of_figures_is_refused(app_with_one_pmcc):
     assert not at.exception
     warnings = " ".join(str(w.value) for w in at.warning)
     assert "cannot happen" in warnings
+
+
+# ===========================================================================
+# THE PREFILL THAT TOOK THE TAB DOWN.
+#
+# My trades crashed outright on her real WFC position - a bought LEAPS call
+# part-paid for by three sold puts:
+#
+#   StreamlitValueBelowMinError: The value -10.16 is less than the min_value 0.0
+#
+# The roll form prefills "what did it cost to buy the leg back" with the live
+# cost to close. On every other shape that figure is the short leg. Here the
+# bought call and the sold puts share ONE expiration, so it prices the whole
+# position - and since the deep call is worth more than the puts, closing PAYS
+# her and the number comes back negative. Streamlit raises on a value under a
+# box's minimum, and the whole section went down with it, which is why she
+# could not reach any of her trades rather than just that one field.
+def test_the_priced_figure_is_not_this_rolls_buy_back_on_a_financed_leaps(
+        open_financed_leaps_row):
+    """The root cause, named: the near expiration holds a leg she BOUGHT, of a
+    different type from the puts she would be rolling."""
+    from src.engine.models import OptionType
+    from ui.trades import actions
+
+    p = positions.parse_rows(COLUMNS, [open_financed_leaps_row()])[0]
+    assert actions._priced_legs_beyond_this_roll(p, OptionType.PUT) is True
+
+
+def test_a_spread_still_prefills_from_its_own_priced_legs(open_put_spread_row):
+    """The guard must not switch the prefill off where it was right. A credit
+    spread's two legs share an expiration too - and there the priced figure IS
+    what one roll order fills at."""
+    from src.engine.models import OptionType
+    from ui.trades import actions
+
+    p = positions.parse_rows(COLUMNS, [open_put_spread_row()])[0]
+    assert actions._priced_legs_beyond_this_roll(p, OptionType.PUT) is False
+
+
+def test_a_pmcc_still_prefills_from_its_short_call(open_pmcc_row):
+    from src.engine.models import OptionType
+    from ui.trades import actions
+
+    p = positions.parse_rows(COLUMNS, [open_pmcc_row()])[0]
+    assert actions._priced_legs_beyond_this_roll(p, OptionType.CALL) is False
+
+
+def test_a_csp_still_prefills_from_its_short_put(open_csp_row):
+    from src.engine.models import OptionType
+    from ui.trades import actions
+
+    p = positions.parse_rows(COLUMNS, [open_csp_row()])[0]
+    assert actions._priced_legs_beyond_this_roll(p, OptionType.PUT) is False
+
+
+def test_my_trades_survives_a_negative_cost_to_close(
+        app_with_one_financed_leaps, monkeypatch):
+    """The crash itself, end to end. Priced at her real numbers - $1,016 back
+    in her pocket to unwind it - the tab has to draw rather than fall over."""
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(
+        DataProvider, "price_position",
+        lambda self, position: {"underlying_price": 89.56,
+                                "cost_to_close": -1016.0,
+                                "short_delta": 0.32})
+    at = app_with_one_financed_leaps.run()
+    assert not at.exception
+    snags = [e for e in at.error if "unexpected snag" in str(e.value)]
+    assert not snags, f"a tab crashed: {[str(e.value) for e in snags]}"
+
+
+def test_no_money_box_can_be_prefilled_below_its_own_minimum(
+        app_with_one_financed_leaps, monkeypatch):
+    """Belt and braces under the fix above: whatever a caller hands the price
+    box, a prefill it cannot hold becomes an empty box rather than a raise."""
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(
+        DataProvider, "price_position",
+        lambda self, position: {"underlying_price": 89.56,
+                                "cost_to_close": -1016.0,
+                                "short_delta": 0.32})
+    at = app_with_one_financed_leaps.run()
+    assert not at.exception
+    assert all(n.value >= 0 for n in at.number_input
+               if (n.key or "").startswith(("roll_paid_", "back_paid_")))

@@ -131,6 +131,61 @@ def put_spread_row(short_strike: float = 100.0, long_strike: float = 95.0,
     ]
 
 
+LEAPS_CALL = "LEAPS Call (Long Call)"
+
+
+def financed_leaps_row(call_strike: float = 70.0, put_strike: float = 75.0,
+                       puts: int = 3, call_cost: float = 2100.0,
+                       put_price: float = 6.25):
+    """One bought LEAPS call part-paid for by sold puts - a risk reversal.
+
+    The one shape in the book whose bought leg and sold legs share a single
+    expiration, which is what makes its "cost to close" come back NEGATIVE:
+    unwinding a position she only ever paid for PAYS her. Invented strikes and
+    fills, like everything else here.
+    """
+    today = date.today()
+    opened = today - timedelta(days=10)
+    expiry = today + timedelta(days=500)
+    dte = (expiry - opened).days
+    credit = put_price * 100 * puts
+    details = {
+        "key": "long_call_leaps",
+        "underlying_price": 84.0,
+        "legs": [
+            {"role": "long_call_leaps", "action": "buy", "type": "call",
+             "strike": call_strike, "delta": 0.78, "premium": call_cost / 100,
+             "qty": 1, "dte": dte},
+            {"role": "financing_put", "action": "sell", "type": "put",
+             "strike": put_strike, "delta": -0.32, "premium": put_price,
+             "qty": puts, "dte": dte},
+        ],
+        # She PAID for the call and the puts came off the price of it, so the
+        # Credit column is deliberately zero - that money is a discount, not
+        # income - and the net cash is what actually left the account.
+        "open_cash": round(credit - call_cost, 2),
+    }
+    collateral = put_strike * 100 * puts
+    return [
+        opened.isoformat(), "WFC", LEAPS_CALL,
+        f"{call_strike:g} / {put_strike:g}", 0.32, dte, 1, 0.0,
+        round(collateral, 2), round(collateral - credit, 2),
+        "yes", "", "20260820-093000-WFC", "open", expiry.isoformat(),
+        "", "", json.dumps(details), "real",
+    ]
+
+
+@pytest.fixture
+def open_financed_leaps_row():
+    return financed_leaps_row
+
+
+@pytest.fixture
+def app_with_one_financed_leaps(monkeypatch):
+    """The app, offline, with one financed LEAPS open."""
+    return _app_with(monkeypatch, financed_leaps_row())
+
+
 @pytest.fixture
 def open_csp_row():
     return csp_row
