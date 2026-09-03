@@ -203,6 +203,32 @@ def _rollable_sides(p) -> list[OptionType]:
     return [kind for kind in order if _short_leg(p, kind) is not None]
 
 
+def _priced_legs_beyond_this_roll(p, kind: OptionType) -> bool:
+    """Does the priced "cost to close" cover legs this roll does not touch?
+
+    cost_to_close prices every leg at the position's NEAR expiration. On most
+    shapes that is exactly the leg being rolled - and on a credit spread it is
+    the short leg plus the protection under it, which roll together as one
+    order and fill at one price, which is what the prefill wants.
+
+    Her financed LEAPS is the shape it is wrong for: the call she BOUGHT and
+    the puts she SOLD share one expiration, so the figure is the whole position
+    rather than the put side she is rolling. Worse, because the deep call is
+    worth more than the puts, it comes back NEGATIVE - a "buy-back cost" of
+    minus a thousand dollars, which is a number no fill could look like and no
+    price box can hold.
+
+    So the test is the option TYPE at the near expiration. Anything there that
+    is not the side being rolled means the priced figure is about more than
+    this roll, and the honest prefill is none at all.
+    """
+    dtes = [leg.dte for leg in p.legs if leg.dte is not None]
+    if not dtes:
+        return False
+    near = min(dtes)
+    return any(leg.dte == near and leg.option_type != kind for leg in p.legs)
+
+
 def _leg_label(strike: Optional[float], expiration: Optional[dt.date],
                word: str = "call") -> str:
     """"the 500 call expiring 2027-01-15" - how she says it out loud.
@@ -346,6 +372,8 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         # iron condor it is BOTH sides at once and would prefill roughly double
         # the true buy-back of the one side she rolled.
         cost_now = live.get("cost_to_close") if len(sides) == 1 else None
+        if cost_now is not None and _priced_legs_beyond_this_roll(p, kind):
+            cost_now = None
         contracts = max(int(p.contracts or 1), 1)
 
         # Where this leg stands BEFORE she types anything. The first version

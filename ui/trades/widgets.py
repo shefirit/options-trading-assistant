@@ -98,6 +98,13 @@ def _fill_price_input(label: str, key: str, contracts: int, *,
     per = max(contracts, 1) * 100.0
     default = round(float(default_total or 0.0) / per, 2)
     extra = {} if allow_negative else {"min_value": 0.0}
+    # A prefill the box cannot hold used to crash the whole section rather than
+    # the one field: Streamlit raises on a value under min_value, and My trades
+    # went down with it. Her financed LEAPS produced exactly that - a "cost to
+    # close" of -$1,016, because closing a position she only ever bought PAYS
+    # her. Nothing to prefill is an empty box, not a broken tab.
+    if not allow_negative and default < 0:
+        default = 0.0
     price = float(st.number_input(label, step=0.05, format="%.2f", value=default,
                                   key=key, help=help, **extra))
     total = round(price * per, 2)
