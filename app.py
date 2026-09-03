@@ -46,6 +46,7 @@ from src.engine.config_loader import (
 )
 from src.engine.strategy_advisor import advise
 from src.engine.validator import validate_trade
+from ui import candidate as ui_candidate
 from ui import components, glossary, research, theme, trades, tv_chart
 from ui.trades import account as trades_account
 
@@ -1623,10 +1624,13 @@ def _tab_analyze(settings, provider, strategies) -> None:
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind
     # a scroll arrow. Each tab restates its own full title as a heading anyway.
-    (t_over, t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts) = st.tabs(
-        ["📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
+    (t_cand, t_over, t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts) = st.tabs(
+        ["🩺 Candidate", "📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
          "✅ Screener", "🧮 Fair price", "⛓️ Options"])
 
+    with t_cand:
+        _guard(ui_candidate.render, sym, _classify(sym, settings), provider,
+               settings, strategies)
     with t_over:
         _analyze_overview(sym, settings, provider, strategies)
     # Each tool guards itself rather than the whole tab gating on a symbol: the

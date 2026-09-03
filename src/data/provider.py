@@ -515,6 +515,87 @@ class DataProvider:
             f"ohlc:{symbol}:{period}:{interval}",
             lambda: yfinance_client.get_ohlc_frame(symbol, period, interval), 600)
 
+    # ---------- credit-spread candidate check ----------
+    def get_vol_read(self, symbol: str, barchart_import=None,
+                     manual_rank: Optional[float] = None):
+        """Where this symbol's IV Rank comes from - see vol_source for the order.
+
+        The CBOE rung needs a year of the matching volatility index, which is a
+        plain price history fetch, so it costs the same as any other close
+        series and is cached the same way.
+        """
+        from src.data import vol_source
+
+        row = barchart_import.get(symbol) if barchart_import is not None else None
+        index_closes = None
+        if row is None and manual_rank is None:
+            ticker = vol_source.vol_index_for(symbol)
+            if ticker and self.is_real:
+                index_closes = cache.get_or_fetch(
+                    f"volidx:{ticker}",
+                    lambda: yfinance_client.get_history_closes(ticker, period="1y"),
+                    3600) or None
+        own = self.get_history_closes(symbol) if self.is_real else []
+        return vol_source.resolve(symbol, barchart_row=row, manual_rank=manual_rank,
+                                  vol_index_closes=index_closes, own_closes=own)
+
+    def get_candidate(self, symbol: str, kind: str, *, width: float,
+                      put_delta: float = 0.25, call_delta: float = 0.10,
+                      dte_target: int = 45, dte_lo: int = 30, dte_hi: int = 49,
+                      min_credit_pct: float = 0.06, vix_stop: float = 28.0,
+                      vix_zone: tuple[float, float] = (13.0, 25.0),
+                      barchart_import=None, manual_rank: Optional[float] = None):
+        """The whole candidate check for one symbol - every layer, both sides.
+
+        Assembles the inputs and hands them to the pure engine. Anything that
+        fails to arrive is passed through as None, and the engine grades that
+        layer "unknown" rather than guessing at it.
+        """
+        from src.engine import candidate as cand
+
+        frame = self.get_ohlc(symbol, period="2y") if self.is_real else None
+        closes = highs = lows = volumes = []
+        if frame is not None and len(frame):
+            closes = [float(v) for v in frame["Close"]]
+            highs = [float(v) for v in frame["High"]]
+            lows = [float(v) for v in frame["Low"]]
+            volumes = ([float(v) for v in frame["Volume"]]
+                       if "Volume" in frame.columns else [])
+
+        # Everything is measured against the broad market. The names that ARE
+        # the broad market are told so, rather than compared with themselves and
+        # reported as a missing number.
+        bench_name = "SPY"
+        is_benchmark = symbol.upper() in ("SPY", "SPX", "XSP", "ES", "VOO", "IVV")
+        bench = ([] if is_benchmark or not self.is_real
+                 else self.get_history_closes(bench_name))
+
+        vol = self.get_vol_read(symbol, barchart_import, manual_rank)
+
+        earnings = None
+        if kind == "stock":
+            row = barchart_import.get(symbol) if barchart_import is not None else None
+            if row is not None and row.earnings:
+                earnings = row.earnings
+            else:
+                earnings = (self.get_stock_calendar(symbol) or (None, None))[0]
+
+        chain = self.get_chain(symbol, dte_min=dte_lo, dte_max=dte_hi)
+        chain_read = cand.read_chain(chain, dte_target, width,
+                                     put_delta=put_delta, call_delta=call_delta)
+
+        report = cand.assess(
+            symbol.upper(), kind=kind, closes=closes, highs=highs, lows=lows,
+            volumes=volumes, bench_closes=bench, bench_name=bench_name,
+            is_benchmark=is_benchmark,
+            iv_rank=vol.iv_rank, iv_rank_source=vol.source, iv=vol.iv, hv=vol.hv,
+            vix=(cache.get_or_fetch("vix", yfinance_client.get_vix, 120)
+                 if self.is_real else None),
+            vix_stop=vix_stop, vix_zone=vix_zone, earnings=earnings, dte_hi=dte_hi,
+            chain_read=chain_read, min_credit_pct=min_credit_pct,
+        )
+        return report, vol
+
     # ---------- TradingView second-opinion technical rating ----------
     def get_tradingview(self, symbol: str, is_index: bool = False) -> dict:
         """TradingView's Buy/Sell rating (daily + weekly). Needs internet."""
