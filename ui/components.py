@@ -1327,7 +1327,9 @@ def render_debit_position_card(position, live: dict) -> None:
     # behind the puts. A return measured on the $240 is a real number about a
     # misleading denominator, and it used to sit four lines under the exit
     # reason quoting the OTHER denominator - two percentages for one $3.
-    financed = position.is_long_premium and position.short_put_collateral > 0
+    # is_leaps_call_trade, not is_long_premium: the puts stay financed - and
+    # their collateral stays frozen - after she writes a call against the LEAPS.
+    financed = position.is_leaps_call_trade and position.short_put_collateral > 0
     basis = position.capital_at_risk if financed else out
 
     cols = st.columns(4)
