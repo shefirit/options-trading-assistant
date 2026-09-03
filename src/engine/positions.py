@@ -1307,6 +1307,7 @@ def position_value_from_chain(position: Position, chain,
         return None
 
     value = 0.0
+    mids: list[tuple[Leg, float]] = []
     for leg in position.legs:
         exp = position.leg_expiration(leg)
         if exp is None:
@@ -1321,6 +1322,7 @@ def position_value_from_chain(position: Position, chain,
         # Unwinding sells what she is long and buys back what she is short.
         sign = 1.0 if leg.action == Action.BUY else -1.0
         value += sign * contract.mid * leg.quantity
+        mids.append((leg, contract.mid))
 
     options_value = value * 100 * position.contracts
     value = options_value
@@ -1340,6 +1342,9 @@ def position_value_from_chain(position: Position, chain,
         "value": round(value, 2),
         "open_pl": round(position.open_cash + position.banked_income + value, 2),
     }
+    parts = leg_breakdown(position, mids)
+    if parts is not None:
+        out["leg_pl"] = parts
     if shares_pl is not None:
         # Taking the shares' cost back out of open_cash leaves what the OPTIONS
         # alone cost to put on, so options_pl + shares_pl == open_pl.
@@ -1348,6 +1353,105 @@ def position_value_from_chain(position: Position, chain,
                                   + options_value, 2)
         out["shares_pl"] = round(shares_pl, 2)
     return out
+
+
+def leg_breakdown(position: Position,
+                  mids: list[tuple[Leg, float]]) -> Optional[list[dict]]:
+    """What each PIECE of the position has made, not just the trade as a whole.
+
+    Rita's question on her WFC risk reversal, and one nothing on the card
+    answered: she holds a bought 70 call, three sold 75 puts and a sold 97.5
+    call, and "up $755" told her nothing about which of the three was carrying
+    it. A long call up big while the puts bleed is a completely different trade
+    from the reverse, and the follow-up differs too.
+
+    Entry money comes from the LEDGER, never from `leg.premium`. The stored
+    per-leg premiums are chain mids at log time, they go stale when she
+    corrects a fill (her call reads 20.82 on the leg and 21.15 in the ledger),
+    and a leg written by a roll carries none at all. Using them would print
+    three numbers that quietly refuse to add up to the total four inches above.
+    So the split is:
+
+      the leg she BOUGHT   -open_bought_cost, the money that actually left
+      each short TYPE      what that side has collected: its day-one premium
+                           plus every roll and leg-close on the same side
+
+    which sums to open_cash + banked_income by construction, so the rows always
+    add back to "Profit if closed now".
+
+    None - and the card simply does not draw this - wherever that split would
+    have to be invented: more than one bought leg, or short legs of two
+    different types on day one. Both are outside the shapes this is for (the
+    PMCC and the LEAPS call), and a guessed basis is worse than none.
+    """
+    if not mids:
+        return None
+
+    longs = [(leg, mid) for leg, mid in mids if leg.action == Action.BUY]
+    shorts = [(leg, mid) for leg, mid in mids if leg.action == Action.SELL]
+    if len(longs) > 1:
+        return None
+
+    # Day one's premium belongs to whichever side was short at open - one type
+    # on both shapes this serves. Two would need a split the log cannot give.
+    open_short_types = {leg.option_type for leg in position.open_legs
+                        if leg.action == Action.SELL}
+    if len(open_short_types) > 1:
+        return None
+    opened_short = next(iter(open_short_types), None)
+
+    def banked_on(kind: OptionType) -> float:
+        """Rolls and legs sold off on this side, since opening. Each event
+        records which side it moved, so the money follows it."""
+        return round(sum(r.cash for r in position.rolls if r.kind == kind)
+                     + sum(e.cash for e in position.leg_closes
+                           if str(e.option_type).lower() == kind.value), 2)
+
+    per = 100 * max(int(position.contracts or 1), 1)
+    rows: list[dict] = []
+
+    for leg, mid in longs:
+        rows.append({
+            "side": "long",
+            "option_type": leg.option_type.value,
+            "strikes": [leg.strike],
+            "contracts": leg.quantity * max(int(position.contracts or 1), 1),
+            "entry_cash": round(-position.open_bought_cost, 2),
+            "value_now": round(mid * leg.quantity * per, 2),
+        })
+
+    by_type: dict[OptionType, list[tuple[Leg, float]]] = {}
+    for leg, mid in shorts:
+        by_type.setdefault(leg.option_type, []).append((leg, mid))
+    for kind, group in by_type.items():
+        entry = banked_on(kind)
+        if kind == opened_short:
+            entry = round(entry + position.open_premium, 2)
+        rows.append({
+            "side": "short",
+            "option_type": kind.value,
+            "strikes": [leg.strike for leg, _ in group],
+            "contracts": sum(leg.quantity for leg, _ in group)
+                         * max(int(position.contracts or 1), 1),
+            "entry_cash": entry,
+            "value_now": round(-sum(mid * leg.quantity for leg, mid in group) * per, 2),
+        })
+
+    for row in rows:
+        row["pl"] = round(row["entry_cash"] + row["value_now"], 2)
+
+    # Anything the rows could not account for - premium banked on a side that
+    # holds no open leg any more, say. Reported rather than swallowed, because
+    # the rows have to add up to the total or they are worse than nothing.
+    ledger = round(position.open_cash + position.banked_income, 2)
+    assigned = round(sum(r["entry_cash"] for r in rows), 2)
+    leftover = round(ledger - assigned, 2)
+    if abs(leftover) >= 0.01:
+        rows.append({
+            "side": "banked", "option_type": "", "strikes": [], "contracts": 0,
+            "entry_cash": leftover, "value_now": 0.0, "pl": leftover,
+        })
+    return rows
 
 
 # ------------------------------------------------------------------ downside read

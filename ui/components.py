@@ -1442,6 +1442,96 @@ def render_debit_position_card(position, live: dict) -> None:
         f"\\${abs(open_pl):,.0f}** on {against} "
         f"(**{pct_text(pct)}**). " + tail)
 
+    render_leg_breakdown(position, live)
+
+
+def _leg_row_name(row: dict) -> str:
+    """What to call this piece, the way she says it out loud."""
+    if row["side"] == "banked":
+        return "Premium banked on legs you no longer hold"
+    n = row["contracts"]
+    strikes = " / ".join(f"{k:g}" for k in row["strikes"])
+    word = row["option_type"] + ("s" if n > 1 else "")
+    verb = "you bought" if row["side"] == "long" else "you sold"
+    count = "The" if n == 1 else f"The {n}"
+    return f"{count} {strikes} {word} {verb}"
+
+
+def _leg_row_detail(row: dict) -> str:
+    """The two supporting numbers, said rather than tabulated.
+
+    Signed figures in a column ("-$2,115", "-$1,509") are correct and almost
+    unreadable: the same minus means money she paid on one line and money it
+    would cost to buy back on the next. The words carry it instead.
+    """
+    if row["side"] == "banked":
+        return "already yours, banked in the month it happened"
+    put_in, now = row["entry_cash"], row["value_now"]
+    if row["side"] == "long":
+        return (f"paid &#36;{abs(put_in):,.0f} &middot; "
+                f"worth &#36;{abs(now):,.0f} now")
+    got = (f"collected &#36;{put_in:,.0f}" if put_in >= 0
+           else f"cost you &#36;{abs(put_in):,.0f} net")
+    return f"{got} &middot; &#36;{abs(now):,.0f} to buy back"
+
+
+def _signed_dollars(x: float) -> str:
+    """Money with its sign always shown - a profit column where "+" and "-"
+    both appear is read faster than one where only losses are marked."""
+    return ("+" if x >= 0 else "-") + f"&#36;{abs(x):,.0f}"
+
+
+def render_leg_breakdown(position, live: dict) -> None:
+    """Which PIECE of the trade is making the money.
+
+    Her WFC risk reversal is three trades in a trench coat - a bought call,
+    three sold puts, and a call sold against them - and "up $770" said nothing
+    about which one was carrying it. These rows always add back to that total:
+    see positions.leg_breakdown, which takes every entry figure from the ledger
+    rather than the per-leg premiums, precisely so they cannot disagree with it.
+
+    Stacked rather than tabulated, because she reads this on a phone. A
+    four-column table pushed the profit - the one column she opened this for -
+    off the right-hand edge behind a sideways scroll.
+    """
+    rows = live.get("leg_pl")
+    if not rows:
+        return
+
+    st.markdown("**Where that came from**")
+    blocks = []
+    for row in rows:
+        tone = _STATUS_TEXT["PASS"] if row["pl"] >= 0 else _STATUS_TEXT["FAIL"]
+        blocks.append(
+            f"<div style='display:flex;justify-content:space-between;gap:12px;"
+            f"align-items:baseline;flex-wrap:wrap;padding:9px 0;"
+            f"border-bottom:1px solid {theme.BORDER};'>"
+            f"<div style='flex:1 1 60%;min-width:0;'>"
+            f"<div style='font-weight:700;color:{theme.INK};'>"
+            f"{_htmllib.escape(_leg_row_name(row))}</div>"
+            f"<div style='color:{theme.CAPTION};font-size:0.95rem;'>"
+            f"{_leg_row_detail(row)}</div></div>"
+            f"<div style='font-weight:800;font-size:1.2rem;color:{tone};"
+            f"white-space:nowrap;'>{_signed_dollars(row['pl'])}</div></div>")
+
+    total = round(sum(r["pl"] for r in rows), 2)
+    tone = _STATUS_TEXT["PASS"] if total >= 0 else _STATUS_TEXT["FAIL"]
+    blocks.append(
+        f"<div style='display:flex;justify-content:space-between;gap:12px;"
+        f"align-items:baseline;flex-wrap:wrap;padding:10px 0 2px;"
+        f"border-top:2px solid {theme.BORDER_STRONG};'>"
+        f"<div style='font-weight:800;color:{theme.INK};'>"
+        f"All {len(rows)} together</div>"
+        f"<div style='font-weight:800;font-size:1.2rem;color:{tone};"
+        f"white-space:nowrap;'>{_signed_dollars(total)}</div></div>")
+
+    st.markdown(f"<div style='margin:2px 0 10px;'>{''.join(blocks)}</div>",
+                unsafe_allow_html=True)
+    theme.note(
+        "Each line is one piece of this trade on its own: what it did to your "
+        "cash when you opened it, what it is worth today, and the difference. "
+        "They add up to the profit above, so nothing is hiding between them.")
+
 
 def render_protection_read(position, read: dict) -> None:
     """Where a covered call's downside protection holds, and what is below it.

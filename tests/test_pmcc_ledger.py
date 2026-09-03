@@ -27,7 +27,10 @@ from datetime import date, timedelta
 from src.data.chain import OptionChain, OptionContract
 from src.engine.config_loader import load_strategies
 from src.engine.models import Action, Leg, OptionType, Trade
+from src.engine import positions as positions_mod
 from src.engine.positions import (
+    Position,
+    RollEvent,
     cost_to_close_from_chain,
     monthly_summary,
     parse_rows,
@@ -810,3 +813,196 @@ def test_story_of_a_credit_spread_starts_positive():
     assert steps[0]["cash"] == 200.0          # collected, not paid
     assert steps[-1]["cash"] == -90.0        # paying to close is the mirror
     assert steps[-1]["running"] == 110.0
+
+
+# ===========================================================================
+# WHICH PIECE IS MAKING THE MONEY.
+#
+# Rita, on her WFC risk reversal: "I want to see all the numbers. The
+# profit/loss from: long call, puts, short call." The card gave one figure for
+# the whole trade, and on a three-piece position that says nothing - a long
+# call up big while the puts bleed is a different trade from the reverse, and
+# it wants a different decision.
+#
+# The rule these tests exist to pin: the rows come from the LEDGER, never from
+# leg.premium, and they must always add back to open_pl. Per-leg premiums are
+# chain mids at log time, they go stale when she corrects a fill, and a leg
+# written by a roll carries none at all - three plausible numbers that quietly
+# refuse to sum to the total four inches above them are worse than no numbers.
+def _reversal_position(call_cost=2115.0, puts=3, put_price=6.25,
+                       stale_leg_premium=20.82):
+    """A bought LEAPS call financed by sold puts.
+
+    `stale_leg_premium` is the point of the fixture: the leg says 20.82 a share
+    while the ledger says the call cost 2,115. That gap is real - it is what a
+    fill corrected after logging leaves behind - and the breakdown has to
+    follow the ledger through it.
+    """
+    dte = (LEAPS_EXP - OPENED).days
+    legs = [
+        Leg(role="long_call_leaps", action=Action.BUY, option_type=OptionType.CALL,
+            strike=70.0, premium=stale_leg_premium, quantity=1, dte=dte),
+        Leg(role="financing_put", action=Action.SELL, option_type=OptionType.PUT,
+            strike=75.0, premium=put_price, quantity=puts, dte=dte),
+    ]
+    credit = put_price * 100 * puts
+    return Position(
+        trade_id="R1", strategy_key="long_call_leaps", underlying="WFC",
+        contracts=1, legs=list(legs), open_legs=list(legs),
+        opened=OPENED, expiration=LEAPS_EXP,
+        open_credit=0.0, open_cash=round(credit - call_cost, 2))
+
+
+def _write_a_call(p, strike=97.5, credit=85.0):
+    """The call she sells against the LEAPS, recorded the way the app records
+    one - a roll event with nothing bought back."""
+    positions_mod._apply_roll(p, RollEvent(
+        rolled_on=OPENED + timedelta(days=5), cash=credit, new_strike=strike,
+        new_expiration=SHORT_EXP, new_credit=credit, option_type="call"))
+    return p
+
+
+def _reversal_chain(call_mid=25.25, put_mid=5.03, short_call_mid=None):
+    contracts = [
+        OptionContract(option_type=OptionType.CALL, strike=70.0,
+                       expiration=LEAPS_EXP.isoformat(), dte=449, delta=0.78,
+                       bid=call_mid - 0.05, ask=call_mid + 0.05),
+        OptionContract(option_type=OptionType.PUT, strike=75.0,
+                       expiration=LEAPS_EXP.isoformat(), dte=449, delta=-0.32,
+                       bid=put_mid - 0.05, ask=put_mid + 0.05),
+    ]
+    if short_call_mid is not None:
+        contracts.append(
+            OptionContract(option_type=OptionType.CALL, strike=97.5,
+                           expiration=SHORT_EXP.isoformat(), dte=30, delta=0.20,
+                           bid=short_call_mid - 0.05, ask=short_call_mid + 0.05))
+    return OptionChain(underlying="WFC", underlying_price=89.56,
+                       contracts=contracts)
+
+
+def _row(kind, rows):
+    return next(r for r in rows if f"{r['side']}-{r['option_type']}" == kind)
+
+
+def test_the_three_pieces_add_back_to_the_trades_own_total():
+    """The whole contract of this feature in one assertion. If the rows and the
+    headline ever disagree she has two numbers and no way to tell which lies."""
+    p = _write_a_call(_reversal_position())
+    v = position_value_from_chain(p, _reversal_chain(short_call_mid=0.91))
+    rows = v["leg_pl"]
+    assert len(rows) == 3
+    assert round(sum(r["pl"] for r in rows), 2) == v["open_pl"]
+
+
+def test_each_piece_reads_the_way_she_asked_for_it():
+    p = _write_a_call(_reversal_position())
+    rows = position_value_from_chain(
+        p, _reversal_chain(call_mid=25.25, put_mid=5.03,
+                           short_call_mid=0.91))["leg_pl"]
+
+    call = _row("long-call", rows)
+    assert call["entry_cash"] == -2115.0        # the LEDGER, not 20.82 x 100
+    assert call["value_now"] == 2525.0
+    assert call["pl"] == 410.0
+
+    put = _row("short-put", rows)
+    assert put["contracts"] == 3                # all three, not one
+    assert put["entry_cash"] == 1875.0
+    assert put["value_now"] == -1509.0          # 5.03 x 3 to buy them back
+    assert put["pl"] == 366.0
+
+    written = _row("short-call", rows)
+    assert written["entry_cash"] == 85.0        # the roll that wrote it
+    assert written["pl"] == -6.0                # sold for 85, costs 91 back
+
+
+def test_the_bought_leg_follows_a_corrected_fill():
+    """The stale-premium trap on its own. Her call reads 20.82 on the leg and
+    2,115 in the ledger; taking the leg would report $33 of profit that never
+    happened, and the three rows would stop summing to the total."""
+    p = _reversal_position(call_cost=2115.0, stale_leg_premium=20.82)
+    rows = position_value_from_chain(p, _reversal_chain())["leg_pl"]
+    assert _row("long-call", rows)["entry_cash"] == -2115.0
+
+
+def test_a_bare_leaps_breaks_into_two():
+    """Before she writes anything against it there are two pieces, not three."""
+    p = _reversal_position()
+    v = position_value_from_chain(p, _reversal_chain())
+    rows = v["leg_pl"]
+    assert {f"{r['side']}-{r['option_type']}" for r in rows} == {"long-call",
+                                                                "short-put"}
+    assert round(sum(r["pl"] for r in rows), 2) == v["open_pl"]
+
+
+def test_the_puts_are_one_row_however_many_she_sold():
+    """Three puts at one strike are one decision, not three lines to add up."""
+    p = _reversal_position(puts=2, put_price=6.25)
+    rows = position_value_from_chain(p, _reversal_chain())["leg_pl"]
+    put = _row("short-put", rows)
+    assert put["contracts"] == 2
+    assert put["entry_cash"] == 1250.0
+    assert put["value_now"] == -1006.0
+
+
+def test_a_rolled_pmcc_puts_every_call_credit_on_the_call_row():
+    """The other shape this serves. The LEAPS row is what she paid; the call
+    row is the whole call side - day one's credit and every roll since - so the
+    two still add to the trade's own total."""
+    p = parse_rows(COLUMNS, [_open_row(), _roll_row()])[0]
+    chain = OptionChain(underlying="MSFT", underlying_price=140.0, contracts=[
+        OptionContract(option_type=OptionType.CALL, strike=100,
+                       expiration=LEAPS_EXP.isoformat(), dte=449,
+                       delta=0.90, bid=44.90, ask=45.10),
+        OptionContract(option_type=OptionType.CALL, strike=135,
+                       expiration=ROLL_EXP.isoformat(), dte=58,
+                       delta=0.45, bid=4.90, ask=5.10),
+    ])
+    v = position_value_from_chain(p, chain)
+    rows = v["leg_pl"]
+    assert len(rows) == 2
+    assert _row("long-call", rows)["entry_cash"] == -LEAPS_COST
+    # 150 collected on day one plus the 80 the roll banked.
+    assert _row("short-call", rows)["entry_cash"] == CALL_CREDIT + ROLL_CASH
+    assert round(sum(r["pl"] for r in rows), 2) == v["open_pl"]
+
+
+def test_a_covered_call_gets_no_breakdown_rather_than_an_invented_one():
+    """Model 2 is short a put AND a call on day one, and the log stores one
+    credit for the pair - so the ledger cannot say which side it belongs to.
+    No rows beats guessed rows."""
+    strat = STRATS["covered_call_model_2"]
+    legs = legs_from_strategy(
+        strat, {"long_put_protection": 95.0, "short_put_offset": 90.0,
+                "short_call": 115.0}, dte=30)
+    p = Position(trade_id="C1", strategy_key="covered_call_model_2",
+                 underlying="MSFT", contracts=1, legs=list(legs),
+                 open_legs=list(legs), opened=OPENED, expiration=SHORT_EXP,
+                 open_credit=300.0, open_cash=-10000.0, shares_cost=10500.0)
+    assert positions_mod.leg_breakdown(p, [(leg, 1.0) for leg in legs]) is None
+
+
+def test_the_rows_name_themselves_the_way_she_says_them():
+    from ui.components import _leg_row_name
+
+    assert _leg_row_name({"side": "long", "option_type": "call", "contracts": 1,
+                          "strikes": [70.0]}) == "The 70 call you bought"
+    assert _leg_row_name({"side": "short", "option_type": "put", "contracts": 3,
+                          "strikes": [75.0]}) == "The 3 75 puts you sold"
+
+
+def test_the_detail_line_says_what_the_signs_mean():
+    """Signed money in a column is unreadable on a phone: the same minus is
+    cash she paid on one line and cash it costs to buy back on the next."""
+    from ui.components import _leg_row_detail
+
+    assert _leg_row_detail({"side": "long", "entry_cash": -2115.0,
+                            "value_now": 2525.0}) \
+        == "paid &#36;2,115 &middot; worth &#36;2,525 now"
+    assert _leg_row_detail({"side": "short", "entry_cash": 1875.0,
+                            "value_now": -1509.0}) \
+        == "collected &#36;1,875 &middot; &#36;1,509 to buy back"
+    # A short side rolled at a net loss has taken money OUT, not put it in.
+    assert _leg_row_detail({"side": "short", "entry_cash": -40.0,
+                            "value_now": -120.0}) \
+        == "cost you &#36;40 net &middot; &#36;120 to buy back"
