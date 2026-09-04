@@ -13,6 +13,7 @@ that she can see which measurement moved it.
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import quote
 
 import streamlit as st
 
@@ -32,7 +33,29 @@ _TONE = {"green": "good", "amber": "watch", "red": "bad"}
 
 BARCHART_KEY = "barchart_iv_import"
 MANUAL_KEY = "manual_iv_rank"
-IV_RANK_URL = "https://www.barchart.com/options/iv-rank-percentile"
+
+# The screener, deep-linked to the view that is actually useful: high implied
+# volatility first, sorted by IV Rank descending. Barchart honours these params,
+# so she lands on the sorted list rather than the default page.
+IV_RANK_URL = ("https://www.barchart.com/options/iv-rank-percentile/high"
+               "?viewName=main&orderBy=optionsImpliedVolatilityRank1y&orderDir=desc")
+
+# There is deliberately NO direct download link. Barchart's download control is
+# a script that posts a session token, not an anchor with an href - there is no
+# static URL to point at, and a made-up one would 404 or hand her an empty file.
+
+
+def barchart_url(symbol: str, kind: str) -> str:
+    """That one symbol's options history on Barchart - the page carrying its
+    Implied Volatility, IV Rank and IV Percentile.
+
+    Indexes are written with a leading $ over there ($SPX, $NDX), which has to
+    be percent-encoded to survive the URL.
+    """
+    sym = (symbol or "").upper()
+    if kind == "index" and not sym.startswith("$"):
+        sym = "$" + sym
+    return f"https://www.barchart.com/stocks/quotes/{quote(sym, safe='')}/options-history"
 
 
 def _manual_ranks() -> dict:
@@ -44,33 +67,73 @@ def _import() -> Optional[barchart.BarchartImport]:
 
 
 # ------------------------------------------------------------ volatility source
-def _volatility_source_panel(sym: str, vol) -> None:
-    """Where the IV Rank came from, and how to give it a better one."""
+def _volatility_source_panel(sym: str, kind: str, vol) -> None:
+    """Where the IV Rank came from, and the shortest route to a better one.
+
+    Two routes, because they suit different moments. Reading one number off
+    Barchart on the phone is the fast one and needs no file at all. Importing an
+    export is the thorough one and does every symbol at once. The quick route is
+    on the page; the file lives one tap away.
+    """
     imp = _import()
+    weak = (not vol.known) or vol.is_proxy
     tone = "red" if not vol.known else ("amber" if vol.is_proxy else "green")
-    label = vol.source or "nothing available"
-    chips = [theme.chip(f"IV Rank source: {label}", tone)]
+    chips = [theme.chip(f"IV Rank source: {vol.source or 'nothing available'}", tone)]
     if imp is not None and imp.ok:
         age = imp.age_days()
         stale = age is not None and age > 3
         chips.append(theme.chip(
             f"Barchart file: {len(imp.rows)} symbols"
-            + (f", {age}d old" if age is not None else ""),
+            + (f", {age} days old" if age is not None else ""),
             "amber" if stale else "neutral"))
     st.markdown(" ".join(chips), unsafe_allow_html=True)
-
     if vol.note:
         theme.note(vol.note)
 
-    with st.expander("Import IV Rank from Barchart, or type one in", expanded=False):
+    # ---- the quick route, on the page whenever the current source is weak ----
+    if weak:
+        current = _manual_ranks().get(sym)
+        theme.note(f"**Quickest fix:** tap through to {sym} on Barchart, read the "
+                   "**IV Rank** number, type it in. Ten seconds, no file.")
+        c1, c2, c3 = st.columns([2, 1.4, 1])
+        with c1:
+            st.link_button(f"📊 Open {sym} on Barchart ▸", barchart_url(sym, kind),
+                           use_container_width=True)
+        typed = c2.number_input(
+            "IV Rank", min_value=0.0, max_value=100.0, step=1.0,
+            value=float(current) if current is not None else None,
+            placeholder="0-100", key=f"manual_iv_{sym}",
+            label_visibility="collapsed",
+            help="Where implied volatility sits between its lowest and highest of "
+                 "the past year. Barchart shows it as IV Rank.")
+        if c3.button("Use it", key=f"manual_set_{sym}", disabled=typed is None,
+                     use_container_width=True):
+            _manual_ranks()[sym] = float(typed)
+            st.rerun()
+    elif _manual_ranks().get(sym) is not None:
+        if st.button(f"Stop using the rank you typed for {sym}",
+                     key=f"manual_clr_{sym}"):
+            _manual_ranks().pop(sym, None)
+            st.rerun()
+
+    # ---- the thorough route: one file, every symbol ----
+    with st.expander("Do the whole watchlist at once, from a Barchart export",
+                     expanded=False):
+        st.link_button("⬇️ Open the Barchart IV Rank screener ▸", IV_RANK_URL)
         theme.note(
-            "Your app cannot call Barchart directly - their data API is a separate "
-            "paid product, and their website needs a logged-in session. What your "
-            "subscription does give you is the download button. Open "
-            f"**{IV_RANK_URL}**, set the dropdown to the list you want, click "
-            "**download**, then drop the file here. It fills IV Rank, IV Percentile, "
-            "30-day realized volatility and the earnings date for every symbol in it."
-        )
+            "1. That link opens the screener already sorted by IV Rank, highest "
+            "first.\n\n"
+            "2. Pick the list you want in the dropdown above the table.\n\n"
+            "3. Click **download** at the top right of the table.\n\n"
+            "4. Drop the file below.")
+        theme.note(
+            "One file covers every symbol in it - IV Rank, IV Percentile, 30-day "
+            "realized volatility and the earnings date - and it stays loaded while "
+            "this tab is open. There is no direct download link to give you: "
+            "Barchart's download is a button on their page, not an address, and "
+            "their data API is a separate paid product your membership does not "
+            "include.")
+
         upload = st.file_uploader("Barchart IV Rank export (.csv)", type=["csv"],
                                   key="barchart_uploader")
         if upload is not None:
@@ -92,25 +155,6 @@ def _volatility_source_panel(sym: str, vol) -> None:
             if st.button("Clear the imported file", key="barchart_clear"):
                 st.session_state.pop(BARCHART_KEY, None)
                 st.rerun()
-
-        st.divider()
-        theme.note(
-            f"No file to hand? Read {sym}'s IV Rank off Barchart and type it here. "
-            "It applies to this symbol only, and a file always beats it.")
-        current = _manual_ranks().get(sym)
-        typed = st.number_input(
-            f"{sym} IV Rank (0-100)", min_value=0.0, max_value=100.0,
-            value=float(current) if current is not None else 0.0, step=1.0,
-            key=f"manual_iv_{sym}",
-            help="0 to 100. Where implied volatility sits between its lowest and "
-                 "highest of the past year.")
-        cols = st.columns(2)
-        if cols[0].button("Use this rank", key=f"manual_set_{sym}"):
-            _manual_ranks()[sym] = float(typed)
-            st.rerun()
-        if current is not None and cols[1].button("Forget it", key=f"manual_clr_{sym}"):
-            _manual_ranks().pop(sym, None)
-            st.rerun()
 
 
 # ------------------------------------------------------------------- verdicts
@@ -208,7 +252,7 @@ def render(sym: str, kind: str, provider, settings, strategies) -> None:
             manual_rank=_manual_ranks().get(sym),
         )
 
-    _volatility_source_panel(sym, vol)
+    _volatility_source_panel(sym, kind, vol)
     st.divider()
     _render_verdicts(report)
     _render_layers(report)
