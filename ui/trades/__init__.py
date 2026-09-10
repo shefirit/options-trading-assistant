@@ -4,10 +4,10 @@ FOUR PAGES, NOT ONE SCROLL
 --------------------------
 This tab used to stack ten sections onto one page: the band, six KPI cards, the
 open trades, the goal charts, the process row, an entire month income report,
-then nine record expanders. On the 375px phone she actually runs this on that
-was about twenty screens, and finding anything meant remembering how far down
-it lived. Rita's verdict was that it felt "not effective and not professional
-- hard to follow and understand".
+then nine record expanders. That was about twenty screens of scrolling, and
+finding anything meant remembering how far down it lived. Rita's verdict was
+that it felt "not effective and not professional - hard to follow and
+understand".
 
 It is now four sub-tabs, each answering one question:
 
@@ -20,13 +20,15 @@ This is lateral navigation, not a wizard. Everything is one tap away and
 nothing is gated behind a step, which is the rule this tab has always had: a
 power dashboard, not a gated wizard.
 
-WHAT STAYS ABOVE THE TABS
+WHAT LIVES IN THE SIDEBAR
 -------------------------
-The account switch and Quick Log. The switch governs every number on all four
-pages, so it must never be something she has to go and find. Quick Log is the
-most frequent thing she does here, and it used to sit five screens down inside
-Records - collapsed at the top it costs one line and is always in reach from
-whichever page she is on.
+The three things that are chrome rather than content: the account switch, which
+governs every number on all four pages; Refresh; and the button that opens
+Quick Log. They used to sit above the tabs, costing every page its top three
+inches, which is space that should be showing numbers.
+
+Nothing she READS goes in there, so the sidebar and the page never hold two
+copies of the same thing.
 
 Import direction is one way - nothing in this package imports app.py. Helpers
 the other tabs share live in ui/components.py instead.
@@ -166,7 +168,7 @@ def _empty(settings, every_pos, mode: str, source: str, rows) -> None:
     """The first-run page. No tabs: four empty pages is not a welcome."""
     book = "real-money book" if mode == "real" else "practice book"
     theme.note(f"Nothing in your **{book}** yet. Two ways to log a trade: "
-               "**➕ Quick Log** at the top of this tab for one you already "
+               "**➕ Log a trade** in the sidebar for one you already "
                "placed in thinkorswim, or **Log this trade** in 🎯 Find a trade "
                "when the app finds the setup for you. Both ask which account "
                "the trade is in. Either way it lands here and the app starts "

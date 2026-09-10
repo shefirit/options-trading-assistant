@@ -51,9 +51,9 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
 
     trades = [p for p in all_pos]
     if not trades:
-        theme.note("**Nothing logged yet.** Use **➕ Quick Log** at the top of "
-                   "this tab for a trade you already placed, or **Log this "
-                   "trade** in 🎯 Find a trade.")
+        theme.note("**Nothing logged yet.** Use **➕ Log a trade** in the sidebar "
+                   "for a trade you already placed, or **Log this trade** in "
+                   "🎯 Find a trade.")
         return
 
     rows = _rows(trades)

@@ -140,7 +140,7 @@ def _month_view(all_pos, summaries, settings, live_from, mode: str,
             f"**No real-money trades in {report['label']} yet.** You funded on "
             f"{live_from.day} {live_from:%B}, and this book holds only real money. "
             "Any trades you are thinking of are in your practice book - switch "
-            "accounts at the top of this tab to see them. Your first real trade "
+            "accounts in the sidebar to see them. Your first real trade "
             "starts this page off at zero, which is exactly where a real-money "
             "record should start.")
 
@@ -149,7 +149,7 @@ def _month_view(all_pos, summaries, settings, live_from, mode: str,
     # Everything under the band is new, so only the band is dropped.
     if report["is_current"]:
         theme.note(f"**Where {report['label']}'s money came from.** The totals "
-                   "for this month are at the top of the tab - this is the "
+                   "for this month are on the 📍 Now page - this is the "
                    "breakdown behind them.")
     income_report.render(report, settings, pace=mr.pace(report, monthly_goal),
                          empty_note=empty_note,

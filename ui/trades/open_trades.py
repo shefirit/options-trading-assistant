@@ -55,7 +55,7 @@ def _open_section(items, strategies, provider, priced_at) -> None:
         st.success(f"✅ Nothing to do today - all {len(items)} open trades are "
                    "inside your rules.")
     theme.note(f"Prices checked at **{priced_at}** - they refresh on their own every "
-               "few minutes, or press ↻ Refresh at the top.")
+               "few minutes, or press ↻ Refresh in the sidebar.")
 
     # One table, every trade, urgency first - and clicking a row opens that one
     # underneath. Rita: "I want all trades organised nicely in table, not one
