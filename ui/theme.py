@@ -136,6 +136,22 @@ section[data-testid="stSidebar"] {{
 }}
 section[data-testid="stSidebar"] .block-container,
 section[data-testid="stSidebar"] > div {{ padding-top: 1.1rem; }}
+
+/* A COLLAPSED SIDEBAR MUST BE REOPENABLE.
+   Streamlit collapses it on a narrower window and then renders the button that
+   reopens it at 0x0 - present in the DOM, impossible to click - so the sidebar
+   becomes a dead end and everything in it is gone for good. Give that button
+   its size back so there is always a way in. Streamlit still decides WHEN to
+   show it; this only makes it a real target when it does. */
+[data-testid="stSidebarHeader"] {{ min-width: 44px; }}
+[data-testid="stExpandSidebarButton"] {{
+    min-width: 38px !important; min-height: 38px !important;
+    visibility: visible !important; opacity: 1 !important;
+}}
+[data-testid="stExpandSidebarButton"] button {{
+    width: 38px !important; height: 38px !important;
+    border: 1px solid {BORDER_STRONG}; background: {CARD};
+}}
 /* The section heading is a label in here, not a page title. */
 section[data-testid="stSidebar"] .ota-section-title {{ font-size: 1.15rem; }}
 section[data-testid="stSidebar"] .ota-eyebrow {{ margin-top: 0; }}

@@ -74,12 +74,19 @@ def render(settings, strategies, provider) -> None:
     with st.sidebar:
         theme.section("Your trades", "Controls")
 
-    # The two books are kept completely apart, and the switch decides which one
-    # this whole tab is about - every page, every number. Scoping only one page
-    # would leave the biggest numbers on the tab mixing practice money with
-    # real, which is the one thing this must never do.
-    with st.sidebar:
-        mode = _account_switch(settings, every_pos)
+    # THE ACCOUNT SWITCH STAYS ON THE PAGE, NOT IN THE SIDEBAR.
+    #
+    # It went in the sidebar with the other controls and had to come straight
+    # back out. Streamlit collapses the sidebar on a narrower window and then
+    # draws the button that reopens it at 0x0, so it cannot be recovered - and
+    # a hidden account switch does not fail loudly, it silently pins the whole
+    # tab to the real book. Rita saw her 35 practice trades vanish with no
+    # control anywhere to bring them back.
+    #
+    # Everything else in the sidebar fails visibly if it disappears: she would
+    # notice she cannot log a trade. This one lies about her money instead, so
+    # it lives where nothing can collapse it.
+    mode = _account_switch(settings, every_pos)
     all_pos = mr_split(every_pos, settings)[mode]
 
     # Recording a trade she just placed is the thing she does most. From the

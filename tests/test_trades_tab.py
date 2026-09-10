@@ -640,13 +640,14 @@ def test_the_controls_live_in_the_sidebar_not_on_the_page(app_with_rows):
     the AST for call order, which is not source order and broke the moment the
     function was restructured. What matters is where the widgets END UP.
     """
-    # Both books, because the switch only draws itself when there are two to
-    # switch between - with one book there is nothing to ask her.
     at = app_with_rows(_both_books()).run()
-    keys = {w.key for w in at.sidebar.button} | {w.key for w in at.sidebar.radio}
+    keys = {w.key for w in at.sidebar.button}
     assert "ql_open" in keys, "Quick Log must open from the sidebar"
     assert "trades_refresh" in keys, "Refresh belongs in the sidebar"
-    assert "trades_account" in keys, "the account switch belongs in the sidebar"
+    # The account switch is deliberately NOT here - see
+    # test_the_account_switch_can_never_be_collapsed_out_of_reach. These two
+    # can live in a collapsible panel because losing them fails loudly; that
+    # one cannot, because losing it quietly changes which money she is reading.
 
 
 def test_quick_log_costs_the_page_no_height_until_it_is_opened(app_with_rows):
@@ -753,3 +754,50 @@ def test_no_money_column_ever_has_a_hole_in_it(app_with_rows):
         for col in [c for c in frame.columns if c in money]:
             assert not frame[col].isna().any(), (
                 f"{col} has an empty cell - Streamlit will paint it as None")
+
+
+def test_the_account_switch_can_never_be_collapsed_out_of_reach(app_with_rows):
+    """Rita: "there is no sidebar and I see only real trade, paper money
+    disappeared."
+
+    The switch had been moved into the sidebar with the other controls.
+    Streamlit collapses the sidebar on a narrower window and then renders the
+    button that reopens it at 0x0 - present in the DOM, impossible to click -
+    so the sidebar became a dead end and the switch went with it. The tab then
+    silently pinned itself to the real book, hiding 35 practice trades with no
+    control anywhere to bring them back.
+
+    A hidden Quick Log fails loudly: she notices she cannot log a trade. A
+    hidden account switch lies about her money instead, which is why this one
+    lives on the page where nothing can collapse it.
+    """
+    at = app_with_rows(_both_books()).run()
+    sidebar_keys = {w.key for w in at.sidebar.radio}
+    assert "trades_account" not in sidebar_keys, (
+        "the account switch is back in the collapsible sidebar")
+    assert any(r.key == "trades_account" for r in at.radio), (
+        "the account switch must be on the page")
+
+
+def test_both_books_are_reachable_from_the_page(app_with_rows):
+    """The switch is only worth anything if it actually offers both."""
+    at = app_with_rows(_both_books()).run()
+    switch = next(r for r in at.radio if r.key == "trades_account")
+    assert len(switch.options) == 2
+    assert any("Practice" in o for o in switch.options)
+    assert any("Real" in o for o in switch.options)
+
+
+def test_the_sidebar_starts_open():
+    """Left at Streamlit's "auto" default the sidebar collapses on a narrower
+    window, and the reopen button it leaves behind has no size."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
+    call = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "set_page_config")
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "initial_sidebar_state" in kw, "the sidebar must not be left on auto"
+    assert kw["initial_sidebar_state"].value == "expanded"
