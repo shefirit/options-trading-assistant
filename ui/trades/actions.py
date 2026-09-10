@@ -1152,11 +1152,19 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
                 help="The price on your TOS fill, per share - the app does the "
                      "x100. Prefilled with what it costs to close right now.")
             close_cash = -float(exit_cost)
+        # index=None so NOTHING is preselected. This list used to open on
+        # "Profit target (50%) hit", which Streamlit then submits unless she
+        # changes it - so a close recorded in a hurry was filed as a
+        # rule-following win whatever actually happened. It mislabelled a real
+        # -$340 META loss as a profit target and counted it toward "By the
+        # rules", which is the one score on the tab she controls directly.
         reason = st.selectbox(
             "Why you closed it",
             ["Profit target (50%) hit", "21 DTE time exit",
              "21 DTE credit roll (opened a new spread)", "Stop loss hit",
-             "Rolled to a new position", "Expired worthless", "Other"],
+             "Rolled to a new position", "Expired worthless",
+             "Closed early", "Other"],
+            index=None, placeholder="Pick the reason - this scores your rules",
             key=f"exit_reason_{kp}_{p.trade_id}")
         note = st.text_input("Lesson learned (optional - future you says thanks)",
                              key=f"exit_note_{kp}_{p.trade_id}")
@@ -1182,7 +1190,19 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             st.markdown(components._esc(
                 f"Result: **${realized:,.0f}** "
                 f"({'profit' if realized >= 0 else 'loss'})"))
+        # A reason that contradicts the result is worse than no reason: it
+        # scores as discipline she did not have. Caught rather than trusted.
+        contradiction = (reason == "Profit target (50%) hit" and total < 0)
+        if contradiction:
+            st.warning(
+                f"That is a **${total:,.0f} loss**, so it cannot be a profit "
+                "target. Pick what actually happened - **Stop loss hit** if "
+                "you were at 2x, **Closed early** if you took it off before "
+                "then. Only the four SOP exits count toward **By the rules**, "
+                "and a wrong label there flatters a score you rely on.")
+
         if st.button("Record the close", type="primary",
+                     disabled=reason is None or contradiction,
                      key=f"close_{kp}_{p.trade_id}"):
             from src.logging_tools.trade_logger import close_trade
             dest, live_log = close_trade(p.trade_id, p.underlying, p.strategy_name,

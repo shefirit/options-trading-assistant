@@ -801,3 +801,63 @@ def test_the_sidebar_starts_open():
     kw = {k.arg: k.value for k in call.keywords}
     assert "initial_sidebar_state" in kw, "the sidebar must not be left on auto"
     assert kw["initial_sidebar_state"].value == "expanded"
+
+
+# ------------------------------------------- the mislabelled-close defect
+def test_the_close_reason_never_preselects_an_answer():
+    """A real -$340 META loss went into the log as "Profit target (50%) hit"
+    and counted toward By the rules.
+
+    Nothing was typed wrong. The dropdown listed the profit target first, so
+    Streamlit preselected it, and a close recorded in a hurry took whatever was
+    already showing. That flatters the one score on the tab she controls
+    directly, and files losses under "Took the win at 50%" in the month's exit
+    breakdown.
+    """
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "actions.py").read_text(encoding="utf-8")
+    call = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "selectbox"
+                and n.args and getattr(n.args[0], "value", "") == "Why you closed it")
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "index" in kw, "the reason must not default to whatever is listed first"
+    assert kw["index"].value is None
+    assert "placeholder" in kw
+
+
+def test_a_losing_close_cannot_be_filed_as_a_profit_target():
+    """The contradiction is caught at the point of entry, not left for her to
+    find months later in a report that says she took a win."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "actions.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    assert "contradiction" in src, "no guard against a mislabelled loss"
+    # The record button must be disabled while the reason is missing or wrong.
+    btn = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.Call)
+               and getattr(n.func, "attr", "") == "button"
+               and n.args and getattr(n.args[0], "value", "") == "Record the close")
+    kw = {k.arg for k in btn.keywords}
+    assert "disabled" in kw, "a close with no reason must not be recordable"
+
+
+def test_an_early_discretionary_close_is_not_scored_as_by_the_rules():
+    """Closing because it is going against you is sound risk management and is
+    NOT one of her four SOP exits. The tracker's job is to say so plainly - the
+    number is only worth anything if it is honest."""
+    from src.engine import month_report as mr
+
+    label, _tone, by_rules = mr._exit_bucket("Closed early - going against me")
+    assert by_rules is False
+    assert label == "Closed for another reason"
+    # and the four that DO count still do
+    for reason in ("Profit target (50%) hit", "21 DTE time exit",
+                   "Stop loss hit", "Expired worthless"):
+        assert mr._exit_bucket(reason)[2] is True, reason
