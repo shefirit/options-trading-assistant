@@ -123,10 +123,39 @@ header[data-testid="stHeader"] {{ background: transparent; }}
    and card grids take the full width; paragraphs never do. */
 .ota-prose {{ max-width: 84ch; }}
 
-/* ---------------- sidebar ---------------- */
+/* ---------------- sidebar: controls only, never content ----------------
+   Back after being absent from the whole app, which was built without one on
+   the assumption she used it on a phone. She uses it on desktop.
+
+   It holds the three things that are chrome rather than content - which book,
+   Refresh, and the button that opens Quick Log - so the four My-trades pages
+   keep their full height for numbers. Anything she READS stays on the page. */
 section[data-testid="stSidebar"] {{
     background: {CARD};
     border-right: 1px solid {BORDER};
+}}
+section[data-testid="stSidebar"] .block-container,
+section[data-testid="stSidebar"] > div {{ padding-top: 1.1rem; }}
+/* The section heading is a label in here, not a page title. */
+section[data-testid="stSidebar"] .ota-section-title {{ font-size: 1.15rem; }}
+section[data-testid="stSidebar"] .ota-eyebrow {{ margin-top: 0; }}
+
+/* The account switch is sized for the middle of a page, where it had to be
+   unmissable. In a 300px column those 1.45rem labels wrap to three lines each
+   and the panel becomes the tallest thing in the sidebar. It is still the
+   biggest control in here - just not by that much. */
+section[data-testid="stSidebar"] .st-key-trades_account {{
+    padding: 10px 12px 6px; margin: 2px 0 12px;
+}}
+section[data-testid="stSidebar"] .st-key-trades_account [role="radiogroup"] label p {{
+    font-size: 1.02rem !important; line-height: 1.35;
+}}
+section[data-testid="stSidebar"] .st-key-trades_account [role="radiogroup"] {{ gap: 6px; }}
+section[data-testid="stSidebar"] .st-key-trades_account
+    label[data-testid="stWidgetLabel"] p {{ font-size: 0.95rem !important; }}
+section[data-testid="stSidebar"]
+    .st-key-trades_account [role="radiogroup"] label > div:first-child {{
+    transform: scale(1.15);
 }}
 
 /* ---------------- cards (bordered containers) ---------------- */
@@ -664,7 +693,8 @@ def hero(title: str, subtitle: str, badges: list[tuple[str, str]]) -> None:
     """The app's top header: name, one-line promise, and status badges.
 
     badges: [(text, tone), ...] - e.g. the data mode and where trades log to,
-    so both are visible on the phone where the sidebar can't be opened."""
+    so both are visible above the tabs rather than tucked into the sidebar,
+    which holds controls she operates rather than status she reads."""
     chips = "".join(chip(text, tone) for text, tone in badges)
     st.markdown(
         f"""

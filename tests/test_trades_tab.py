@@ -397,13 +397,20 @@ def test_two_forms_never_share_a_money_box_label_without_distinct_keys():
 #
 # One test that presses the button would have caught it.
 # ===========================================================================
+def _open_quick_log(at):
+    """Quick Log is a modal now, opened from the sidebar, so its widgets do not
+    exist on the page until the button is pressed."""
+    return next(b for b in at.button if b.key == "ql_open").click().run()
+
+
 def _check_it(at):
-    """Fill the minimum Quick Log needs and press Check it.
+    """Open Quick Log, fill the minimum it needs, and press Check it.
 
     EVERY strike box, not just the first: the default strategy is a put credit
     spread, and with a leg missing the form shows a warning instead of staging
     a draft - so a one-strike version of this silently tested nothing.
     """
+    at = _open_quick_log(at)
     for n in at.number_input:
         if (n.key or "").startswith("ql_strike_"):
             n.set_value(6250.0 if "long" in n.key else 6300.0)
@@ -624,22 +631,31 @@ def test_the_tab_is_four_pages_not_one_long_scroll(app_with_rows):
         assert expected in labels, f"{expected} is missing from My trades"
 
 
-def test_the_account_switch_stays_above_the_pages():
-    """It governs every number on all four pages, so it can never be something
-    she has to go to one of them to find. Same for Quick Log."""
-    import ast
-    from pathlib import Path
+def test_the_controls_live_in_the_sidebar_not_on_the_page(app_with_rows):
+    """The account switch governs every number on all four pages and Refresh
+    re-reads the log - they are chrome, not content, and they used to cost
+    every page its top three inches.
 
-    src = (Path(__file__).parent.parent / "ui" / "trades"
-           / "__init__.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    render = next(n for n in tree.body
-                  if isinstance(n, ast.FunctionDef) and n.name == "render")
-    calls = [n.func.id if isinstance(n.func, ast.Name) else n.func.attr
-             for n in ast.walk(render) if isinstance(n, ast.Call)
-             and isinstance(n.func, (ast.Name, ast.Attribute))]
-    assert calls.index("_account_switch") < calls.index("tabs")
-    assert calls.index("_quick_log_form") < calls.index("tabs")
+    Asserted on the rendered page rather than on the source: this used to walk
+    the AST for call order, which is not source order and broke the moment the
+    function was restructured. What matters is where the widgets END UP.
+    """
+    # Both books, because the switch only draws itself when there are two to
+    # switch between - with one book there is nothing to ask her.
+    at = app_with_rows(_both_books()).run()
+    keys = {w.key for w in at.sidebar.button} | {w.key for w in at.sidebar.radio}
+    assert "ql_open" in keys, "Quick Log must open from the sidebar"
+    assert "trades_refresh" in keys, "Refresh belongs in the sidebar"
+    assert "trades_account" in keys, "the account switch belongs in the sidebar"
+
+
+def test_quick_log_costs_the_page_no_height_until_it_is_opened(app_with_rows):
+    """It is a modal now. Before the button is pressed none of its fields are
+    on the page at all - which is the whole point of moving it off one."""
+    at = app_with_rows(_closed_row()).run()
+    assert not [n for n in at.number_input if (n.key or "").startswith("ql_")]
+    opened = _open_quick_log(at)
+    assert [n for n in opened.number_input if (n.key or "").startswith("ql_")]
 
 
 def test_the_profit_page_offers_every_zoom(app_with_rows):

@@ -52,11 +52,6 @@ def render(settings, strategies, provider) -> None:
     theme.section("Every logged trade, tracked against your own exit rules",
                   "My trades")
 
-    top = st.columns([1, 6])
-    if top[0].button("↻ Refresh", key="trades_refresh"):
-        st.session_state.pop("trades_rows", None)
-        st.session_state.pop("_priced_positions", None)
-
     flash = st.session_state.pop("ql_flash", None)
     if flash:
         st.success(flash)
@@ -64,17 +59,35 @@ def render(settings, strategies, provider) -> None:
     header, rows, source = _load_trade_log()
     every_pos = pos_mod.parse_rows(header, rows)
 
-    # The two books are kept completely apart, and the switch below decides
-    # which one this whole tab is about - every page, every number. Scoping
-    # only one page would leave the biggest numbers on the tab mixing practice
-    # money with real, which is the one thing this must never do.
-    mode = _account_switch(settings, every_pos)
+    # ---- the sidebar: the controls, off the page
+    #
+    # These three used to sit above the tabs, where they cost every page its
+    # top three inches. They are chrome, not content: the switch decides which
+    # book the whole tab is about, Refresh re-reads the log, and Quick Log is a
+    # thing she DOES rather than reads. The sidebar is theirs now.
+    #
+    # It is a real sidebar again for the first time - the app was built without
+    # one because it was assumed she used it on a phone, where the sidebar
+    # cannot be opened. She uses it on desktop.
+    with st.sidebar:
+        theme.section("Your trades", "Controls")
+
+    # The two books are kept completely apart, and the switch decides which one
+    # this whole tab is about - every page, every number. Scoping only one page
+    # would leave the biggest numbers on the tab mixing practice money with
+    # real, which is the one thing this must never do.
+    with st.sidebar:
+        mode = _account_switch(settings, every_pos)
     all_pos = mr_split(every_pos, settings)[mode]
 
-    # Above the tabs on purpose: recording a trade she just placed is the thing
-    # she does most, and it should not depend on which page she happens to be
-    # standing on.
+    # Recording a trade she just placed is the thing she does most. From the
+    # sidebar it is one click from ANY tab, not just from this one.
     _quick_log_form(settings, strategies, provider)
+
+    with st.sidebar:
+        if st.button("↻ Refresh", key="trades_refresh", width="stretch"):
+            st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
 
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)

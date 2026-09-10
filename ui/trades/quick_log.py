@@ -1,8 +1,13 @@
 """Quick Log - recording a trade she already placed in thinkorswim.
 
 The form collects the fill, then stages a draft in session state and renders a
-preview OUTSIDE the expander so she reads back what she typed before it is
-written to the log. Saving is the second click, never the first.
+preview under it, so she reads back what she typed before it is written to the
+log. Saving is the second click, never the first.
+
+It opens from a button in the sidebar as a modal dialog. It used to be an
+expander at the top of the My trades tab, which is where it had to live when
+the app had no sidebar - from the sidebar it is one click from any tab, and it
+costs the page no height at all.
 """
 
 from __future__ import annotations
@@ -20,7 +25,53 @@ from ui.trades.account import _account_choice
 from ui.trades.widgets import _fill_price_input, _signed, money
 
 
+def _close_quick_log() -> None:
+    """Dismissing the modal shuts it, and leaves any draft alone.
+
+    Only the open flag is cleared. A draft she has already checked survives, so
+    a mis-click on the X does not throw away a fill she has just typed in - she
+    reopens and it is still there.
+    """
+    st.session_state.pop("ql_dialog_open", None)
+
+
+@st.dialog("Quick Log - a trade you already placed in thinkorswim",
+           width="large", on_dismiss=_close_quick_log)
+def _quick_log_dialog(settings, strategies, provider) -> None:
+    """The form as a modal, opened from the sidebar.
+
+    A dialog rather than a sidebar panel because this layout goes four columns
+    wide in places, and four columns in a 300px sidebar is not a form. A dialog
+    costs the page no height at all and still gets the whole window.
+    """
+    _quick_log_body(settings, strategies, provider)
+
+
 def _quick_log_form(settings, strategies, provider) -> None:
+    """The sidebar launcher.
+
+    Keeps its old name because it is the entry point the tab calls and what the
+    "Quick Log is not buried" contract test looks for. What it does changed: it
+    opens the dialog instead of drawing the form inline.
+
+    In the sidebar rather than on the page, so recording a trade she has just
+    placed is one click from ANY tab - not only from My trades, and not only
+    after scrolling to the top of it.
+    """
+    with st.sidebar:
+        if st.button("➕ Log a trade", key="ql_open", type="primary",
+                     width="stretch"):
+            st.session_state["ql_dialog_open"] = True
+
+    # The flag STAYS set until something closes it. Popping it here read as
+    # "open once", and anything inside the modal that reruns the whole script -
+    # pressing Check it, for one - found the flag already gone and the dialog
+    # simply vanished mid-form, taking the submission with it.
+    if st.session_state.get("ql_dialog_open"):
+        _quick_log_dialog(settings, strategies, provider)
+
+
+def _quick_log_body(settings, strategies, provider) -> None:
     """Record a trade she ALREADY placed in thinkorswim, in under a minute:
     strategy, strikes, expiration, contracts, and the credit on her fill.
     The chain fills in deltas when it can; the SOP check informs, never blocks."""
@@ -28,232 +79,224 @@ def _quick_log_form(settings, strategies, provider) -> None:
 
     from src.engine import quick_log
 
-    # Keyed, so it holds its own state through a rerun. It used to be forced
-    # open whenever a draft was waiting, because the rerun after "Check it"
-    # would otherwise collapse the expander and hide the preview she was meant
-    # to read. `expanded` still wins on that one case - a draft she cannot see
-    # is worse than an expander that opens itself.
-    with st.expander("➕ Quick Log - a trade you already placed in thinkorswim",
-                     key="ql_wrap",
-                     expanded=bool(st.session_state.get("ql_draft"))):
-        theme.note("Place the trade in TOS first, then write it down here. Type only "
-                   "what is on your fill - the app fills in the market details and "
-                   "starts watching your exit rules for it.")
+    theme.note("Place the trade in TOS first, then write it down here. Type only "
+               "what is on your fill - the app fills in the market details and "
+               "starts watching your exit rules for it.")
 
-        keys = list(strategies.keys())
-        # Opens on the strategy she actually trades most, from
-        # config/settings.yaml `defaults.strategy`, without reordering the list.
-        top = st.columns([3, 2])
-        strategy_key = top[0].selectbox(
-            "Strategy", keys, key="ql_strategy",
-            index=keys.index(default_strategy_key(settings, keys)),
-            format_func=lambda k: strategies[k]["name"])
-        strat = strategies[strategy_key]
-        if st.session_state.get("_prev_ql_strategy") != strategy_key:
-            st.session_state["_prev_ql_strategy"] = strategy_key
-            st.session_state.pop("ql_draft", None)   # a draft for another strategy
+    keys = list(strategies.keys())
+    # Opens on the strategy she actually trades most, from
+    # config/settings.yaml `defaults.strategy`, without reordering the list.
+    top = st.columns([3, 2])
+    strategy_key = top[0].selectbox(
+        "Strategy", keys, key="ql_strategy",
+        index=keys.index(default_strategy_key(settings, keys)),
+        format_func=lambda k: strategies[k]["name"])
+    strat = strategies[strategy_key]
+    if st.session_state.get("_prev_ql_strategy") != strategy_key:
+        st.session_state["_prev_ql_strategy"] = strategy_key
+        st.session_state.pop("ql_draft", None)   # a draft for another strategy
 
-        allowed = allowed_underlyings_for(strategy_key)
-        default_i = allowed.index("SPX") if "SPX" in allowed else 0
-        # accept_new_options because this records a trade you ALREADY placed in
-        # thinkorswim. The list only covers the S&P 500 and Nasdaq-100, so
-        # without it a real fill on any other name simply could not be logged.
-        underlying = top[1].selectbox("Underlying", allowed, index=default_i,
-                                      key=f"ql_u_{strategy_key}",
-                                      accept_new_options=True,
-                                      help="Type to search, or type any other ticker to add it.")
-        if underlying:
-            underlying = underlying.strip().upper()
+    allowed = allowed_underlyings_for(strategy_key)
+    default_i = allowed.index("SPX") if "SPX" in allowed else 0
+    # accept_new_options because this records a trade you ALREADY placed in
+    # thinkorswim. The list only covers the S&P 500 and Nasdaq-100, so
+    # without it a real fill on any other name simply could not be logged.
+    underlying = top[1].selectbox("Underlying", allowed, index=default_i,
+                                  key=f"ql_u_{strategy_key}",
+                                  accept_new_options=True,
+                                  help="Type to search, or type any other ticker to add it.")
+    if underlying:
+        underlying = underlying.strip().upper()
 
-        basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
-        has_far_leg = basis in ("debit", "shares_plus_protection", "ratio_risk")
-        # The LEAPS long call is the one strategy here she BUYS outright, so it
-        # gets its own shape of form: a price PAID rather than a credit
-        # collected, and room for the put(s) sold to part-pay for it. Without
-        # this the only box on offer was "credit price on your fill", and a
-        # trade that cost her money could only be logged as one that paid her.
-        is_bought = basis == "long_premium"
-        # How far out this strategy's expiration normally sits, so the date box
-        # opens near the right place. A LEAPS put is a year or more out like the
-        # bought call is, and defaulting it to 45 days just means retyping.
-        far_dated = int(strat.get("entry", {}).get("dte_min", 0)) >= 300
-        default_dte = (int(strat["entry"].get("dte_target", 400)) if far_dated
-                       else 400 if is_bought else 45)
-        today = dt.date.today()
+    basis = str(strat.get("sizing", {}).get("max_loss_basis", "vertical_width"))
+    has_far_leg = basis in ("debit", "shares_plus_protection", "ratio_risk")
+    # The LEAPS long call is the one strategy here she BUYS outright, so it
+    # gets its own shape of form: a price PAID rather than a credit
+    # collected, and room for the put(s) sold to part-pay for it. Without
+    # this the only box on offer was "credit price on your fill", and a
+    # trade that cost her money could only be logged as one that paid her.
+    is_bought = basis == "long_premium"
+    # How far out this strategy's expiration normally sits, so the date box
+    # opens near the right place. A LEAPS put is a year or more out like the
+    # bought call is, and defaulting it to 45 days just means retyping.
+    far_dated = int(strat.get("entry", {}).get("dte_min", 0)) >= 300
+    default_dte = (int(strat["entry"].get("dte_target", 400)) if far_dated
+                   else 400 if is_bought else 45)
+    today = dt.date.today()
 
-        with st.form("ql_form"):
-            # Contracts sits up here rather than down beside the credit because
-            # every money box below is now a PRICE, and a price only becomes
-            # dollars once the app knows how many contracts it applies to.
-            d1, d2, d3 = st.columns([2, 2, 1])
-            expiration = d1.date_input(
-                "Expiration date (from your TOS fill)"
-                if not has_far_leg else "Short call expiration (the near one)",
-                # A LEAPS is a year or more out by definition, so opening its
-                # form on a 45-day default just means retyping the date.
-                value=today + dt.timedelta(days=default_dte),
-                min_value=today,
-                key=f"ql_exp_{strategy_key}", format=components.DATE_FMT)
-            opened_on = d2.date_input(
-                "Opened on", value=today, max_value=today,
-                help="Change this only if you placed the trade on an earlier day.",
-                key=f"ql_opened_{strategy_key}", format=components.DATE_FMT)
-            contracts = d3.number_input("Contracts", min_value=1, max_value=50,
-                                        value=1, step=1,
-                                        key=f"ql_contracts_{strategy_key}")
+    with st.form("ql_form"):
+        # Contracts sits up here rather than down beside the credit because
+        # every money box below is now a PRICE, and a price only becomes
+        # dollars once the app knows how many contracts it applies to.
+        d1, d2, d3 = st.columns([2, 2, 1])
+        expiration = d1.date_input(
+            "Expiration date (from your TOS fill)"
+            if not has_far_leg else "Short call expiration (the near one)",
+            # A LEAPS is a year or more out by definition, so opening its
+            # form on a 45-day default just means retyping the date.
+            value=today + dt.timedelta(days=default_dte),
+            min_value=today,
+            key=f"ql_exp_{strategy_key}", format=components.DATE_FMT)
+        opened_on = d2.date_input(
+            "Opened on", value=today, max_value=today,
+            help="Change this only if you placed the trade on an earlier day.",
+            key=f"ql_opened_{strategy_key}", format=components.DATE_FMT)
+        contracts = d3.number_input("Contracts", min_value=1, max_value=50,
+                                    value=1, step=1,
+                                    key=f"ql_contracts_{strategy_key}")
 
-            far_exp = None
-            leaps_cost = None
-            share_price = None
-            protection_cost = None
-            if basis == "debit":
-                f1, f2 = st.columns(2)
-                far_exp = f1.date_input(
-                    "LEAPS expiration (the far-dated call you BOUGHT)",
-                    value=today + dt.timedelta(days=365), min_value=today,
-                    key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
-                with f2:
-                    leaps_cost = _fill_price_input(
-                        "Price you paid for the LEAPS",
-                        f"ql_leaps_{strategy_key}", contracts, live_echo=False,
-                        # A LEAPS deep in the money genuinely trades above 100 a
-                        # share, so the typed-a-total guard would cry wolf here.
-                        total_hint_above=None,
-                        help="The fill price per share - a 40.00 fill on 1 "
-                             "contract is $4,000. This is your real money at "
-                             "risk, so the app needs it to tell you what the "
-                             "trade actually made.")
-            elif has_far_leg:
-                f1, f2 = st.columns(2)
-                far_exp = f1.date_input(
-                    "Protective put expiration (the far-dated one)",
-                    value=today + dt.timedelta(days=365), min_value=today,
-                    key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
-                share_price = f2.number_input(
-                    "Share price when you bought the 100 shares ($)",
-                    min_value=0.0, step=1.0, key=f"ql_shares_{strategy_key}")
-                protection_cost = _fill_price_input(
-                    "Price the put side cost you (net)",
-                    f"ql_prot_{strategy_key}", contracts, live_echo=False,
-                    allow_negative=True, total_hint_above=None,
-                    help="Model 1: what the long put cost. Model 2: the net "
-                         "debit of the put spread. Model 3: often near zero - "
-                         "and if the ratio paid you a credit, type a minus in "
-                         "front. Leave at 0 only if it really was free.")
+        far_exp = None
+        leaps_cost = None
+        share_price = None
+        protection_cost = None
+        if basis == "debit":
+            f1, f2 = st.columns(2)
+            far_exp = f1.date_input(
+                "LEAPS expiration (the far-dated call you BOUGHT)",
+                value=today + dt.timedelta(days=365), min_value=today,
+                key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
+            with f2:
+                leaps_cost = _fill_price_input(
+                    "Price you paid for the LEAPS",
+                    f"ql_leaps_{strategy_key}", contracts, live_echo=False,
+                    # A LEAPS deep in the money genuinely trades above 100 a
+                    # share, so the typed-a-total guard would cry wolf here.
+                    total_hint_above=None,
+                    help="The fill price per share - a 40.00 fill on 1 "
+                         "contract is $4,000. This is your real money at "
+                         "risk, so the app needs it to tell you what the "
+                         "trade actually made.")
+        elif has_far_leg:
+            f1, f2 = st.columns(2)
+            far_exp = f1.date_input(
+                "Protective put expiration (the far-dated one)",
+                value=today + dt.timedelta(days=365), min_value=today,
+                key=f"ql_farexp_{strategy_key}", format=components.DATE_FMT)
+            share_price = f2.number_input(
+                "Share price when you bought the 100 shares ($)",
+                min_value=0.0, step=1.0, key=f"ql_shares_{strategy_key}")
+            protection_cost = _fill_price_input(
+                "Price the put side cost you (net)",
+                f"ql_prot_{strategy_key}", contracts, live_echo=False,
+                allow_negative=True, total_hint_above=None,
+                help="Model 1: what the long put cost. Model 2: the net "
+                     "debit of the put spread. Model 3: often near zero - "
+                     "and if the ratio paid you a credit, type a minus in "
+                     "front. Leave at 0 only if it really was free.")
 
-            strikes: dict[str, float] = {}
-            credit_total = 0.0
-            call_cost = 0.0
-            put_credit = 0.0
-            n_puts = 0
+        strikes: dict[str, float] = {}
+        credit_total = 0.0
+        call_cost = 0.0
+        put_credit = 0.0
+        n_puts = 0
 
-            if is_bought:
-                theme.note("You BOUGHT this one, so there is no credit to type - "
-                           "the boxes below ask what it cost you. If you also sold "
-                           "put(s) at the same expiration to help pay for the call, "
-                           "put them in too; leave the count at 0 if you did not.")
-                b1, b2 = st.columns(2)
-                strikes["long_call_leaps"] = b1.number_input(
-                    "Call strike (the call you BOUGHT)", min_value=0.0, step=1.0,
-                    key=f"ql_strike_{strategy_key}_long_call_leaps")
-                with b2:
-                    call_cost = _fill_price_input(
-                        "Price you PAID for the call", f"ql_callcost_{strategy_key}",
-                        contracts, live_echo=False,
-                        # A LEAPS deep in the money genuinely trades above 100 a
-                        # share, so the typed-a-total guard would cry wolf here.
-                        total_hint_above=None,
-                        help="The fill price per share - a 21.15 fill on 1 "
-                             "contract is $2,115. This is the money at risk, so "
-                             "every number the app shows you afterwards depends "
-                             "on it.")
-                # All three boxes are always drawn, never revealed by the count.
-                # A form holds its values until submit, so a box that appears
-                # only once the count is above zero would not appear until after
-                # she pressed "Check it" - by which point the app is already
-                # telling her something is missing.
-                p1, p2, p3 = st.columns([1, 1, 1])
-                n_puts = int(p1.number_input(
-                    "Puts you SOLD (0 if none)", min_value=0, max_value=20,
-                    value=0, step=1, key=f"ql_fp_n_{strategy_key}",
-                    help="Per contract of the whole trade. Your SOP allows one "
-                         "put per call bought, two at a push - it warns above "
-                         "one and fails above two, but a trade you have already "
-                         "placed still gets logged either way."))
-                put_strike = p2.number_input(
-                    "Put strike (the puts you SOLD)", min_value=0.0, step=1.0,
-                    key=f"ql_fp_k_{strategy_key}")
-                with p3:
-                    put_credit = _fill_price_input(
-                        "Price you GOT for each put", f"ql_fp_credit_{strategy_key}",
-                        contracts * max(n_puts, 1), live_echo=False,
-                        total_hint_above=None,
-                        help="Per share, for ONE put - the app multiplies by 100 "
-                             "and by how many you sold.")
-                if n_puts:
-                    strikes["financing_put"] = put_strike
-                else:
-                    put_credit = 0.0
+        if is_bought:
+            theme.note("You BOUGHT this one, so there is no credit to type - "
+                       "the boxes below ask what it cost you. If you also sold "
+                       "put(s) at the same expiration to help pay for the call, "
+                       "put them in too; leave the count at 0 if you did not.")
+            b1, b2 = st.columns(2)
+            strikes["long_call_leaps"] = b1.number_input(
+                "Call strike (the call you BOUGHT)", min_value=0.0, step=1.0,
+                key=f"ql_strike_{strategy_key}_long_call_leaps")
+            with b2:
+                call_cost = _fill_price_input(
+                    "Price you PAID for the call", f"ql_callcost_{strategy_key}",
+                    contracts, live_echo=False,
+                    # A LEAPS deep in the money genuinely trades above 100 a
+                    # share, so the typed-a-total guard would cry wolf here.
+                    total_hint_above=None,
+                    help="The fill price per share - a 21.15 fill on 1 "
+                         "contract is $2,115. This is the money at risk, so "
+                         "every number the app shows you afterwards depends "
+                         "on it.")
+            # All three boxes are always drawn, never revealed by the count.
+            # A form holds its values until submit, so a box that appears
+            # only once the count is above zero would not appear until after
+            # she pressed "Check it" - by which point the app is already
+            # telling her something is missing.
+            p1, p2, p3 = st.columns([1, 1, 1])
+            n_puts = int(p1.number_input(
+                "Puts you SOLD (0 if none)", min_value=0, max_value=20,
+                value=0, step=1, key=f"ql_fp_n_{strategy_key}",
+                help="Per contract of the whole trade. Your SOP allows one "
+                     "put per call bought, two at a push - it warns above "
+                     "one and fails above two, but a trade you have already "
+                     "placed still gets logged either way."))
+            put_strike = p2.number_input(
+                "Put strike (the puts you SOLD)", min_value=0.0, step=1.0,
+                key=f"ql_fp_k_{strategy_key}")
+            with p3:
+                put_credit = _fill_price_input(
+                    "Price you GOT for each put", f"ql_fp_credit_{strategy_key}",
+                    contracts * max(n_puts, 1), live_echo=False,
+                    total_hint_above=None,
+                    help="Per share, for ONE put - the app multiplies by 100 "
+                         "and by how many you sold.")
+            if n_puts:
+                strikes["financing_put"] = put_strike
             else:
-                leg_defs = strat.get("legs", [])
-                cols = st.columns(min(len(leg_defs), 4) or 1)
-                for i, leg_def in enumerate(leg_defs):
-                    role = str(leg_def["role"])
-                    verb = "SOLD" if leg_def["action"] == "sell" else "BOUGHT"
-                    label = (f"{role.replace('_', ' ').capitalize()} strike "
-                             f"(you {verb} this {leg_def['option_type']})")
-                    strikes[role] = cols[i % len(cols)].number_input(
-                        label, min_value=0.0, step=1.0,
-                        key=f"ql_strike_{strategy_key}_{role}")
+                put_credit = 0.0
+        else:
+            leg_defs = strat.get("legs", [])
+            cols = st.columns(min(len(leg_defs), 4) or 1)
+            for i, leg_def in enumerate(leg_defs):
+                role = str(leg_def["role"])
+                verb = "SOLD" if leg_def["action"] == "sell" else "BOUGHT"
+                label = (f"{role.replace('_', ' ').capitalize()} strike "
+                         f"(you {verb} this {leg_def['option_type']})")
+                strikes[role] = cols[i % len(cols)].number_input(
+                    label, min_value=0.0, step=1.0,
+                    key=f"ql_strike_{strategy_key}_{role}")
 
-                credit_label = ("Credit price on your fill"
-                                if basis not in ("debit", "shares_plus_protection",
-                                                 "ratio_risk")
-                                else "Credit price for the call you SOLD")
-                credit_total = _fill_price_input(
-                    credit_label, f"ql_credit_{strategy_key}", contracts,
-                    live_echo=False,
-                    help="The price on your TOS fill, per share. On a spread that "
-                         "is the one net price for the whole order.")
-            note = st.text_input("Note (optional)", key=f"ql_note_{strategy_key}")
+            credit_label = ("Credit price on your fill"
+                            if basis not in ("debit", "shares_plus_protection",
+                                             "ratio_risk")
+                            else "Credit price for the call you SOLD")
+            credit_total = _fill_price_input(
+                credit_label, f"ql_credit_{strategy_key}", contracts,
+                live_echo=False,
+                help="The price on your TOS fill, per share. On a spread that "
+                     "is the one net price for the whole order.")
+        note = st.text_input("Note (optional)", key=f"ql_note_{strategy_key}")
 
-            submitted = st.form_submit_button("Check it", type="primary")
+        submitted = st.form_submit_button("Check it", type="primary")
 
-    # Everything below renders OUTSIDE the expander, so the result of
-    # "Check it" (a warning or the preview card) is visible even after
-    # Streamlit collapses the expander on the rerun.
+    # Everything below renders after the form, so the result of "Check it" -
+    # a warning, or the preview card she reads back before saving - sits in the
+    # same dialog underneath the fields that produced it.
     if submitted:
         if any(v <= 0 for v in strikes.values()):
             st.warning("Almost - type every strike first, one of them is still 0. "
-                       "Open ➕ Quick Log above to fill it in.")
+                       "Fill it in above.")
             st.session_state.pop("ql_draft", None)
         elif is_bought and call_cost <= 0:
             st.warning("Almost - type what you PAID for the call (it is on your TOS "
                        "fill). That is the whole cost of this trade, and without it "
-                       "the app cannot tell you what it made. Open ➕ Quick Log "
+                       "the app cannot tell you what it made. Fill it in "
                        "above to fill it in.")
             st.session_state.pop("ql_draft", None)
         elif is_bought and n_puts and put_credit <= 0:
             st.warning(f"Almost - you said you sold {n_puts} put(s), so type what "
                        "they paid you. Set the count back to 0 if you did not sell "
-                       "any. Open ➕ Quick Log above to fill it in.")
+                       "any. Fill it in above.")
             st.session_state.pop("ql_draft", None)
         elif not is_bought and credit_total <= 0:
             st.warning("Almost - type the credit you collected (it is on your TOS "
-                       "fill). Open ➕ Quick Log above to fill it in.")
+                       "fill). Fill it in above.")
             st.session_state.pop("ql_draft", None)
         elif basis == "debit" and not leaps_cost:
             # Without it the position looks like a tiny credit trade and every
             # number downstream - result, return, buying power - comes out wrong.
             st.warning("Almost - type what you paid for the LEAPS. That is the "
                        "money actually at risk in a PMCC, and without it the app "
-                       "cannot tell you what the trade made. Open ➕ Quick Log "
-                       "above to fill it in.")
+                       "cannot tell you what the trade made. Fill it in "
+                       "above.")
             st.session_state.pop("ql_draft", None)
         elif has_far_leg and basis != "debit" and not share_price:
             st.warning("Almost - type the share price you paid. That is most of "
                        "the money in a covered call, and the app needs it to "
-                       "track the trade's result. Open ➕ Quick Log above to "
+                       "track the trade's result. Fill it in above to "
                        "fill it in.")
             st.session_state.pop("ql_draft", None)
         else:
@@ -419,8 +462,8 @@ def _quick_log_form(settings, strategies, provider) -> None:
                         f"x 100" + (f" x {units}" if units > 1 else "") + ")"
                         for name, amt, units in typed]
                 theme.note("What you typed comes to: " + " · ".join(bits)
-                           + ". Wrong by a factor of 100? Reopen Quick Log and "
-                             "type the price, not the dollar total.")
+                           + ". Wrong by a factor of 100? Type the price in "
+                             "the box above, not the dollar total.")
             broke = draft.get("broke") or []
             if draft["passed"] and not broke:
                 st.markdown(theme.chip("SOP check: passed", "green"),
@@ -457,6 +500,7 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 st.session_state.pop("trades_rows", None)
                 st.session_state.pop("_priced_positions", None)
                 st.session_state.pop("ql_draft", None)
+                st.session_state.pop("ql_dialog_open", None)
                 st.session_state["ql_flash"] = (
                     "Saved. It now shows in your open trades below"
                     + (" and in your Google Sheet." if live
@@ -465,4 +509,5 @@ def _quick_log_form(settings, strategies, provider) -> None:
                 st.rerun()
             if c2.button("Never mind - discard this draft", key="ql_discard"):
                 st.session_state.pop("ql_draft", None)
+                st.session_state.pop("ql_dialog_open", None)
                 st.rerun()

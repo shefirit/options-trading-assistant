@@ -3,8 +3,12 @@
 Run it with:  streamlit run app.py   (or double-click run_app.bat)
 
 Six tabs, in the order the work happens, all open at once - use them in any
-order, nothing is locked. There is no sidebar: everything lives in the tabs, so
-nothing can hide behind a toggle or show up twice.
+order, nothing is locked. Content lives in the tabs; the sidebar holds only
+CONTROLS - which book you are looking at, Refresh, and the Quick Log button -
+so nothing is ever duplicated between the two.
+
+The app had no sidebar at all until 2026-09-10, on the assumption that it was
+used on a phone where the sidebar cannot be opened. It is used on desktop.
 
   📊 Market   - is today a good day to sell premium? (holiday-aware)
   💡 Picks    - WHO to sell on, two ways round: scan your whole universe and
@@ -352,7 +356,8 @@ DEMO_WARNING = (
 
 def _log_badge() -> tuple[str, str]:
     """Where trades land when you press Log - always visible, because on the
-    phone the sidebar (where this used to live) can't be opened."""
+    tab bar, not the sidebar - the sidebar holds controls, and this is a
+    status badge rather than something she operates."""
     from src.logging_tools import webhook_logger
     if webhook_logger.is_configured():
         return "● Log → Google Sheet", "green"
@@ -2669,9 +2674,10 @@ def _plan_editor(settings) -> None:
 def _tab_settings(settings, provider) -> None:
     """The one home for connections, data status, and her plan numbers.
 
-    These used to render here AND in a sidebar, so on a computer she saw two of
+    These once rendered here AND in an older sidebar, so on a computer she saw two of
     every form at once - two "Connect your Google Sheet" boxes, each with its own
-    half-filled text box. The sidebar is gone; this tab is the only copy.
+    half-filled text box. This tab is still the only copy - the sidebar that
+    came back in 2026-09-10 holds trade controls only, never settings.
     """
     theme.section("Your connections and your plan - all in one place", "Settings")
     _data_mode_note(provider)
