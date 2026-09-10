@@ -1295,7 +1295,14 @@ def render(d: dict) -> str:
     name = info.get("longName") or info.get("shortName") or sym
     today = dt.date.today().isoformat()
 
-    return f'''<title>{_e(sym)} research note</title>
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_e(sym)} research note</title>
+</head>
+<body>
 <style>{CSS}</style>
 <button id="themeToggle" class="theme-toggle" type="button"
   aria-label="Switch between light and dark mode">
@@ -1385,4 +1392,6 @@ def render(d: dict) -> str:
     mq.addEventListener ? mq.addEventListener('change', onSys) : mq.addListener(onSys);
   }}
 }})();
-</script>'''
+</script>
+</body>
+</html>'''
