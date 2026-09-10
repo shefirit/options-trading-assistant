@@ -54,7 +54,13 @@ from ui import candidate as ui_candidate
 from ui import components, glossary, research, theme, trades, tv_chart
 from ui.trades import account as trades_account
 
-st.set_page_config(page_title="Options Trading Assistant", page_icon="📈", layout="wide")
+# initial_sidebar_state is NOT left at its "auto" default. Auto collapses the
+# sidebar on a narrower window, and Streamlit then renders the button that
+# reopens it at 0x0 - so the sidebar, and with it the account switch, Quick Log
+# and Refresh, become unreachable with no way back. Rita hit exactly that:
+# "there is no sidebar and I see only real trades, paper money disappeared".
+st.set_page_config(page_title="Options Trading Assistant", page_icon="📈",
+                   layout="wide", initial_sidebar_state="expanded")
 theme.inject()
 
 MARKET_READ_SYMBOL = "SPX"
