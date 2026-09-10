@@ -736,6 +736,46 @@ def _story_panel(open_pos: list, closed: list) -> None:
             components.render_story(p, pos_mod.story(p))
 
 
+def render_corrections_for(position, settings, strategies, provider) -> None:
+    """Every correction that applies to ONE trade, and none that do not.
+
+    The Journal already knows which trade she is looking at, so each form is
+    handed a one-item list instead of the whole book. The pickers inside them
+    still render - they are keyed on Trade ID and that is load-bearing (see
+    _pick) - but they now have exactly one thing to pick, which is the point.
+
+    Which forms appear depends on the trade: a close cannot be corrected on an
+    open trade and a roll cannot be corrected on one that was never rolled.
+    Showing all of them always is how the old section ended up nine expanders
+    long, most of them irrelevant to whatever she was actually looking at.
+    """
+    p = position
+    one = [p]
+
+    if p.status == "closed":
+        labels = [_closed_label(p)]
+        _fix_close_form(one, labels)
+        _reopen_form(one, labels)
+    elif p.status == "open":
+        labels = [_open_label(p)]
+    else:
+        return
+
+    _edit_details_form(one, labels, strategies)
+    if p.rolls:
+        _edit_roll_form(one, labels)
+
+    # Delete stays last and behind its own click. It is the one irreversible
+    # button in the app, and it used to sit on every trade card on the screen
+    # she looks at daily.
+    with st.expander("🗑️ Delete this trade (logged by mistake / just testing)",
+                     key=f"del_wrap_{p.trade_id}"):
+        theme.note("This is for a row that should never have been logged. If "
+                   "you actually placed the trade and it is finished, **close** "
+                   "it instead, so your results stay honest.")
+        _delete_control(p.trade_id, labels[0], key=f"journal_{p.trade_id}")
+
+
 def _records_section(settings, strategies, provider, closed, legacy, bp_used,
                      open_pos=()) -> None:
     """The bookkeeping, in one place instead of scattered up and down the tab.

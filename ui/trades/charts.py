@@ -43,6 +43,14 @@ BAND_SIZE, MEASURE_SIZE = 28, 12
 BACK_SIZE, FORE_SIZE = 48, 26
 BACK_OPACITY = 0.45
 
+# How much taller than the foreground the backdrop may be before it stops
+# helping. Her practice book ran nine times the size of her real one, and on a
+# shared axis that pinned every real bar to a sliver at the bottom of the
+# chart - the backdrop is there so a short real history has something to be
+# read against, and one that flattens the thing it is context FOR has stopped
+# doing that job. Applies to the bars and to the equity curve alike.
+BACKDROP_MAX_RATIO = 3.0
+
 
 def _tone_colour(tone: str) -> str:
     return {"good": theme.GREEN, "watch": theme.ACCENT_BRIGHT,
@@ -123,6 +131,20 @@ def goal_bullet(rows: list[dict[str, Any]]):
     return alt.layer(*bands, measure, target_tick, pace_tick, labels)
 
 
+def _series_backdrop_helps(fore, back) -> bool:
+    """Is the other book's curve still context rather than a wall?
+
+    Same threshold as the bars: past BACKDROP_MAX_RATIO the backdrop stops
+    being something the foreground can be read against and becomes the only
+    thing on the chart with any height.
+    """
+    peak_back = float(back["cumulative"].abs().max() or 0.0)
+    if peak_back <= 0:
+        return False
+    peak_fore = float(fore["cumulative"].abs().max() or 0.0) if not fore.empty else 0.0
+    return peak_fore <= 0 or peak_back <= peak_fore * BACKDROP_MAX_RATIO
+
+
 # --------------------------------------------------------------- equity curve
 def cumulative_vs_target(series: list[dict[str, Any]], foreground: str = "real"):
     """Money banked, running total, against the ramp a steady plan would draw.
@@ -147,9 +169,12 @@ def cumulative_vs_target(series: list[dict[str, Any]], foreground: str = "real")
                             labelColor=theme.SECONDARY))
 
     layers = []
-    if not back.empty:
-        # Behind everything, and never coloured: the other book is context, not
-        # a competing result.
+    # Behind everything, and never coloured: the other book is context, not a
+    # competing result. And only while it still READS as context - her practice
+    # book had banked $20,000 against the real book's $2,000, and on one shared
+    # axis that pressed the green line flat along the bottom. The same guard the
+    # bars use, for the same reason.
+    if not back.empty and _series_backdrop_helps(fore, back):
         layers.append(alt.Chart(back).mark_line(
             strokeWidth=2, color=theme.BORDER_STRONG, opacity=BACK_OPACITY,
             interpolate="monotone").encode(
@@ -177,56 +202,109 @@ def cumulative_vs_target(series: list[dict[str, Any]], foreground: str = "real")
     return alt.layer(*layers)
 
 
-# ---------------------------------------------------------------- month bars
-def month_bars(rows: list[dict[str, Any]], monthly_goal: float,
-               foreground: str = "real"):
-    """Money banked per month, the other book faded behind, the goal dashed.
+# ----------------------------------------------------------------- pnl bars
+# Bars get thinner as the grain gets finer: 45 daily bars and 12 monthly ones
+# cannot wear the same width without one of them becoming a barcode. Sized for
+# a wide desktop window - four monthly bars at 26px on a 1,600px chart is four
+# pins in a field, and the width is information about nothing.
+_BAR_SIZE = {"day": 9, "week": 22, "month": 46}
+_BACK_SIZE = {"day": 15, "week": 36, "month": 74}
+_GRAIN_WORD = {"day": "Day", "week": "Week", "month": "Month"}
 
-    rows come from goals.month_table(), which carries `real` and `practice` as
-    separate keys and has no key that adds them.
+def _backdrop_helps(df) -> bool:
+    """Is the other book worth drawing behind this one?"""
+    back = float(df["back"].abs().max() or 0.0)
+    if back <= 0:
+        return False
+    fore = float(df["fore"].abs().max() or 0.0)
+    return fore <= 0 or back <= fore * BACKDROP_MAX_RATIO
 
-    The backdrop is a WIDER, paler bar on the same band as the foreground, not
-    a bar beside it. Side by side would read as two results being compared;
-    behind reads as history, which is what it is.
+
+def pnl_bars(rows: list[dict[str, Any]], grain: str = "month",
+             foreground: str = "real"):
+    """Money banked per period, at whatever zoom she picked.
+
+    rows come from pnl.buckets(), which carries `banked` for the selected book
+    and `back` for the other one and has no key that adds them.
+
+    THE TARGET IS A TICK PER BAR, NOT ONE LINE ACROSS THE CHART
+    -----------------------------------------------------------
+    A single horizontal rule only tells the truth when every period is worth
+    the same. It is not: the month in progress has had fewer days than the
+    ones behind it, a week straddling two months of different lengths prorates
+    across both, and the month she funded the account in started mid-way. A
+    tick sitting on each bar carries that period's OWN target, which is the
+    only version of the line that is correct at every grain.
+
+    It also borrows the bullet chart's vocabulary - a black tick is already
+    what "the goal itself" looks like on this tab - so the two pictures teach
+    each other rather than each inventing a notation.
+
+    The backdrop book is a WIDER, paler bar on the same band as the
+    foreground, not a bar beside it. Side by side would read as two results
+    being compared; behind reads as history, which is what it is.
     """
     other = "practice" if foreground == "real" else "real"
     df = pd.DataFrame([{"label": r["label"], "short": r["short"],
-                        "month": r["month"], "fore": r[foreground],
-                        "back": r[other], "target": r["target"]} for r in rows])
-    df = df.sort_values("month")
+                        "key": r["key"], "fore": r["banked"],
+                        "back": r["back"], "target": r["target"],
+                        "premium": r["premium"], "closed": r["closed"]}
+                       for r in rows]).sort_values("key")
     order = list(df["label"])
+    word = _GRAIN_WORD.get(grain, "Period")
 
+    # The axis shows a short label, the tooltip the full one. "8/9" fits under
+    # a 9px bar; "Mon 8/9" does not, and 45 of them overlap into a smear. Only
+    # the day grain needs the trim, and Altair rejects an explicit None for
+    # labelExpr rather than ignoring it, so the key is added or it is not.
+    axis_kw: dict[str, Any] = {"labelAngle": 0, "labelFontSize": 12,
+                               "labelColor": theme.SECONDARY, "labelPadding": 6}
+    if grain == "day":
+        axis_kw["labelExpr"] = "split(datum.label, ' ')[1]"
     x = alt.X("label:N", sort=order, title=None,
-              scale=alt.Scale(paddingInner=0.4, paddingOuter=0.3),
-              axis=alt.Axis(labelAngle=0, labelFontSize=13, labelColor=theme.INK,
-                            labelPadding=6))
-    y_title = "Banked ($)"
+              scale=alt.Scale(paddingInner=0.35, paddingOuter=0.3),
+              axis=alt.Axis(**axis_kw))
+    # zero=True is load-bearing, not tidiness. A layered chart resolves one
+    # shared y scale, and the tick layer does not carry a bar's implicit zero -
+    # so the domain came out as [min(data), max(data)] and the bars rendered
+    # off the bottom of the chart entirely. A P&L bar measured from $1,500
+    # instead of $0 is a bar that lies about its own size.
+    y_scale = alt.Scale(zero=True)
+    y = alt.Y("fore:Q", title="Banked ($)", scale=y_scale,
+              axis=alt.Axis(format="$,.0f", tickCount=5, labelFontSize=12,
+                            labelColor=theme.SECONDARY))
 
     layers = []
-    if df["back"].abs().sum() > 0:
+    if _backdrop_helps(df):
         layers.append(alt.Chart(df).mark_bar(
-            size=BACK_SIZE, cornerRadiusEnd=4, color=theme.BORDER_STRONG,
-            opacity=BACK_OPACITY).encode(
-            x=x, y=alt.Y("back:Q", title=y_title,
+            size=_BACK_SIZE.get(grain, BACK_SIZE), cornerRadiusEnd=3,
+            color=theme.BORDER_STRONG, opacity=BACK_OPACITY).encode(
+            x=x, y=alt.Y("back:Q", title="Banked ($)", scale=y_scale,
                          axis=alt.Axis(format="$,.0f", tickCount=5)),
-            tooltip=[alt.Tooltip("label:N", title="Month"),
+            tooltip=[alt.Tooltip("label:N", title=word),
                      alt.Tooltip("back:Q", title=f"{other.title()} book",
                                  format="$,.0f")]))
 
-    layers.append(alt.Chart(df).mark_bar(size=FORE_SIZE, cornerRadiusEnd=4).encode(
-        x=x,
-        y=alt.Y("fore:Q", title=y_title,
-                axis=alt.Axis(format="$,.0f", tickCount=5)),
+    layers.append(alt.Chart(df).mark_bar(
+        size=_BAR_SIZE.get(grain, FORE_SIZE), cornerRadiusEnd=3).encode(
+        x=x, y=y,
         color=alt.condition("datum.fore >= 0",
                             alt.value(theme.GREEN), alt.value(theme.RED)),
-        tooltip=[alt.Tooltip("label:N", title="Month"),
+        tooltip=[alt.Tooltip("label:N", title=word),
                  alt.Tooltip("fore:Q", title="Banked", format="$,.0f"),
-                 alt.Tooltip("target:Q", title="Target that month",
+                 alt.Tooltip("premium:Q", title="Premium sold", format="$,.0f"),
+                 alt.Tooltip("closed:Q", title="Trades closed"),
+                 alt.Tooltip("target:Q", title=f"{word} target",
                              format="$,.0f")]))
 
-    if monthly_goal:
-        layers.append(alt.Chart(pd.DataFrame({"goal": [monthly_goal]})).mark_rule(
-            color=theme.AMBER, strokeDash=[6, 4], strokeWidth=2).encode(y="goal:Q"))
+    if df["target"].sum() > 0:
+        layers.append(alt.Chart(df[df["target"] > 0]).mark_tick(
+            thickness=2, size=_BACK_SIZE.get(grain, BACK_SIZE),
+            color=theme.INK).encode(
+            x=x, y=alt.Y("target:Q", title=None, scale=y_scale),
+            tooltip=[alt.Tooltip("label:N", title=word),
+                     alt.Tooltip("target:Q", title=f"{word} target",
+                                 format="$,.0f")]))
     return alt.layer(*layers)
 
 
