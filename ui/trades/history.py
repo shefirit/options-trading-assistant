@@ -42,18 +42,18 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real",
     With every trade in one month they were literally identical on screen, which
     is what made the tab look broken.
 
-    every_pos is the UNSPLIT log. The month bars draw the other book faded
-    behind this one, so they need both; every total on this page still comes
-    from all_pos, which is one book only.
+    The month-by-month bars used to live at the bottom of this section. They
+    are now one zoom of the Profit page's own chart, which draws the same
+    picture at four grains instead of only across months.
+
+    every_pos is the UNSPLIT log, kept in the signature because callers pass
+    it; every total on this page comes from all_pos, which is one book only.
     """
-    from src.engine import goals
-    from src.engine import month_report as mr
     from src.engine import positions as pos_mod
 
     every_pos = all_pos if every_pos is None else every_pos
     today = _dt.date.today()
     live_from = _live_from(settings)
-    monthly_goal = float(settings["targets"]["monthly"])
 
     theme.section("How each month actually went", "History")
 
@@ -71,11 +71,6 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real",
         _span_view(all_pos, settings, live_from, mode, today)
     else:
         _month_view(all_pos, summaries, settings, live_from, mode, pick)
-
-    # The month-by-month bars sit under both views: they are the one picture
-    # that only makes sense across months, so scoping them to one would be odd.
-    st.divider()
-    _month_bars(every_pos, settings, live_from, mode, today, monthly_goal)
 
 
 def _span_view(all_pos, settings, live_from, mode: str, today) -> None:
@@ -192,33 +187,3 @@ def _calendar(all_pos, month_key: str, live_from, mode: str, label: str) -> None
                    "income landing in the same week of the month usually means "
                    "your expirations are bunched - which is worth knowing "
                    "before a bad week lands on all of them at once.")
-
-
-def _month_bars(every_pos, settings, live_from, mode: str, today,
-                monthly_goal: float) -> None:
-    """Profit per month, with the other book faded behind and the goal dashed.
-
-    The one picture that only makes sense across months. It is also where the
-    practice history earns its place: a real book five days old has one bar,
-    and one bar is not a trend.
-    """
-    from src.engine import goals
-
-    rows = goals.month_table(every_pos, settings, live_from, today)
-    other = "practice" if mode == "real" else "real"
-    if not any(r["real"] or r["practice"] for r in rows):
-        return
-
-    theme.section("Month by month", "The shape of it")
-    income_report._render(charts.month_bars(rows, monthly_goal, mode),
-                          height=280, labels=[])
-    theme.note(f"The dashed line is your **\\${monthly_goal:,.0f}** monthly goal. "
-               "A month below it is not a failure - your rules do not let you "
-               "force trades to hit a number, and the months that follow the "
-               "rules are the ones that repeat.")
-    if any(r[other] for r in rows):
-        book = "practice" if other == "practice" else "real-money"
-        theme.legend_note(
-            f"The wider faded bars are your {book} book. They are never added "
-            "into any total on this page - they are here so a book with one "
-            "month in it still has something to be read against.")

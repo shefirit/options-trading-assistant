@@ -1,16 +1,17 @@
-"""The top of the My trades tab: where she stands, in one screen.
+"""Where she stands: the band, the health check, the plan and the process.
 
-Three rows, in the order a trading dashboard is read:
+These four pieces used to stack onto one page. They are now split across two of
+the tab's sub-tabs, because they answer two different questions:
 
-  1. HEALTH CHECK  - six cards. If those six cannot tell the story on their own,
-     no chart underneath is going to fix it.
-  2. GOALS AGAINST REALITY - the bullet chart, the year-one track, and the
-     cumulative curve against the ramp a steady plan would draw.
-  3. PROCESS QUALITY - did she trade the way her rules say, is she opening a
-     sensible number of trades, and how much buying power that used.
+  ON 📍 NOW    band() - banked this month, banked this week, and whether
+               anything needs a decision today. The first thing she reads.
+  ON 🎯 PLAN   health_row() - six cards; goals_block() - the bullet chart, the
+               year-one track and the plan itself; process_row() - did she
+               trade the way her rules say.
 
-Above all three sits the band: banked this month, this week, and whether
-anything needs a decision today.
+The cumulative curve against a steady plan's ramp used to be part of
+goals_block. It now lives on 💰 Profit beside the bars and the drawdown, where
+the rest of the money-over-time story is - it was being drawn on two pages.
 
 WHY THERE IS EXACTLY ONE GOAL VISUAL
 ------------------------------------
@@ -20,8 +21,8 @@ answers to one question reads as an app that has not decided what it thinks.
 Now there is one, the bullet chart, and it says more than all three did: not
 "35% of the way there" but "35%, and a steady plan would be at 16% today".
 
-NOTHING IN THESE THREE ROWS IS BEHIND A CLICK
----------------------------------------------
+NOTHING ON THESE PAGES IS BEHIND A CLICK
+---------------------------------------
 Progressive disclosure belongs on detail, not on decisions. Her rule: a power
 dashboard, not a gated wizard.
 
@@ -271,23 +272,10 @@ def goals_block(positions: list, settings: dict, live_from, mode: str,
             "account, so it is hidden on the practice book", "amber"),
             unsafe_allow_html=True)
 
-    # ---- the running total against the ramp
-    series = goals.cumulative_series(positions, settings, live_from, today)
-    if series:
-        st.write("")
-        theme.section("Every dollar you have banked, against the plan", "Total")
-        income_report._render(charts.cumulative_vs_target(series, mode), height=260)
-        theme.note(
-            "The solid green line is your money, running total. The **dashed "
-            "amber line** is what a steady "
-            f"**\\${t['monthly']:,.0f} a month** would have produced by each "
-            "date. Where green is above amber you are ahead of the plan.")
-        if any(r["book"] != mode for r in series):
-            other = "practice" if mode == "real" else "real-money"
-            theme.legend_note(
-                f"The faded grey line is your {other} book. It is never added "
-                "into any total on this page - it is here so you can see how "
-                "far this one has come.")
+    # The running total against the ramp used to be drawn here too. It is the
+    # same chart the Profit page carries, and one picture on two pages is how
+    # this tab came to feel like it repeated itself. It belongs with the P&L,
+    # beside the bars and the drawdown, so that is where it lives now.
 
     # ---- the plan itself, once
     st.write("")

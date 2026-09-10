@@ -63,7 +63,7 @@ def _in_month(d: Optional[date], month: str) -> bool:
     return d is not None and (month == ALL_TIME or month_key(d) == month)
 
 
-def _week_start(d: date) -> date:
+def week_start(d: date) -> date:
     """The Monday of d's week - how her weekly $808 target is counted."""
     return d - timedelta(days=d.weekday())
 
@@ -120,7 +120,7 @@ def available_months(positions: list[Position],
     return out
 
 
-def _premium_events(positions: list[Position], month: str) -> list[dict[str, Any]]:
+def premium_events(positions: list[Position], month: str) -> list[dict[str, Any]]:
     """Every dollar of premium SOLD inside the month, as dated events.
 
     Two kinds, because there are two ways to sell premium: opening a trade, and
@@ -163,7 +163,7 @@ def _weeks(premium: list[dict], banked: list[dict]) -> list[dict[str, Any]]:
     buckets: dict[date, dict[str, Any]] = {}
 
     def bucket(d: date) -> dict[str, Any]:
-        start = _week_start(d)
+        start = week_start(d)
         if start not in buckets:
             end = start + timedelta(days=6)
             buckets[start] = {
@@ -235,7 +235,7 @@ def build(positions: list[Position], month: str = ALL_TIME,
     today = today or date.today()
     scoped = split_by_mode(positions, live_from)[mode]
 
-    premium = _premium_events(scoped, month)
+    premium = premium_events(scoped, month)
     banked_ev = [e for e in cash_events(scoped) if _in_month(e["date"], month)]
 
     opened = [p for p in scoped if _in_month(p.opened, month)]
@@ -372,7 +372,7 @@ def days(positions: list[Position], month: str,
     year, mon = (int(x) for x in month.split("-"))
     first = date(year, mon, 1)
     nxt = (date(year + 1, 1, 1) if mon == 12 else date(year, mon + 1, 1))
-    grid_start = _week_start(first)
+    grid_start = week_start(first)
 
     scoped = split_by_mode(positions, live_from)[mode]
     banked: dict[date, float] = {}
@@ -380,7 +380,7 @@ def days(positions: list[Position], month: str,
         if _in_month(e["date"], month):
             banked[e["date"]] = banked.get(e["date"], 0.0) + e["amount"]
     premium: dict[date, list[float]] = {}
-    for e in _premium_events(scoped, month):
+    for e in premium_events(scoped, month):
         premium.setdefault(e["date"], []).append(e["amount"])
 
     out = []
@@ -394,7 +394,7 @@ def days(positions: list[Position], month: str,
             "premium": round(sum(sold), 2),
             "trades": len(sold),
             "weekday": d.weekday(),
-            "week_index": (_week_start(d) - grid_start).days // 7,
+            "week_index": (week_start(d) - grid_start).days // 7,
             "is_future": d > today,
         })
         d += timedelta(days=1)

@@ -295,13 +295,35 @@ def test_every_expander_holding_a_form_is_keyed():
                            f"they collapse on every rerun: {offenders}")
 
 
-def test_the_delete_button_is_off_the_daily_screen(app_with_one_pmcc):
+def test_the_delete_button_is_off_the_daily_screen():
     """The one irreversible button in the app used to sit on every card. It is
-    a rare, careful job, so it lives with the other rare, careful jobs."""
+    a rare, careful job, so it lives with the other rare, careful jobs.
+
+    Checked against the SOURCE of the daily screen rather than against the
+    label of whichever expander happens to house it. This used to assert two
+    exact expander names, which pinned the old one-page layout: delete now
+    lives in the Journal, under a trade she has explicitly selected, which is
+    further from the daily screen than it was before, not nearer. What must
+    stay true is that the page she opens every morning - the open-trades table
+    and the card under it - never draws it.
+    """
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).parent.parent / "ui" / "trades"
+    daily = ast.parse((pkg / "open_trades.py").read_text(encoding="utf-8"))
+    names = {n.attr if isinstance(n, ast.Attribute) else n.id
+             for n in ast.walk(daily) if isinstance(n, (ast.Name, ast.Attribute))}
+    assert "_delete_control" not in names, (
+        "the delete control is back on the screen she looks at daily")
+
+
+def test_deleting_a_trade_is_always_behind_a_click(app_with_one_pmcc):
+    """Wherever it lives, it may never be a bare button on the page."""
     at = app_with_one_pmcc.run()
     labels = [e.label or "" for e in at.expander]
-    assert not any("Delete this trade" in l for l in labels)
-    assert any("Delete an open trade" in l for l in labels)
+    assert any("Delete" in l for l in labels), (
+        "deleting must sit inside an expander, not loose on the page")
 
 
 # --------------------------------------------------------- it always renders
@@ -586,3 +608,109 @@ def test_a_closed_trade_can_be_put_back_on_the_books(app_with_rows, monkeypatch)
     said = [m.value for m in at.success] + [m.value for m in at.markdown]
     assert any("back in your open trades" in t for t in said)
 
+
+
+# ------------------------------------------------- the four-page rebuild
+def test_the_tab_is_four_pages_not_one_long_scroll(app_with_rows):
+    """The tab used to stack ten sections onto one page - band, six KPI cards,
+    open trades, goal charts, process row, a whole month report, then nine
+    record expanders. On her 375px phone that was about twenty screens.
+
+    Rita: "not effective and not professional... too much scrolling."
+    """
+    at = app_with_rows(_closed_row()).run()
+    labels = [t.label for t in at.tabs]
+    for expected in ("📍 Now", "💰 Profit", "🎯 Plan", "📜 Journal"):
+        assert expected in labels, f"{expected} is missing from My trades"
+
+
+def test_the_account_switch_stays_above_the_pages():
+    """It governs every number on all four pages, so it can never be something
+    she has to go to one of them to find. Same for Quick Log."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "__init__.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    render = next(n for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == "render")
+    calls = [n.func.id if isinstance(n.func, ast.Name) else n.func.attr
+             for n in ast.walk(render) if isinstance(n, ast.Call)
+             and isinstance(n.func, (ast.Name, ast.Attribute))]
+    assert calls.index("_account_switch") < calls.index("tabs")
+    assert calls.index("_quick_log_form") < calls.index("tabs")
+
+
+def test_the_profit_page_offers_every_zoom(app_with_rows):
+    """The headline ask: "a clear daily, weekly, monthly picture of my profit
+    and loss". Day, Week and Month bucket time; All is the same monthly buckets
+    with the trim taken off."""
+    at = app_with_rows(_closed_row()).run()
+    # st.segmented_control reaches AppTest as a "button_group", not as
+    # "segmented_control" - the accessor of that name exists but never matches.
+    switches = [s for s in at.get("button_group") if s.key == "pnl_grain"]
+    assert switches, "the Profit page has no zoom switch"
+    assert list(switches[0].options) == ["Day", "Week", "Month", "All"]
+
+
+@pytest.mark.parametrize("zoom", ["Day", "Week", "Month", "All"])
+def test_every_zoom_renders_without_an_error_box(app_with_rows, zoom):
+    at = app_with_rows(_closed_row()).run()
+    switch = [s for s in at.get("button_group") if s.key == "pnl_grain"][0]
+    at = switch.set_value(zoom).run()
+    assert not at.exception
+    snags = [e for e in at.error if "unexpected snag" in str(e.value)]
+    assert not snags, f"{zoom} crashed: {[str(e.value) for e in snags]}"
+
+
+def test_the_profit_hero_does_not_repeat_the_bands_sentence(app_with_rows):
+    """The band already says "banked this month, N% of your $3,500 goal". The
+    same sentence twice on one tab is how the old page came to feel like it
+    repeated itself, so the hero is worded against PACE instead."""
+    at = app_with_rows(_closed_row()).run()
+    page = _page(at)
+    assert page.lower().count("banked this month") == 1
+    assert page.count("of your &#36;3,500 goal") == 1
+
+
+def test_the_journal_holds_open_and_closed_trades_in_one_table(app_with_rows):
+    """Four overlapping tables became one. Rita's ruling stands: "I want all
+    trades organised nicely in table, not one by one analysis." """
+    rows = _closed_row("20260801-101500-SPX", realized=150.0)
+    at = app_with_rows(rows).run()
+    tables = [d.value for d in at.dataframe
+              if "Why closed" in list(d.value.columns)
+              and "Banked $" in list(d.value.columns)]
+    assert tables, "expected the journal's single ledger"
+    cols = list(tables[0].columns)
+    for col in ("Result", "Symbol", "Strategy", "Opened", "Closed",
+                "Credit $", "Result $"):
+        assert col in cols, f"missing from the journal: {col}"
+
+
+def test_the_journal_ledger_is_a_radio_style_table():
+    """One row is always selected, so the trade page below it is never empty -
+    the same contract the open-trades table has."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent.parent / "ui" / "trades"
+           / "journal.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "dataframe"]
+    kw = {k.arg: k for c in calls for k in c.keywords}
+    assert kw["selection_mode"].value.value == "single-row-required"
+    assert kw["on_select"].value.value == "rerun"
+
+
+def test_the_whole_story_of_a_trade_is_no_longer_three_clicks_down(app_with_rows):
+    """It used to be the first of nine expanders, behind a click, behind a
+    radio, behind a second dropdown to choose the trade. Now picking the row
+    IS choosing the trade, and the story is on the page underneath it."""
+    at = app_with_rows(_closed_row()).run()
+    page = _page(at)
+    assert "THIS TRADE" in page or "This trade" in page
+    # render_story's own summary block, which only the story panel prints.
+    assert "Money you collected" in page or "Money you paid out" in page

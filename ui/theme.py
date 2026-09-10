@@ -1,9 +1,26 @@
-"""The app's design system: "Fresh Growth" - modern, friendly, accessible.
+"""The app's design system: a trading statement, not a friendly green app.
 
-- Emerald-green brand on a soft green-tinted canvas with clean white cards.
+ONE JOB PER COLOUR
+------------------
+The page used to be green on green on green - green canvas, green-tinted cards,
+green borders, green shadows, green accent, green for profit. When everything
+is the brand colour, nothing is emphasis. Now:
+
+  ACCENT (emerald)  interaction only - buttons, the selected tab, focus rings
+  GREEN / RED       the SIGN of a number, and nothing else
+  AMBER             pace and warning
+  surfaces          near-neutral canvas, white cards, one hairline border
+
+Surfaces are quiet so the numbers can be loud: money renders with tabular
+figures everywhere, so a column of dollars lines up and a value does not jump
+sideways between reruns when a 1 becomes an 8.
+
+Flat, not floating. Cards carry a hairline instead of a drop shadow and the tab
+bar does not spring when touched - a page of soft shadowed pills reads as a
+consumer app, and this is an instrument she runs a business on.
+
 - Inter typeface, generous sizing, and HIGH-CONTRAST text throughout - secondary
   text is deliberately dark (not the faded grey that fails accessibility).
-- Alive but calm: smooth hovers, clear focus rings, subtle depth.
 
 Accessibility targets (WCAG AA):
 - Body text 17px, primary ink #0B1F16 on white ~ 16:1 contrast.
@@ -27,11 +44,11 @@ SECONDARY = "#35463D"     # secondary text in dense cards (~9:1)
 CAPTION = "#182A21"       # instructional captions - near-black, reads as text (~13:1)
 MUTED = "#4E625A"         # rare true hints
 PLACEHOLDER = "#55685F"   # input placeholder - a readable hint, ~5:1
-BORDER = "#DAE7E0"        # soft green-grey hairline
-BORDER_STRONG = "#C1D5CB"
-CANVAS = "#F2F9F5"        # soft green-tinted canvas
+BORDER = "#E2E7E4"        # neutral hairline - the card edge, not a colour
+BORDER_STRONG = "#CBD3CE"
+CANVAS = "#F4F6F5"        # near-neutral canvas, the faintest green cast
 CARD = "#FFFFFF"
-TILE = "#EEF7F1"          # metric-tile fill
+TILE = "#F5F8F6"          # metric-tile fill - a shade off white, not a green
 GREEN = "#0B7A54"         # success / good
 AMBER = "#B45309"         # warning
 RED = "#C02A1B"           # danger
@@ -109,52 +126,48 @@ section[data-testid="stSidebar"] {{
 [data-testid="stVerticalBlockBorderWrapper"] {{
     background: {CARD};
     border: 1px solid {BORDER} !important;
-    border-radius: 16px !important;
-    box-shadow: 0 1px 2px rgba(11, 122, 84, 0.04), 0 6px 20px rgba(11, 122, 84, 0.05);
+    border-radius: 10px !important;
 }}
 
 /* ---------------- metrics as tiles ---------------- */
 [data-testid="stMetric"] {{
     background: {TILE};
     border: 1px solid {BORDER};
-    border-radius: 14px;
+    border-radius: 10px;
     padding: 12px 16px;
     transition: border-color .15s ease, box-shadow .15s ease;
 }}
-[data-testid="stMetric"]:hover {{
-    border-color: {BORDER_STRONG};
-    box-shadow: 0 4px 14px rgba(11,122,84,.07);
-}}
-[data-testid="stMetricValue"] {{ font-size: 1.6rem; font-weight: 800; color: {INK}; }}
+[data-testid="stMetric"]:hover {{ border-color: {BORDER_STRONG}; }}
+[data-testid="stMetricValue"] {{ font-size: 1.6rem; font-weight: 800; color: {INK};
+                                 font-variant-numeric: tabular-nums; }}
 [data-testid="stMetricLabel"] {{ font-size: 0.82rem; font-weight: 600; color: {SECONDARY};
                                  text-transform: uppercase; letter-spacing: 0.05em; }}
 [data-testid="stMetricDelta"] {{ font-weight: 700; }}
 
 /* ---------------- buttons ---------------- */
 .stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {{
-    border-radius: 10px;
+    border-radius: 8px;
     font-weight: 600;
     padding: 0.5rem 1.15rem;
     border: 1px solid {BORDER_STRONG};
     background: {CARD};
     color: {INK};
-    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+    transition: border-color .12s ease, background .12s ease;
 }}
 .stButton > button:hover, .stDownloadButton > button:hover {{
     border-color: {ACCENT}; color: {ACCENT_DARK};
-    transform: translateY(-1px);
-    box-shadow: 0 4px 14px rgba(11,122,84,.14);
+    background: {TILE};
 }}
 .stButton > button:active {{ transform: translateY(0) scale(.99); }}
 [data-testid="stBaseButton-primary"] {{
     background: {ACCENT} !important;
     border: 1px solid {ACCENT} !important;
     color: #ffffff !important;
-    box-shadow: 0 2px 10px rgba(11,122,84,.28);
+    box-shadow: 0 1px 3px rgba(11,122,84,.24);
 }}
 [data-testid="stBaseButton-primary"]:hover {{
     background: {ACCENT_DARK} !important; border-color: {ACCENT_DARK} !important;
-    color: #fff !important; box-shadow: 0 6px 18px rgba(11,122,84,.32);
+    color: #fff !important; box-shadow: 0 2px 6px rgba(11,122,84,.28);
 }}
 button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outline-offset: 2px; }}
 
@@ -164,23 +177,24 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
     gap: 8px;
     width: 100% !important;
     background: {CARD};
-    padding: 8px;
-    border-radius: 18px;
+    padding: 6px;
+    border-radius: 10px;
     border: 1px solid {BORDER};
-    box-shadow: 0 2px 12px rgba(11,122,84,.07);
     margin-bottom: 0.7rem;
 }}
+/* No lift, no bounce, no glow. A tab bar that springs when you touch it reads
+   as a consumer app; a trading page's navigation should be the quietest thing
+   on it. Colour and weight carry the selected state, movement does not. */
 .stTabs [data-baseweb="tab"] {{
     flex: 1 1 0 !important;
     width: auto !important;
     justify-content: center;
-    min-height: 50px;
-    border-radius: 13px;
+    min-height: 46px;
+    border-radius: 8px;
     padding: 10px 14px;
     background: transparent;
     color: {SECONDARY};
-    transition: transform .18s cubic-bezier(.34,1.56,.64,1),
-                background .16s ease, color .16s ease, box-shadow .16s ease;
+    transition: background .13s ease, color .13s ease;
 }}
 .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
 .stTabs [data-baseweb="tab"] p {{
@@ -188,15 +202,12 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
     letter-spacing: -0.01em;
 }}
 .stTabs [data-baseweb="tab"]:hover {{
-    background: #E4F5EC;
+    background: {TILE};
     color: {ACCENT_DARK};
-    transform: translateY(-2px);
 }}
 .stTabs [aria-selected="true"] {{
     background: {ACCENT} !important;
     color: #FFFFFF !important;
-    box-shadow: 0 8px 20px rgba(11,122,84,.32);
-    transform: translateY(-2px);
 }}
 .stTabs [aria-selected="true"]:hover {{ background: {ACCENT_DARK} !important; color: #fff !important; }}
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display: none; }}
@@ -210,7 +221,7 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
 /* ---------------- expanders / inputs / alerts / tables ---------------- */
 [data-testid="stExpander"] {{
     border: 1px solid {BORDER};
-    border-radius: 14px;
+    border-radius: 10px;
     background: {CARD};
 }}
 [data-testid="stExpander"] summary {{ font-weight: 600; }}
@@ -220,7 +231,7 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
 .stTextInput input:focus, .stNumberInput input:focus {{
     border-color: {ACCENT} !important; box-shadow: 0 0 0 3px rgba(11,122,84,.15) !important;
 }}
-[data-testid="stAlert"] {{ border-radius: 12px; }}
+[data-testid="stAlert"] {{ border-radius: 10px; }}
 /* Streamlit's own alert text (st.success/warning/error/info) ships at ~4.1-4.5:1
    on its tinted backgrounds - under AA and far under this app's floor. Darken to
    the same accessible tones the chips use. */
@@ -238,7 +249,7 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
     color: #0A5C3F !important; }}
 [data-testid="stMetricDelta"]:has([data-testid="stMetricDeltaIcon-Down"]) {{
     color: #A6301C !important; }}
-[data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 12px; }}
+[data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 10px; }}
 [data-baseweb="slider"] [role="slider"] {{ background: {ACCENT} !important; }}
 hr {{ border-color: {BORDER}; }}
 a {{ color: {ACCENT_DARK}; }}
@@ -274,12 +285,13 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-tiles {{ display: flex; flex-wrap: wrap; gap: 10px; }}
 .ota-tile {{
     flex: 1 1 150px; min-width: 140px;
-    background: {TILE}; border: 1px solid {BORDER}; border-radius: 14px;
+    background: {TILE}; border: 1px solid {BORDER}; border-radius: 10px;
     padding: 10px 14px;
 }}
 .ota-tile-label {{ font-size: 0.78rem; font-weight: 700; color: {SECONDARY};
                    text-transform: uppercase; letter-spacing: 0.05em; }}
-.ota-tile-value {{ font-size: 1.45rem; font-weight: 800; color: {INK}; line-height: 1.3; }}
+.ota-tile-value {{ font-size: 1.45rem; font-weight: 800; color: {INK};
+                   line-height: 1.3; font-variant-numeric: tabular-nums; }}
 .ota-tile-delta {{ font-size: 0.95rem; font-weight: 700; }}
 
 /* ---------------- sector pulse (smaller tinted tiles, wraps on phones) ---------------- */
@@ -288,14 +300,15 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-pulse {{ display: flex; flex-wrap: wrap; gap: 8px; }}
 .ota-pulse-tile {{
     flex: 1 1 118px; min-width: 112px;
-    background: {TILE}; border: 1px solid {BORDER}; border-radius: 12px;
+    background: {TILE}; border: 1px solid {BORDER}; border-radius: 10px;
     padding: 8px 12px;
 }}
 .ota-pulse-up   {{ background: #E6F6EE; border-color: #BCE5CF; }}
 .ota-pulse-down {{ background: #FCEFEC; border-color: #F3CFC7; }}
 .ota-pulse-label {{ font-size: 0.8rem; font-weight: 700; color: #213229; }}
 .ota-pulse-sym  {{ font-size: 0.72rem; font-weight: 600; color: #35463D; }}
-.ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK}; }}
+.ota-pulse-val  {{ font-size: 1.02rem; font-weight: 800; color: {INK};
+                   font-variant-numeric: tabular-nums; }}
 
 /* ---------------- one trade, told move by move ----------------
    A list, not a dataframe. The first version of this was a glide-grid with a
@@ -304,7 +317,7 @@ a {{ color: {ACCENT_DARK}; }}
    rather than a trade that made money. What answers "did this work" is the
    paid/collected/result block at the bottom, and what answers "does it match
    my broker" is one readable line per fill. Neither needed a grid. */
-.ota-story {{ border: 1px solid {BORDER}; border-radius: 14px; overflow: hidden;
+.ota-story {{ border: 1px solid {BORDER}; border-radius: 10px; overflow: hidden;
               background: {CARD}; }}
 .ota-story-head {{ background: {TILE}; border-bottom: 1px solid {BORDER};
                    padding: 14px 16px; }}
@@ -326,7 +339,8 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-story-detail {{ font-size: 0.88rem; color: {SECONDARY}; font-weight: 500;
                      margin-top: 2px; }}
 .ota-story-amt {{ flex: 0 0 auto; font-size: 1.02rem; font-weight: 800;
-                  text-align: right; white-space: nowrap; }}
+                  text-align: right; white-space: nowrap;
+                  font-variant-numeric: tabular-nums; }}
 /* Darker than the chip pair (#0A5C3F / #99271A), which land at ~7.3:1 on the
    tile fill - under her ~9:1 floor. These clear it on both backgrounds, and
    the amounts carry a + or - anyway so the colour is never the only signal. */
@@ -350,14 +364,17 @@ a {{ color: {ACCENT_DARK}; }}
     display: grid; gap: 12px; margin: 6px 0 4px;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }}
+/* A row of SIX cannot use auto-fit. Whatever the minmax, some window width
+   fits five of them and leaves the sixth alone on its own line at full width,
+   which reads as one card being more important than the other five. Three and
+   three is always balanced, and the cards get bigger for it. */
+.ota-kpi-3 {{ grid-template-columns: repeat(3, 1fr); }}
 .ota-kpi-card {{
-    background: {CARD}; border: 1px solid {BORDER}; border-radius: 16px;
+    background: {CARD}; border: 1px solid {BORDER}; border-radius: 10px;
     border-left: 4px solid transparent; padding: 14px 16px;
     transition: border-color .15s ease, box-shadow .15s ease;
 }}
-.ota-kpi-card:hover {{
-    border-color: {BORDER_STRONG}; box-shadow: 0 4px 14px rgba(11,122,84,.07);
-}}
+.ota-kpi-card:hover {{ border-color: {BORDER_STRONG}; }}
 .ota-kpi-label {{ font-size: 0.75rem; font-weight: 800; color: {SECONDARY};
                   text-transform: uppercase; letter-spacing: 0.06em; }}
 /* tabular-nums so a value does not jump sideways between reruns when a 1
@@ -374,7 +391,7 @@ a {{ color: {ACCENT_DARK}; }}
 /* ---------------- the dark band (the report's own object) ----------------
    Deep navy rather than the app's green, so a results band reads as a page
    torn out of a statement and not as another panel of the tab. */
-.ota-band {{ background: {BAND}; border-radius: 16px; padding: 22px 24px;
+.ota-band {{ background: {BAND}; border-radius: 10px; padding: 22px 24px;
              margin: 6px 0 14px; }}
 .ota-band-zones {{ display: flex; gap: 34px; flex-wrap: wrap; margin-top: 14px; }}
 .ota-band-zone {{ min-width: 170px; }}
@@ -433,7 +450,7 @@ a {{ color: {ACCENT_DARK}; }}
    key into an "st-key-<key>" class on its container, which is what lets these
    three switches be enlarged without touching any other radio in the app. */
 .st-key-trades_account, .st-key-acct_scan, .st-key-acct_ql {{
-    background: {TILE}; border: 2px solid {BORDER_STRONG}; border-radius: 14px;
+    background: {TILE}; border: 2px solid {BORDER_STRONG}; border-radius: 10px;
     padding: 14px 18px 10px; margin: 4px 0 12px;
 }}
 /* the question above the choices */
@@ -463,6 +480,71 @@ a {{ color: {ACCENT_DARK}; }}
 .st-key-acct_ql [role="radiogroup"] label > div:first-child {{
     transform: scale(1.4); margin-right: 6px;
 }}
+
+/* ---------------- sub-tabs: the second level of navigation ----------------
+   A tab bar inside a tab bar has to be visibly the quieter of the two, or the
+   page has two things claiming to be the main navigation. The outer rail is a
+   solid emerald fill on white; this one is an underline on the canvas. */
+.stTabs .stTabs [data-baseweb="tab-list"] {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid {BORDER};
+    border-radius: 0;
+    padding: 0;
+    gap: 2px;
+    margin-bottom: 1rem;
+}}
+.stTabs .stTabs [data-baseweb="tab"] {{
+    min-height: 40px;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    padding: 8px 12px;
+}}
+.stTabs .stTabs [data-baseweb="tab"]:hover {{ background: {TILE}; }}
+.stTabs .stTabs [aria-selected="true"] {{
+    background: transparent !important;
+    color: {ACCENT_DARK} !important;
+    border-bottom-color: {ACCENT} !important;
+}}
+.stTabs .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
+.stTabs .stTabs [data-baseweb="tab"] p {{ font-size: 0.98rem !important; }}
+
+/* ---------------- the stat strip ----------------
+   Denser than .ota-kpi and without its tone border: these are the supporting
+   numbers under a hero, not six verdicts. Four across on a laptop, two on a
+   phone, and the number is always the loudest thing in the card. */
+.ota-stat {{
+    display: grid; gap: 10px; margin: 4px 0 10px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}}
+.ota-stat-card {{
+    background: {CARD}; border: 1px solid {BORDER}; border-radius: 10px;
+    padding: 11px 14px;
+}}
+.ota-stat-label {{ font-size: 0.72rem; font-weight: 800; color: {SECONDARY};
+                   text-transform: uppercase; letter-spacing: 0.07em; }}
+.ota-stat-value {{ font-size: 1.5rem; font-weight: 800; color: {INK};
+                   line-height: 1.2; margin: 2px 0 0;
+                   font-variant-numeric: tabular-nums; }}
+.ota-stat-sub {{ font-size: 0.82rem; font-weight: 600; color: {SECONDARY};
+                 line-height: 1.4; margin-top: 1px; }}
+.ota-stat-up   {{ color: {GREEN}; }}
+.ota-stat-down {{ color: {RED}; }}
+
+/* ---------------- the profit hero ----------------
+   One number, big, with what it is measured against directly under it. Every
+   grain of the Profit page opens with this same object, so changing the zoom
+   changes the number and never the shape of the page. */
+.ota-hero-stat {{ background: {CARD}; border: 1px solid {BORDER};
+                  border-radius: 10px; padding: 18px 20px; margin: 2px 0 12px; }}
+.ota-hero-stat-label {{ font-size: 0.78rem; font-weight: 800; color: {SECONDARY};
+                        text-transform: uppercase; letter-spacing: 0.08em; }}
+.ota-hero-stat-value {{ font-size: 2.9rem; font-weight: 800; line-height: 1.08;
+                        margin: 4px 0 2px; font-variant-numeric: tabular-nums;
+                        letter-spacing: -0.02em; }}
+.ota-hero-stat-sub {{ font-size: 0.98rem; font-weight: 600; color: {CAPTION};
+                      line-height: 1.5; }}
 
 /* ---------------- phones (Rita uses the app mobile-first) ---------------- */
 @media (max-width: 640px) {{
@@ -499,7 +581,24 @@ a {{ color: {ACCENT_DARK}; }}
     .ota-section-title {{ font-size: 1.35rem; }}
     /* Two KPI cards a row rather than auto-fit's one: six numbers should still
        be three swipes, not six. */
-    .ota-kpi {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+    .ota-kpi, .ota-kpi-3 {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+    .ota-stat {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+    .ota-stat-value {{ font-size: 1.25rem; }}
+    .ota-hero-stat {{ padding: 14px 16px; }}
+    .ota-hero-stat-value {{ font-size: 2.25rem; }}
+    /* All FOUR sub-tabs must fit 375px without swiping. The main tab bar has
+       six and earns its swipe; this one is the navigation for the page she is
+       already on, and a destination she has to scroll sideways to discover is
+       a destination she will not discover. Tighter padding and a smaller label
+       buy the ~40px that "Journal" was overflowing by. */
+    .stTabs .stTabs [data-baseweb="tab-list"] {{ gap: 0; }}
+    .stTabs .stTabs [data-baseweb="tab"] {{
+        padding: 7px 6px; min-height: 38px; flex: 1 1 0 !important;
+    }}
+    .stTabs .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] p,
+    .stTabs .stTabs [data-baseweb="tab"] p {{
+        font-size: 0.86rem !important; white-space: nowrap;
+    }}
     .ota-kpi-card {{ padding: 11px 13px; }}
     .ota-kpi-value {{ font-size: 1.45rem; }}
     .ota-kpi-label {{ font-size: 0.7rem; }}
@@ -518,7 +617,7 @@ a {{ color: {ACCENT_DARK}; }}
    iPhone width - two still fit at about 169px each, and six cards one to a
    row is a lot of scrolling to read six numbers. */
 @media (max-width: 340px) {{
-    .ota-kpi {{ grid-template-columns: 1fr; }}
+    .ota-kpi, .ota-kpi-3 {{ grid-template-columns: 1fr; }}
 }}
 </style>
 """
@@ -575,6 +674,82 @@ def chip(text: str, tone: str = "neutral") -> str:
     return f'<span class="{cls}">{text}</span>'
 
 
+# ------------------------------------------------------------ money, once
+# These three were redefined in four places - dashboard.py had _d/_m/_signed,
+# income_report.py had its own _d, widgets.py had money(). Four definitions of
+# "how do we print a dollar" is four chances for one page to disagree with
+# itself about whether a loss is "-$640" or "$-640".
+def money(x: float, decimals: int = 0) -> str:
+    """Plain dollars, for anything that will be escaped downstream."""
+    return f"${x:,.{decimals}f}"
+
+
+def signed(x: float, decimals: int = 0) -> str:
+    """The minus in front of the sign - "-$640", never "$-640"."""
+    return (f"-{money(abs(x), decimals)}" if x < 0 else money(x, decimals))
+
+
+def pct(x: float | None, decimals: int = 0) -> str:
+    """A share as a percentage, or "-" when there is honestly no number."""
+    return f"{x * 100:.{decimals}f}%" if x is not None else "-"
+
+
+def stat(label: str, value: str, sub: str = "", tone: str = "neutral") -> str:
+    """One supporting number in a stat strip.
+
+    Smaller and quieter than kpi_card, and without its tone border: a kpi_card
+    is a verdict, and these are the numbers underneath a hero that give it
+    context. tone colours only the VALUE, and only ever to show the sign of a
+    number - up | down, anything else neutral.
+    """
+    cls = {"up": " ota-stat-up", "down": " ota-stat-down"}.get(tone, "")
+    sub_html = (f'<div class="ota-stat-sub">{_money_safe(sub)}</div>'
+                if sub else "")
+    return (f'<div class="ota-stat-card">'
+            f'<div class="ota-stat-label">{_money_safe(label)}</div>'
+            f'<div class="ota-stat-value{cls}">{_money_safe(value)}</div>'
+            f'{sub_html}</div>')
+
+
+def stat_row(cards: list[str]) -> None:
+    """A strip of stat() cards - four across on a laptop, two on a phone."""
+    st.markdown(f'<div class="ota-stat">{"".join(cards)}</div>',
+                unsafe_allow_html=True)
+
+
+def hero_stat(label: str, value: str, sub: str = "",
+              tone: str = "neutral") -> None:
+    """The one number a page exists to show, with what it is measured against.
+
+    Every grain of the Profit page opens with this same object, so changing the
+    zoom from Day to Month changes the number and never the shape of the page.
+    """
+    colour = {"up": GREEN, "down": RED}.get(tone, INK)
+    sub_html = (f'<div class="ota-hero-stat-sub">{_money_safe(sub)}</div>'
+                if sub else "")
+    st.markdown(
+        f'<div class="ota-hero-stat">'
+        f'<div class="ota-hero-stat-label">{_money_safe(label)}</div>'
+        f'<div class="ota-hero-stat-value" style="color:{colour};">'
+        f'{_money_safe(value)}</div>{sub_html}</div>',
+        unsafe_allow_html=True)
+
+
+def explain(label: str, body: str, key: str | None = None) -> None:
+    """The teaching, one tap away instead of always on screen.
+
+    Every chart on this tab used to carry a paragraph under it explaining how
+    to read it. All of them together are most of why the page felt long and
+    hard to follow - but deleting them would take the teaching out of an app
+    that is teaching her the job. So they move in here: the page is numbers,
+    and the explanation is a tap when she wants it.
+
+    body takes the same **bold** and \\$ escaping that note() does.
+    """
+    with st.popover(label, help=None):
+        note(body)
+
+
 # ---------------------------------------------------------------- dashboard
 # The pieces below build the My trades dashboard. They return HTML strings or
 # render directly, and all of them escape their input, because every one of
@@ -611,9 +786,14 @@ def kpi_card(label: str, value: str, sub: str = "", tone: str = "neutral",
 
 
 def kpi_row(cards: list[str]) -> None:
-    """The cards in a responsive grid - six across on a laptop, two on a phone,
-    always equal width. See .ota-kpi for why this is a grid and not a flex row."""
-    st.markdown(f'<div class="ota-kpi">{"".join(cards)}</div>',
+    """The cards in a responsive grid, always equal width.
+
+    A count divisible by three lays out three to a row so it can never leave a
+    lone card stretched across the bottom; anything else auto-fits. See
+    .ota-kpi for why this is a grid and not a flex row.
+    """
+    cls = "ota-kpi ota-kpi-3" if cards and len(cards) % 3 == 0 else "ota-kpi"
+    st.markdown(f'<div class="{cls}">{"".join(cards)}</div>',
                 unsafe_allow_html=True)
 
 

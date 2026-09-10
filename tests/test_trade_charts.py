@@ -55,14 +55,17 @@ def _series():
 
 
 def _months():
+    """pnl.buckets() shape - `banked` is the selected book, `back` the other,
+    and there is deliberately no key holding their sum."""
     return [
-        {"month": "2026-06", "label": "June 2026", "short": "Jun", "real": 0.0,
-         "practice": 800.0, "target": 0.0, "pct": 0.0, "closed": 1,
-         "win_rate": 1.0, "rules_followed": 1, "rules_total": 1, "bp_opened": 0.0},
-        {"month": "2026-08", "label": "August 2026", "short": "Aug",
-         "real": 1200.0, "practice": 0.0, "target": 565.0, "pct": 2.1,
-         "closed": 1, "win_rate": 1.0, "rules_followed": 1, "rules_total": 1,
-         "bp_opened": 5000.0},
+        {"key": "2026-06-01", "label": "June 2026", "short": "Jun",
+         "grain": "month", "banked": 0.0, "back": 800.0, "target": 0.0,
+         "premium": 0.0, "opened": 1, "closed": 1, "cumulative": 0.0,
+         "pace_target": 0.0, "is_current": False, "is_future": False},
+        {"key": "2026-08-01", "label": "August 2026", "short": "Aug",
+         "grain": "month", "banked": 1200.0, "back": 0.0, "target": 565.0,
+         "premium": 900.0, "opened": 1, "closed": 1, "cumulative": 1200.0,
+         "pace_target": 565.0, "is_current": False, "is_future": False},
     ]
 
 
@@ -173,29 +176,111 @@ def test_a_book_with_nothing_in_it_simply_is_not_drawn():
     assert all(m.get("color") != charts.theme.BORDER_STRONG for m in marks)
 
 
-# --------------------------------------------------------------- month bars
+# ----------------------------------------------------------------- pnl bars
+def _no_target_months():
+    return [dict(m, target=0.0) for m in _months()]
+
+
 def test_the_backdrop_book_is_wider_and_paler_than_the_foreground():
     """Wider and behind reads as history. Side by side would read as two
     results being compared, which they must never be."""
-    marks = _marks(charts.month_bars(_months(), 3500.0))
+    marks = _marks(charts.pnl_bars(_months()))
     back, fore = marks[0], marks[1]
     assert back["opacity"] < 0.6
     assert back["size"] > fore["size"]
     assert back["color"] == charts.theme.BORDER_STRONG
 
 
-def test_the_goal_line_is_dashed_and_disappears_when_there_is_no_goal():
-    with_goal = [m for m in _marks(charts.month_bars(_months(), 3500.0))
-                 if m["type"] == "rule"]
-    assert len(with_goal) == 1
-    without = [m for m in _marks(charts.month_bars(_months(), 0))
-               if m["type"] == "rule"]
-    assert without == []
+def test_the_target_is_a_tick_on_each_bar_not_one_line_across_the_chart():
+    """A single horizontal rule only tells the truth when every period is
+    worth the same, and they are not: the month in progress has had fewer days
+    than the finished ones, and a week straddling two months prorates across
+    both. A tick per bar carries that period's OWN target, which is the only
+    version that is correct at every grain."""
+    marks = _marks(charts.pnl_bars(_months()))
+    ticks = [m for m in marks if m["type"] == "tick"]
+    assert len(ticks) == 1, "one tick layer, encoding a field per bar"
+    assert not [m for m in marks if m["type"] == "rule"], (
+        "a flat rule would be wrong on every partial period")
+    tick_layer = [l for l in _layers(charts.pnl_bars(_months()))
+                  if l["mark"]["type"] == "tick"][0]
+    assert tick_layer["encoding"]["y"]["field"] == "target"
 
 
-def test_months_are_oldest_on_the_left():
-    x = _layers(charts.month_bars(_months(), 3500.0))[0]["encoding"]["x"]
+def test_the_target_tick_disappears_when_there_is_no_target():
+    """A practice book has no plan, and neither does a month before she funded
+    the account. Drawing a target of zero would read as a goal she missed."""
+    marks = _marks(charts.pnl_bars(_no_target_months()))
+    assert not [m for m in marks if m["type"] == "tick"]
+
+
+def test_a_backdrop_that_would_flatten_the_foreground_is_left_off():
+    """Caught on her real log: the practice book had banked $9,219 in a month
+    against the real book's $1,102, and on one shared axis every real bar was a
+    sliver at the bottom. The backdrop exists so a short real history has
+    something to be READ AGAINST - one that flattens the thing it is context
+    for has stopped doing that job."""
+    swamped = [dict(m, banked=100.0, back=100.0 * charts.BACKDROP_MAX_RATIO * 2)
+               for m in _months()]
+    marks = _marks(charts.pnl_bars(swamped))
+    bars = [m for m in marks if m["type"] == "bar"]
+    assert len(bars) == 1, "only the foreground should be drawn"
+    # The foreground carries its colour in a conditional ENCODING (green above
+    # zero, red below), so a mark-level colour is the backdrop's signature.
+    assert bars[0].get("color") != charts.theme.BORDER_STRONG
+
+
+def test_a_backdrop_within_scale_is_still_drawn():
+    """The guard is a ceiling, not a removal. A comparable other book is the
+    whole reason the backdrop exists."""
+    fine = [dict(m, banked=100.0, back=200.0) for m in _months()]
+    bars = [m for m in _marks(charts.pnl_bars(fine)) if m["type"] == "bar"]
+    assert len(bars) == 2
+    assert bars[0]["color"] == charts.theme.BORDER_STRONG
+
+
+def test_the_equity_curve_drops_a_swamping_backdrop_too():
+    """Same threshold, same reason - her practice curve reached $20,000 against
+    the real book's $2,000 and pressed the green line flat."""
+    series = [
+        {"date": date(2026, 8, 1), "cumulative": 500.0, "banked": 500.0,
+         "target": 400.0, "book": "real"},
+        {"date": date(2026, 8, 1), "cumulative": 90000.0, "banked": 90000.0,
+         "target": 0.0, "book": "practice"},
+    ]
+    lines = [m for m in _marks(charts.cumulative_vs_target(series))
+             if m["type"] == "line"]
+    assert all(m.get("color") != charts.theme.BORDER_STRONG for m in lines)
+
+
+def test_every_bar_is_measured_from_zero():
+    """A layered chart resolves ONE shared y scale, and a tick layer does not
+    carry a bar's implicit zero - so the domain came out as [min, max] and the
+    bars rendered off the bottom of the chart entirely. Caught on the real log:
+    the axis ran $1,500 to $3,500 and there were no bars on it at all.
+
+    A P&L bar measured from $1,500 instead of $0 is a bar that lies about its
+    own size, so every layer that shares this scale pins zero explicitly.
+    """
+    for layer in _layers(charts.pnl_bars(_months())):
+        scale = layer["encoding"]["y"].get("scale", {})
+        assert scale.get("zero") is True, (
+            f"{layer['mark']['type']} layer can float its own baseline")
+
+
+def test_periods_are_oldest_on_the_left():
+    x = _layers(charts.pnl_bars(_months()))[0]["encoding"]["x"]
     assert x["sort"] == ["June 2026", "August 2026"]
+
+
+@pytest.mark.parametrize("grain", ["day", "week", "month"])
+def test_bars_get_thinner_as_the_zoom_gets_finer(grain):
+    """Forty-five daily bars and twelve monthly ones cannot wear the same
+    width without one of them becoming a barcode."""
+    rows = [dict(m, grain=grain) for m in _months()]
+    fore = [m for m in _marks(charts.pnl_bars(rows, grain))
+            if m["type"] == "bar"][1]
+    assert fore["size"] == charts._BAR_SIZE[grain]
 
 
 # ----------------------------------------------------------------- calendar
@@ -238,7 +323,7 @@ def test_the_drawdown_reads_only_the_foreground_book():
 @pytest.mark.parametrize("build", [
     lambda: charts.goal_bullet(_bullet_rows()),
     lambda: charts.cumulative_vs_target(_series()),
-    lambda: charts.month_bars(_months(), 3500.0),
+    lambda: charts.pnl_bars(_months()),
     lambda: charts.drawdown(_series()),
 ])
 def test_no_chart_ever_carries_a_field_that_adds_the_two_books(build):
