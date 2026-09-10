@@ -316,14 +316,14 @@ def _table(rows: list[dict[str, Any]], grain: str, choice: str) -> None:
         "Premium sold $": r["premium"],
         "Banked $": r["banked"],
         "Target $": r["target"],
-        "vs target $": round(r["banked"] - r["target"], 2) if r["target"] else None,
+        # Always a real number, never a gap. Streamlit paints a missing value
+        # as a faint grey "None" on the canvas, and a column of those down the
+        # middle of the money is what this rebuild is trying to get away from.
+        # A period with no target (before she funded the account) has nothing
+        # expected of it, so banked minus nothing is banked.
+        "vs target $": round(r["banked"] - r["target"], 2),
         "Running total $": r["cumulative"],
     } for r in reversed(rows)])
-
-    # A period before she funded the account has no target, so no "vs target"
-    # either. Mixed floats and None make an object column, and Streamlit prints
-    # the literal word "None" in the gaps - as NaN they render as blank cells.
-    df["vs target $"] = pd.to_numeric(df["vs target $"], errors="coerce")
 
     st.dataframe(df, width="stretch", hide_index=True, column_config={
         "Period": st.column_config.TextColumn(
@@ -343,7 +343,8 @@ def _table(rows: list[dict[str, Any]], grain: str, choice: str) -> None:
             help=f"What a steady plan says this {one} is worth"),
         "vs target $": st.column_config.NumberColumn(
             "vs target", format="$%,.0f",
-            help="Banked minus target. Blank where there is no target."),
+            help="Banked minus target. A period from before you funded the "
+                 "account has no target, so this is simply what you banked."),
         "Running total $": st.column_config.NumberColumn(
             "Running total", format="$%,.0f",
             help="Every dollar banked up to and including this period"),

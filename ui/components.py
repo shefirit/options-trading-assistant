@@ -1928,7 +1928,7 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Strategy": p.strategy_name,
                 "Opened": p.opened,
                 "Closed": roll.rolled_on,
-                "Credit $": roll.new_credit or None,
+                "Credit $": roll.new_credit or 0.0,
                 "Result $": roll.cash,
                 "Why closed": _roll_reason(roll),
             })
@@ -1941,7 +1941,7 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
                 "Strategy": p.strategy_name,
                 "Opened": p.opened,
                 "Closed": leg.closed_on,
-                "Credit $": None,
+                "Credit $": 0.0,
                 "Result $": leg.cash,
                 "Why closed": leg.note or "Sold one leg, kept the rest open",
             })
@@ -1953,7 +1953,13 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
         # this line carries the closing result only. The trade's whole-life
         # number lives in the Closed trades table, where nothing is summed.
         # Without rolls (almost every trade) the two are identical anyway.
-        result = p.realized_pl if tag in ("closed", "both") else None
+        # 0.0, not None, on a trade that only OPENED this month. Streamlit
+        # paints a missing number as a faint grey "None" on the canvas, and
+        # nothing settled is honestly nothing - the Result column beside it
+        # already says "Still open" or "Closed in <month>" in words, so a zero
+        # here cannot be misread as a break-even close.
+        result = p.realized_pl if tag in ("closed", "both") else 0.0
+        result = 0.0 if result is None else result
         out.append({
             "Result": _month_result_word(p, tag),
             "Symbol": p.underlying,

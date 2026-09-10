@@ -681,11 +681,11 @@ def test_the_journal_holds_open_and_closed_trades_in_one_table(app_with_rows):
     at = app_with_rows(rows).run()
     tables = [d.value for d in at.dataframe
               if "Why closed" in list(d.value.columns)
-              and "Banked $" in list(d.value.columns)]
+              and "Settled $" in list(d.value.columns)]
     assert tables, "expected the journal's single ledger"
     cols = list(tables[0].columns)
     for col in ("Result", "Symbol", "Strategy", "Opened", "Closed",
-                "Credit $", "Result $"):
+                "Credit $", "Settled $"):
         assert col in cols, f"missing from the journal: {col}"
 
 
@@ -714,3 +714,26 @@ def test_the_whole_story_of_a_trade_is_no_longer_three_clicks_down(app_with_rows
     assert "THIS TRADE" in page or "This trade" in page
     # render_story's own summary block, which only the story panel prints.
     assert "Money you collected" in page or "Money you paid out" in page
+
+
+def test_no_money_column_ever_has_a_hole_in_it(app_with_rows):
+    """Streamlit paints a missing number as a faint grey "None" ON THE CANVAS -
+    the accessibility layer reports the cell as empty while the pixels say
+    otherwise, so this is only catchable in the data.
+
+    A column of grey "None" down the middle of the money is exactly the
+    unfinished look this rebuild set out to remove, and grey-on-white is under
+    her contrast floor anyway. Every money column carries a real number.
+    """
+    rows = _closed_row("20260801-101500-SPX", realized=150.0)
+    # plus one still open, which is the case that used to leave the holes
+    rows += [_closed_row("20260901-090000-SPY")[0]]
+    at = app_with_rows(rows).run()
+
+    money = ("Credit $", "Settled $", "Banked $", "Result $", "Premium sold $",
+             "Target $", "vs target $", "Running total $")
+    for d in at.dataframe:
+        frame = d.value
+        for col in [c for c in frame.columns if c in money]:
+            assert not frame[col].isna().any(), (
+                f"{col} has an empty cell - Streamlit will paint it as None")

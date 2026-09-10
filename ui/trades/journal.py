@@ -174,6 +174,20 @@ def _in_span(d, span: str, today) -> bool:
 
 
 def _dataframe(rows: list[dict]) -> pd.DataFrame:
+    """One row per trade, with no empty money cells anywhere.
+
+    There were two money-outcome columns, "Banked so far" and "Result", and an
+    open trade filled in neither. Streamlit paints a missing number as a faint
+    grey "None" on the canvas - NaN does not help, the accessibility layer says
+    the cell is empty while the pixels say otherwise - so the table carried a
+    column of grey "None" down the middle of the money.
+
+    They are one column now, and it is always a real number: money that has
+    SETTLED on this trade so far. On a closed trade that is its whole-life
+    result; on an open one it is what rolls and sold legs have already banked,
+    which is honestly $0 on most. It cannot be misread as a break-even close
+    because the Result column beside it says "Open" in words.
+    """
     df = pd.DataFrame([{
         "Result": r["result"],
         "Symbol": r["symbol"],
@@ -182,19 +196,13 @@ def _dataframe(rows: list[dict]) -> pd.DataFrame:
         "Closed": components.fmt_date(r["closed"]),
         "Qty": r["contracts"],
         "Credit $": r["credit"],
-        "Banked $": r["banked"] or None,
-        "Result $": r["result_amount"],
+        "Settled $": (r["result_amount"] if r["result_amount"] is not None
+                      else r["banked"] or 0.0),
         "Why closed": r["exit"],
     } for r in rows])
 
-    # An open trade has no result and often nothing banked yet, and a column
-    # holding both floats and None comes out of pandas as dtype object - which
-    # Streamlit renders as the literal word "None" in every empty cell, down a
-    # column of real money. Coerced to a float column the blanks are NaN, and
-    # NumberColumn draws NaN as an empty cell, which is what "not yet" looks
-    # like.
-    for col in ("Credit $", "Banked $", "Result $", "Qty"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in ("Credit $", "Settled $", "Qty"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     return df
 
 
@@ -212,13 +220,12 @@ def _column_config() -> dict:
         "Credit $": st.column_config.NumberColumn(
             "Credit", format="$%,.0f",
             help="What you collected when you opened it"),
-        "Banked $": st.column_config.NumberColumn(
-            "Banked so far", format="$%,.0f",
-            help="Money already settled from rolls and legs sold, before the "
-                 "trade ends"),
-        "Result $": st.column_config.NumberColumn(
-            "Result", format="$%,.0f",
-            help="The whole life of the trade - the close plus every roll"),
+        "Settled $": st.column_config.NumberColumn(
+            "Settled", format="$%,.0f",
+            help="Money that has actually settled on this trade. On a closed "
+                 "trade that is its whole life - the close plus every roll. On "
+                 "an open one it is what rolls and sold legs have banked "
+                 "already, which is $0 until something settles."),
         "Why closed": st.column_config.TextColumn(
             "Why closed", help="Which of your exit rules ended it"),
     }
