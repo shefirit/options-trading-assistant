@@ -68,6 +68,7 @@ def _open_section(items, strategies, provider, priced_at) -> None:
     event = st.dataframe(
         components.positions_dataframe(ordered), width="stretch",
         hide_index=True, key="open_trades_table",
+        height=components.table_height(len(ordered)),
         on_select="rerun", selection_mode="single-row-required",
         column_config=components.positions_column_config())
 

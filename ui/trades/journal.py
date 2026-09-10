@@ -66,6 +66,7 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
     st.dataframe(
         _dataframe(shown), width="stretch", hide_index=True,
         column_config=_column_config(), key="journal_table",
+        height=components.table_height(len(shown)),
         on_select="rerun", selection_mode="single-row-required")
 
     picked = _picked(shown)

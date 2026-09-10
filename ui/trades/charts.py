@@ -204,9 +204,11 @@ def cumulative_vs_target(series: list[dict[str, Any]], foreground: str = "real")
 
 # ----------------------------------------------------------------- pnl bars
 # Bars get thinner as the grain gets finer: 45 daily bars and 12 monthly ones
-# cannot wear the same width without one of them becoming a barcode.
-_BAR_SIZE = {"day": 9, "week": 16, "month": FORE_SIZE}
-_BACK_SIZE = {"day": 15, "week": 28, "month": BACK_SIZE}
+# cannot wear the same width without one of them becoming a barcode. Sized for
+# a wide desktop window - four monthly bars at 26px on a 1,600px chart is four
+# pins in a field, and the width is information about nothing.
+_BAR_SIZE = {"day": 9, "week": 22, "month": 46}
+_BACK_SIZE = {"day": 15, "week": 36, "month": 74}
 _GRAIN_WORD = {"day": "Day", "week": "Week", "month": "Month"}
 
 def _backdrop_helps(df) -> bool:

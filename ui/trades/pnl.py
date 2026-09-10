@@ -34,7 +34,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
-from ui import income_report, theme
+from ui import components, income_report, theme
 from ui.trades import charts
 
 # The switch, and what each option means to the engine. "All" is month buckets
@@ -325,7 +325,8 @@ def _table(rows: list[dict[str, Any]], grain: str, choice: str) -> None:
         "Running total $": r["cumulative"],
     } for r in reversed(rows)])
 
-    st.dataframe(df, width="stretch", hide_index=True, column_config={
+    st.dataframe(df, width="stretch", hide_index=True,
+                 height=components.table_height(len(df)), column_config={
         "Period": st.column_config.TextColumn(
             "Period", help=f"One {one} of trading"),
         "Opened": st.column_config.NumberColumn(

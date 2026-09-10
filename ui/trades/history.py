@@ -159,8 +159,9 @@ def _month_view(all_pos, summaries, settings, live_from, mode: str,
     if entry["rows"]:
         st.divider()
         st.markdown("**Every trade this month:**")
-        st.dataframe(components.month_trades_dataframe(entry["rows"]),
-                     width="stretch", hide_index=True,
+        frame = components.month_trades_dataframe(entry["rows"])
+        st.dataframe(frame, width="stretch", hide_index=True,
+                     height=components.table_height(len(frame)),
                      column_config=components.month_trades_column_config())
 
     _calendar(all_pos, month_key, live_from, mode, report["label"])

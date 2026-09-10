@@ -45,6 +45,25 @@ def fmt_date(value, empty: str = "-") -> str:
     return f"{value:%d/%m/%Y}" if value else empty
 
 
+# Streamlit's own dataframe metrics: a 35px row under a 38px header.
+_ROW_PX, _HEADER_PX = 35, 38
+
+
+def table_height(rows: int, max_rows: int = 18) -> int:
+    """Tall enough to show every row, instead of scrolling inside the table.
+
+    Left to itself st.dataframe draws a fixed ten-row window with its own
+    scrollbar, so thirteen open trades meant scrolling a little box inside a
+    page that had plenty of room. This is a desktop app - the window is the
+    constraint, not a phone - so a table that fits should simply be shown.
+
+    Capped, because "every row" on a journal of two hundred trades is not a
+    table any more. Past the cap the inner scrollbar comes back, which is the
+    right behaviour at that size.
+    """
+    return _HEADER_PX + _ROW_PX * max(min(rows, max_rows), 1) + 2
+
+
 def quality_label(symbol: str, grade: str | None) -> str:
     """What to print in the Quality column when there may be no letter grade.
 

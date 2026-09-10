@@ -105,16 +105,23 @@ input::placeholder, textarea::placeholder {{ color: {PLACEHOLDER} !important; op
 #MainMenu, footer {{ visibility: hidden; }}
 [data-testid="stToolbar"] {{ display: none; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
-/* Wide enough that the open-positions table (11 columns) fits without a
-   horizontal scrollbar on a laptop screen, but still capped so prose lines
-   never run edge-to-edge. Streamlit's default side padding is 5rem each way,
-   which is width the table needs more than the margins do. */
+/* Desktop only, so the window is the constraint rather than a phone. Wide
+   enough for the twelve-column open-positions table and a month of daily bars
+   without a horizontal scrollbar. Streamlit's default side padding is 5rem
+   each way, which is width the tables need more than the margins do.
+
+   Prose does NOT follow the container out to this width - see .ota-prose. A
+   1,600px line of text is unreadable no matter how much room there is. */
 .block-container {{
-    padding-top: 1.2rem;
-    padding-left: 2.5rem;
-    padding-right: 2.5rem;
-    max-width: 1400px;
+    padding-top: 0.9rem;
+    padding-left: 2.25rem;
+    padding-right: 2.25rem;
+    max-width: 1680px;
 }}
+
+/* Everything that is a SENTENCE stops at a readable measure. Tables, charts
+   and card grids take the full width; paragraphs never do. */
+.ota-prose {{ max-width: 84ch; }}
 
 /* ---------------- sidebar ---------------- */
 section[data-testid="stSidebar"] {{
@@ -251,7 +258,7 @@ button:focus-visible {{ outline: 3px solid rgba(11,122,84,.42) !important; outli
     color: #A6301C !important; }}
 [data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 10px; }}
 [data-baseweb="slider"] [role="slider"] {{ background: {ACCENT} !important; }}
-hr {{ border-color: {BORDER}; }}
+hr {{ border-color: {BORDER}; margin: 0.9rem 0; }}
 a {{ color: {ACCENT_DARK}; }}
 
 /* ---------------- app-specific pieces ---------------- */
@@ -264,7 +271,7 @@ a {{ color: {ACCENT_DARK}; }}
 
 .ota-eyebrow {{
     font-size: 0.82rem; font-weight: 800; letter-spacing: 0.14em;
-    text-transform: uppercase; color: {ACCENT_DARK}; margin-top: 1.5rem;
+    text-transform: uppercase; color: {ACCENT_DARK}; margin-top: 1.05rem;
 }}
 .ota-section-title {{ font-size: 1.62rem; font-weight: 800; letter-spacing: -0.025em;
                       margin: 2px 0 0.55rem; color: {INK}; line-height: 1.2; }}
@@ -366,9 +373,14 @@ a {{ color: {ACCENT_DARK}; }}
 }}
 /* A row of SIX cannot use auto-fit. Whatever the minmax, some window width
    fits five of them and leaves the sixth alone on its own line at full width,
-   which reads as one card being more important than the other five. Three and
-   three is always balanced, and the cards get bigger for it. */
+   which reads as one card being more important than the other five.
+
+   So the count is pinned rather than fitted: six across once there is room for
+   six, three and three below that. Both are balanced; neither can orphan. */
 .ota-kpi-3 {{ grid-template-columns: repeat(3, 1fr); }}
+@media (min-width: 1180px) {{
+    .ota-kpi-3 {{ grid-template-columns: repeat(6, 1fr); }}
+}}
 .ota-kpi-card {{
     background: {CARD}; border: 1px solid {BORDER}; border-radius: 10px;
     border-left: 4px solid transparent; padding: 14px 16px;
@@ -395,6 +407,15 @@ a {{ color: {ACCENT_DARK}; }}
              margin: 6px 0 14px; }}
 .ota-band-zones {{ display: flex; gap: 34px; flex-wrap: wrap; margin-top: 14px; }}
 .ota-band-zone {{ min-width: 170px; }}
+/* On a desktop window the three zones are a row of equals across the whole
+   band. As a wrapping flex row they bunched at the left and dropped "needs a
+   decision today" - the most urgent thing on the page - onto a second line
+   with empty navy beside it. */
+@media (min-width: 980px) {{
+    .ota-band-zones {{ display: grid; grid-template-columns: 1.2fr 1fr 1.3fr;
+                       gap: 28px; }}
+    .ota-band-zone {{ min-width: 0; }}
+}}
 .ota-band-label {{ font-size: 0.8rem; font-weight: 800; color: {BAND_SUB};
                    letter-spacing: 0.06em; text-transform: uppercase; }}
 .ota-band-hero {{ font-size: 2.6rem; font-weight: 800; color: {BAND_HERO};
@@ -433,7 +454,7 @@ a {{ color: {ACCENT_DARK}; }}
 .ota-legend-swatch {{ flex: 0 0 16px; width: 16px; height: 16px; margin-top: 3px;
                       border-radius: 4px; background: {BORDER_STRONG}; opacity: .55; }}
 .ota-legend-text {{ font-size: 0.95rem; font-weight: 600; color: {CAPTION};
-                    line-height: 1.5; }}
+                    line-height: 1.5; max-width: 84ch; }}
 
 /* ---------------- market news (compact headline list) ---------------- */
 .ota-news {{ display: flex; flex-direction: column; gap: 2px; }}
@@ -634,8 +655,8 @@ def note(text: str) -> None:
     safe = _html.escape(text).replace("\\$", "$")
     safe = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
     st.markdown(
-        f"<div style='color:{CAPTION};font-size:0.98rem;line-height:1.6;margin:2px 0 8px;'>"
-        f"{safe}</div>",
+        f"<div class='ota-prose' style='color:{CAPTION};font-size:0.98rem;"
+        f"line-height:1.6;margin:2px 0 8px;'>{safe}</div>",
         unsafe_allow_html=True)
 
 
