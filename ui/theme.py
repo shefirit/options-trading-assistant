@@ -123,13 +123,15 @@ header[data-testid="stHeader"] {{ background: transparent; }}
    and card grids take the full width; paragraphs never do. */
 .ota-prose {{ max-width: 84ch; }}
 
-/* ---------------- sidebar: controls only, never content ----------------
-   Back after being absent from the whole app, which was built without one on
-   the assumption she used it on a phone. She uses it on desktop.
+/* ---------------- sidebar ----------------
+   NOTHING writes to the sidebar now, so it does not render at all. The controls
+   lived there for a day and it broke twice: Streamlit collapses it on a
+   narrower window and renders the reopen button at 0x0, which makes the panel
+   a dead end. See ui/trades/__init__.py.
 
-   It holds the three things that are chrome rather than content - which book,
-   Refresh, and the button that opens Quick Log - so the four My-trades pages
-   keep their full height for numbers. Anything she READS stays on the page. */
+   These rules stay as a guard rather than as styling for anything current - if
+   something is ever put in there again, a collapsed sidebar must at least be
+   reopenable. */
 section[data-testid="stSidebar"] {{
     background: {CARD};
     border-right: 1px solid {BORDER};
@@ -198,6 +200,9 @@ section[data-testid="stSidebar"]
 
 /* ---------------- buttons ---------------- */
 .stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {{
+    /* A label must never break mid-word. In a narrow column Streamlit wrapped
+       "Refresh" to "Refres / h", which reads as a rendering fault. */
+    white-space: nowrap;
     border-radius: 8px;
     font-weight: 600;
     padding: 0.5rem 1.15rem;

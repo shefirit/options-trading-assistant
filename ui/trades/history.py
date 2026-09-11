@@ -140,7 +140,7 @@ def _month_view(all_pos, summaries, settings, live_from, mode: str,
             f"**No real-money trades in {report['label']} yet.** You funded on "
             f"{live_from.day} {live_from:%B}, and this book holds only real money. "
             "Any trades you are thinking of are in your practice book - switch "
-            "accounts in the sidebar to see them. Your first real trade "
+            "accounts above to see them. Your first real trade "
             "starts this page off at zero, which is exactly where a real-money "
             "record should start.")
 

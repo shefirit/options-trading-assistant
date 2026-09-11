@@ -4,10 +4,9 @@ The form collects the fill, then stages a draft in session state and renders a
 preview under it, so she reads back what she typed before it is written to the
 log. Saving is the second click, never the first.
 
-It opens from a button in the sidebar as a modal dialog. It used to be an
-expander at the top of the My trades tab, which is where it had to live when
-the app had no sidebar - from the sidebar it is one click from any tab, and it
-costs the page no height at all.
+It opens from a button at the top of the My trades tab as a modal dialog.
+It used to be a tall inline expander; as a modal the launcher is one small
+button and the form costs the page no height at all.
 """
 
 from __future__ import annotations
@@ -38,30 +37,33 @@ def _close_quick_log() -> None:
 @st.dialog("Quick Log - a trade you already placed in thinkorswim",
            width="large", on_dismiss=_close_quick_log)
 def _quick_log_dialog(settings, strategies, provider) -> None:
-    """The form as a modal, opened from the sidebar.
+    """The form as a modal, opened by the button on the page.
 
-    A dialog rather than a sidebar panel because this layout goes four columns
-    wide in places, and four columns in a 300px sidebar is not a form. A dialog
-    costs the page no height at all and still gets the whole window.
+    A dialog rather than an inline expander because this layout goes four
+    columns wide in places and is long: as a modal it gets the whole window and
+    costs the page no height at all. That is what lets the launcher be a single
+    small button instead of the tall panel this used to be.
     """
     _quick_log_body(settings, strategies, provider)
 
 
 def _quick_log_form(settings, strategies, provider) -> None:
-    """The sidebar launcher.
+    """The launcher: one button, ON THE PAGE.
 
     Keeps its old name because it is the entry point the tab calls and what the
-    "Quick Log is not buried" contract test looks for. What it does changed: it
-    opens the dialog instead of drawing the form inline.
+    "Quick Log is not buried" contract test looks for.
 
-    In the sidebar rather than on the page, so recording a trade she has just
-    placed is one click from ANY tab - not only from My trades, and not only
-    after scrolling to the top of it.
+    It spent a day in the sidebar and had to come out. Streamlit collapses the
+    sidebar on a narrower window and renders the button that reopens it at 0x0,
+    so the panel becomes unreachable - and this is the most frequent thing she
+    does on the tab. Rita: "i can't enter new trades. it's disappeared."
+
+    Nothing she needs in order to WORK goes anywhere collapsible.
     """
-    with st.sidebar:
-        if st.button("➕ Log a trade", key="ql_open", type="primary",
-                     width="stretch"):
-            st.session_state["ql_dialog_open"] = True
+    if st.button("➕ Log a trade", key="ql_open", type="primary",
+                 width="stretch",
+                 help="A trade you have already placed in thinkorswim"):
+        st.session_state["ql_dialog_open"] = True
 
     # The flag STAYS set until something closes it. Popping it here read as
     # "open once", and anything inside the modal that reruns the whole script -
