@@ -20,15 +20,20 @@ This is lateral navigation, not a wizard. Everything is one tap away and
 nothing is gated behind a step, which is the rule this tab has always had: a
 power dashboard, not a gated wizard.
 
-WHAT LIVES IN THE SIDEBAR
--------------------------
-The three things that are chrome rather than content: the account switch, which
-governs every number on all four pages; Refresh; and the button that opens
-Quick Log. They used to sit above the tabs, costing every page its top three
-inches, which is space that should be showing numbers.
+THERE IS NO SIDEBAR
+-------------------
+The controls - Log a trade, Refresh, and the account switch - sit in one
+compact row above the sub-tabs.
 
-Nothing she READS goes in there, so the sidebar and the page never hold two
-copies of the same thing.
+They spent a day in a sidebar and it broke twice. Streamlit collapses the
+sidebar on a narrower window and renders the button that reopens it at 0x0, so
+the panel becomes a dead end: first the account switch went with it and the tab
+silently showed only the real book, then Quick Log went and she could not log a
+trade at all. Nothing needed in order to WORK goes anywhere collapsible.
+
+What the sidebar was for - not spending the top of the page on chrome - is kept
+another way. The control row is one 43px line, and Quick Log opens as a modal,
+so the form itself costs the page no height.
 
 Import direction is one way - nothing in this package imports app.py. Helpers
 the other tabs share live in ui/components.py instead.
@@ -61,42 +66,38 @@ def render(settings, strategies, provider) -> None:
     header, rows, source = _load_trade_log()
     every_pos = pos_mod.parse_rows(header, rows)
 
-    # ---- the sidebar: the controls, off the page
+    # ---- the controls, ON THE PAGE
     #
-    # These three used to sit above the tabs, where they cost every page its
-    # top three inches. They are chrome, not content: the switch decides which
-    # book the whole tab is about, Refresh re-reads the log, and Quick Log is a
-    # thing she DOES rather than reads. The sidebar is theirs now.
+    # These three lived in a sidebar for exactly one day and broke twice.
+    # Streamlit collapses the sidebar on a narrower window, and the button it
+    # leaves behind to reopen it renders at 0x0 - so the panel becomes a dead
+    # end and everything in it is gone with no way back.
     #
-    # It is a real sidebar again for the first time - the app was built without
-    # one because it was assumed she used it on a phone, where the sidebar
-    # cannot be opened. She uses it on desktop.
-    with st.sidebar:
-        theme.section("Your trades", "Controls")
-
-    # THE ACCOUNT SWITCH STAYS ON THE PAGE, NOT IN THE SIDEBAR.
+    # The first time it took the account switch with it and the tab silently
+    # pinned itself to the real book. The fix moved that one control out and
+    # left the rest, on the reasoning that losing them "fails loudly". It does
+    # fail loudly. Rita: "i can't enter new trades. it's disappeared." Failing
+    # loudly still means she cannot work.
     #
-    # It went in the sidebar with the other controls and had to come straight
-    # back out. Streamlit collapses the sidebar on a narrower window and then
-    # draws the button that reopens it at 0x0, so it cannot be recovered - and
-    # a hidden account switch does not fail loudly, it silently pins the whole
-    # tab to the real book. Rita saw her 35 practice trades vanish with no
-    # control anywhere to bring them back.
-    #
-    # Everything else in the sidebar fails visibly if it disappears: she would
-    # notice she cannot log a trade. This one lies about her money instead, so
-    # it lives where nothing can collapse it.
-    mode = _account_switch(settings, every_pos)
-    all_pos = mr_split(every_pos, settings)[mode]
-
-    # Recording a trade she just placed is the thing she does most. From the
-    # sidebar it is one click from ANY tab, not just from this one.
-    _quick_log_form(settings, strategies, provider)
-
-    with st.sidebar:
+    # So the sidebar is gone again. Logging a trade is the single most frequent
+    # thing she does here and it does not go behind anything collapsible. What
+    # the sidebar was FOR - not spending the top of the page on chrome - is
+    # kept by other means: this is one 43px row, and Quick Log itself opens as
+    # a modal, so the form costs the page no height at all.
+    left, mid, _rest = st.columns([2, 1.5, 4.5])
+    with left:
+        _quick_log_form(settings, strategies, provider)
+    with mid:
         if st.button("↻ Refresh", key="trades_refresh", width="stretch"):
             st.session_state.pop("trades_rows", None)
             st.session_state.pop("_priced_positions", None)
+
+    # The switch decides which book this whole tab is about - every page, every
+    # number. Scoping only one page would leave the biggest numbers on the tab
+    # mixing practice money with real, which is the one thing this must never
+    # do.
+    mode = _account_switch(settings, every_pos)
+    all_pos = mr_split(every_pos, settings)[mode]
 
     open_pos = pos_mod.open_positions(all_pos)
     closed = pos_mod.closed_positions(all_pos)
@@ -175,7 +176,7 @@ def _empty(settings, every_pos, mode: str, source: str, rows) -> None:
     """The first-run page. No tabs: four empty pages is not a welcome."""
     book = "real-money book" if mode == "real" else "practice book"
     theme.note(f"Nothing in your **{book}** yet. Two ways to log a trade: "
-               "**➕ Log a trade** in the sidebar for one you already "
+               "**➕ Log a trade** just above for one you already "
                "placed in thinkorswim, or **Log this trade** in 🎯 Find a trade "
                "when the app finds the setup for you. Both ask which account "
                "the trade is in. Either way it lands here and the app starts "

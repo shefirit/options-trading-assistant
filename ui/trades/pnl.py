@@ -212,7 +212,7 @@ def _bars_legend(rows, grain: str, mode: str) -> None:
             f"Your {other} book is left off this chart. Its best {one} was "
             f"{theme.money(back)} against {theme.money(fore)} here, and on one "
             f"shared scale that flattens every bar above into a sliver. Switch "
-            f"accounts in the sidebar to see that book on its own.")
+            f"accounts above to see that book on its own.")
 
 
 # ------------------------------------------------------------ the pictures
@@ -249,7 +249,7 @@ def _running_total(every_pos, settings, live_from, mode: str, today) -> None:
             f"Your {other} book is left off this chart - it has banked "
             f"{theme.money(peak_back)} against {theme.money(peak_fore)} here, "
             f"and on one shared scale that presses this line flat along the "
-            f"bottom. Switch accounts in the sidebar to see it.")
+            f"bottom. Switch accounts above to see it.")
 
 
 def _calendar(all_pos, live_from, mode: str, today) -> None:

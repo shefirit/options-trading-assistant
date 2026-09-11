@@ -631,23 +631,29 @@ def test_the_tab_is_four_pages_not_one_long_scroll(app_with_rows):
         assert expected in labels, f"{expected} is missing from My trades"
 
 
-def test_the_controls_live_in_the_sidebar_not_on_the_page(app_with_rows):
-    """The account switch governs every number on all four pages and Refresh
-    re-reads the log - they are chrome, not content, and they used to cost
-    every page its top three inches.
+def test_no_control_lives_anywhere_collapsible(app_with_rows):
+    """THE regression test for two outages in two days.
 
-    Asserted on the rendered page rather than on the source: this used to walk
-    the AST for call order, which is not source order and broke the moment the
-    function was restructured. What matters is where the widgets END UP.
+    Streamlit collapses the sidebar on a narrower window and renders the button
+    that reopens it at 0x0, so the panel becomes a dead end. First that took
+    the account switch with it and the tab silently pinned itself to the real
+    book. The fix moved only that control out, on the reasoning that losing the
+    others "fails loudly" - and the next day: "i can't enter new trades. it's
+    disappeared."
+
+    Failing loudly still means she cannot work. Nothing she needs in order to
+    use the tab goes in the sidebar at all.
     """
     at = app_with_rows(_both_books()).run()
-    keys = {w.key for w in at.sidebar.button}
-    assert "ql_open" in keys, "Quick Log must open from the sidebar"
-    assert "trades_refresh" in keys, "Refresh belongs in the sidebar"
-    # The account switch is deliberately NOT here - see
-    # test_the_account_switch_can_never_be_collapsed_out_of_reach. These two
-    # can live in a collapsible panel because losing them fails loudly; that
-    # one cannot, because losing it quietly changes which money she is reading.
+    sidebar_keys = ({w.key for w in at.sidebar.button}
+                    | {w.key for w in at.sidebar.radio}
+                    | {w.key for w in at.sidebar.selectbox})
+    assert not sidebar_keys, f"controls left in the sidebar: {sidebar_keys}"
+
+    page_keys = {w.key for w in at.button} | {w.key for w in at.radio}
+    assert "ql_open" in page_keys, "logging a trade must be on the page"
+    assert "trades_refresh" in page_keys, "Refresh must be on the page"
+    assert "trades_account" in page_keys, "the account switch must be on the page"
 
 
 def test_quick_log_costs_the_page_no_height_until_it_is_opened(app_with_rows):
@@ -777,6 +783,8 @@ def test_the_account_switch_can_never_be_collapsed_out_of_reach(app_with_rows):
         "the account switch is back in the collapsible sidebar")
     assert any(r.key == "trades_account" for r in at.radio), (
         "the account switch must be on the page")
+    # Same rule now covers every control - see
+    # test_no_control_lives_anywhere_collapsible.
 
 
 def test_both_books_are_reachable_from_the_page(app_with_rows):
