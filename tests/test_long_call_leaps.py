@@ -897,16 +897,23 @@ def test_the_broker_holds_the_puts_even_though_the_call_was_paid_for():
     whole position as free. TOS holds the strike behind every put she sold, and
     the monthly buying-power limit is measured in exactly that."""
     p, _ = _logged_reversal()
-    assert p.bp_effect == 20625.0           # 22,500 collateral less the credit
+    # The WHOLE strike behind the three puts - the broker nets the premium off
+    # nothing. Her real WFC reversal reads 22,500 on TOS, which is what this
+    # used to miss by exactly the credit (it said 20,625).
+    assert p.bp_effect == 22500.0
     plain, _ = _logged_reversal(puts=0)
     assert plain.bp_effect == 0.0           # unchanged: cash, not margin
 
 
 def test_a_typed_bp_effect_still_wins():
-    """Her SOP: where the app and thinkorswim disagree, thinkorswim is right."""
+    """Her SOP: where the app and thinkorswim disagree, thinkorswim is right.
+
+    The computed figure now agrees with TOS on this shape, so the override is
+    checked against a DIFFERENT number - otherwise the test would pass without
+    the override doing anything at all."""
     p, _ = _logged_reversal()
-    p.bp_override = 22500.0
-    assert p.bp_effect == 22500.0
+    p.bp_override = 19000.0
+    assert p.bp_effect == 19000.0
 
 
 # ---------------------------------------------------- repairing an old one
@@ -988,7 +995,10 @@ def test_adding_the_puts_repairs_the_trade_without_deleting_it():
     assert fixed.credit == 0.0                      # no longer premium sold
     assert fixed.max_loss == 22740.0
     assert fixed.short_put_collateral == 22500.0
-    assert fixed.bp_effect == 20625.0
+    # The repaired trade reports what the broker actually holds - the whole
+    # strike behind the three puts, nothing netted off. Matches TOS on her real
+    # WFC reversal; this used to read 20,625, short by exactly the credit.
+    assert fixed.bp_effect == 22500.0
     assert fixed.is_debit and fixed.can_track
 
 

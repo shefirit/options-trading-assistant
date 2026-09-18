@@ -201,9 +201,9 @@ def test_the_condor_is_priced_off_the_WIDER_wing():
     first, understating the risk by a third. Price can only breach one side, so
     the risk is the wider wing less everything collected on both."""
     p = _by_id([CALL_WING, PUT_WING, MERGE])["T-CALL"]
-    # wider wing 15 x 100 x 2 contracts = 3,000, less the 702 collected
-    assert p.max_loss == 2298.0
-    assert p.buying_power == 2298.0
+    # wider wing 15 x 100 x 2 contracts = 3,000
+    assert p.buying_power == 3000.0        # what the broker holds, gross
+    assert p.max_loss == 2298.0            # less the 702 collected on both
 
 
 def test_the_absorbed_wings_risk_stops_counting_separately():
@@ -212,7 +212,7 @@ def test_the_absorbed_wings_risk_stops_counting_separately():
     positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, MERGE])
     absorbed = next(p for p in positions if p.trade_id == "T-PUT")
     assert absorbed.buying_power == 0.0 and absorbed.max_loss == 0.0
-    assert pos_mod.bp_in_use(positions) == 2298.0
+    assert pos_mod.bp_in_use(positions) == 3000.0
 
 
 def test_both_credits_count_against_the_risk():
@@ -240,9 +240,9 @@ def test_a_lopsided_condor_is_priced_off_the_side_that_can_hurt_her():
     assert p.max_loss == 50 * 100 * 2 - 702.0      # the 50-wide put wing
 
 
-def test_a_plain_spread_keeps_the_numbers_it_was_logged_with():
-    """Only a condor is repriced. A one-sided spread that has not been rolled
-    keeps its open row's figures, exactly as before."""
+def test_a_plain_spread_is_priced_the_same_way():
+    """The gross/net split is not a condor rule - it is how her broker works on
+    every defined-risk trade, so a one-sided spread reads the same way."""
     p = _by_id([CALL_WING])["T-CALL"]
-    assert p.max_loss == 10 * 100 * 2 - 272.0
-    assert p.buying_power == p.max_loss
+    assert p.buying_power == 10 * 100 * 2          # the whole width
+    assert p.max_loss == 10 * 100 * 2 - 272.0      # less the credit

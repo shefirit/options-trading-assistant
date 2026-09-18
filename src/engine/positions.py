@@ -380,6 +380,14 @@ class Position(BaseModel):
         if (self.is_debit and self.shares_cost <= 0
                 and self.short_put_collateral <= 0):
             return 0.0
+        if self.is_debit and self.short_put_collateral > 0:
+            # A LEAPS part-paid for by puts she SOLD. The broker holds the whole
+            # strike behind those puts and nets nothing off it - her WFC reads
+            # 22,500 on TOS against a stored 20,625, short by exactly what the
+            # puts paid her. short_put_collateral is already the gross figure
+            # and says so in its own docstring, so use it rather than the stored
+            # column, which was written under the netted convention.
+            return self.short_put_collateral
         return self.buying_power
 
     @property
@@ -1103,6 +1111,28 @@ def _reprice_risk(pos: Position) -> None:
     width. Both figures feed her monthly buying-power guardrail, so a stale one
     is not cosmetic.
 
+    MAX LOSS AND BUYING POWER ARE NOT THE SAME NUMBER
+    -------------------------------------------------
+    They were, and on her real account they are not. Checked against her
+    thinkorswim positions screen on 2026-09-18, every credit trade she holds:
+
+      FCX   TOS holds 1,000   app said   824   (its credit was 176)
+      BE    TOS holds 4,000   app said 3,350   (its credit was 650)
+      CLS   TOS holds 2,000   app said 1,750   (its credit was 250)
+      SOFI  TOS holds 1,700   app said 1,630   (its credit was  70)
+
+    The gap IS the credit, every time. Her broker holds the gross amount - the
+    whole width, the whole strike - and does not net the premium off it. So:
+
+      max_loss       width (or collateral) LESS everything collected. What she
+                     can actually lose, because she keeps the credit either way.
+      buying_power   the gross figure. What the broker sets aside, which is
+                     what her monthly budget is spent in.
+
+    The cash-secured branch below already worked this way, which is why the
+    three CSPs she had rolled matched TOS to the dollar while the ones she had
+    not rolled were each short by their own credit.
+
     Only the shapes whose risk is a plain function of the strikes are
     recomputed. A covered call (the shares) and a PMCC (the LEAPS) keep the
     numbers they were logged with - guessing at those would be worse than
@@ -1166,7 +1196,7 @@ def _reprice_risk(pos: Position) -> None:
                         * 100 * contracts * qty)
         if worst:
             pos.max_loss = round(max(worst - collected_all, 0.0), 2)
-            pos.buying_power = pos.max_loss
+            pos.buying_power = worst      # gross - see the note below
         return
 
     # A plain two-leg vertical, one side only: risk is the width less what she
@@ -1184,7 +1214,7 @@ def _reprice_risk(pos: Position) -> None:
         if not width:
             continue
         pos.max_loss = round(max(width - collected, 0.0), 2)
-        pos.buying_power = pos.max_loss
+        pos.buying_power = width          # gross - see the note below
         return
 
 
@@ -1441,6 +1471,15 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # of the wing that moves.
     for absorbed_id, target_id in merges:
         _apply_merge(opens.get(absorbed_id), opens.get(target_id))
+
+    # Every position, not only the rolled ones. _reprice_risk used to run at the
+    # end of a roll and nowhere else, so a trade she never rolled kept whatever
+    # the open row said - which was the NET figure, short of the broker's hold
+    # by its own credit. That is why her un-rolled spreads each read low against
+    # thinkorswim while her rolled cash secured puts matched to the dollar.
+    for pos in ordered:
+        if pos.status != "merged":      # a merged wing's risk lives on its target
+            _reprice_risk(pos)
 
     return ordered
 
