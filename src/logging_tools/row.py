@@ -236,6 +236,72 @@ def build_roll_row(
     ]
 
 
+def build_add_wing_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    option_type: str,
+    short_strike: float,
+    long_strike: float,
+    credit: float,
+    short_delta: Optional[float] = None,
+    quantity: int = 1,
+    note: str = "",
+    added_on: Optional[date] = None,
+    expiration: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "addwing" event row - the opposite side was sold onto an open credit
+    spread, making it an iron condor. Same Trade ID.
+
+    This is one trade, not two. The wings share an expiration, they are closed
+    together at 50% of the COMBINED credit per her Iron Condor page, and - the
+    part that matters in dollars - the broker holds margin for one wing, not
+    both, because price cannot breach both sides at expiration. Logging the
+    second wing as its own trade would double the buying power the app thinks
+    she has committed and measure each half against its own 50% target, which
+    is not the rule her SOP actually states.
+
+    `credit` is what the NEW wing sold for on its own. It is added to the
+    position's credit rather than replacing it, because the condor's target
+    measures against everything collected. Nothing is banked: no leg was
+    closed, so this is opening cash, not income - which is why Realized P&L
+    stays empty here while a roll row fills it.
+
+    Like a roll row, the wing's shape rides in Details JSON rather than in new
+    columns, so this needs no Apps Script redeploy.
+    """
+    option_type = "call" if str(option_type).lower() == "call" else "put"
+    text = note or (f"Added the {option_type} wing "
+                    f"{short_strike:g}/{long_strike:g} - now an iron condor")
+    details: dict[str, Any] = {
+        "type": option_type,
+        "short": round(float(short_strike), 4),
+        "long": round(float(long_strike), 4),
+        "qty": int(quantity),
+    }
+    if short_delta is not None:
+        details["delta"] = round(float(short_delta), 4)
+    return [
+        (added_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        f"{short_strike:g} / {long_strike:g}",
+        round(abs(float(short_delta)), 3) if short_delta is not None else "",
+        "", "",                       # dte/contracts - on the open row
+        round(credit, 2),             # Credit $: what this wing sold for
+        "", "", "",                   # max loss/BP/passed SOP - recomputed
+        text,
+        trade_id,
+        "addwing",
+        expiration.isoformat() if expiration is not None else "",
+        "",                           # Exit Cost $ - nothing closed
+        "",                           # Realized P&L $ - nothing banked
+        json.dumps(details, separators=(",", ":")),
+        _account(account),
+    ]
+
+
 # Fields an edit row may carry. Anything not listed here is left alone, and
 # `strategy` / `underlying` are absent on purpose - changing either makes it a
 # different trade, and the honest fix for that is delete and re-log.
