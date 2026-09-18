@@ -1234,6 +1234,52 @@ def bp_committed_this_month(positions: list[Position], today: date | None = None
 
 
 # ------------------------------------------------------------------ live pricing math
+def _contract_for_leg(chain, leg, want, tolerance_days: int = 7):
+    """The contract in `chain` that this leg actually sits on.
+
+    The trade log stores DTE AT ENTRY, never an expiration date, so a leg's
+    expiration is computed as opened + dte - and that is frequently not a listed
+    expiration at all. Her SOP aims at 45 DTE and takes the nearest real
+    expiration, so 45 days from a Friday lands on a Monday: her FCX spread
+    opened 11 September computes to 26 October, while the trade is really on
+    Friday 23 October and no 26 October contract has ever existed.
+
+    The FETCHER already knew this. _expiration_chain() asks for the expiration
+    NEAREST the target precisely because the stored one may be synthetic. Only
+    the matcher disagreed - it demanded an exact string match, found nothing,
+    and returned None. That surfaced as "Could not price this right now" on a
+    position the chain could price perfectly well, with both strikes quoted.
+
+    So: match strike and type on the chain expiration nearest the computed one,
+    and refuse only when nothing lands within `tolerance_days`. An exact date
+    still wins outright because its distance is zero, which leaves Schwab's full
+    multi-expiration chain behaving exactly as it did.
+
+    The tolerance is what stops this becoming a silent lie: a week is wider than
+    any gap between a synthetic date and the real expiration beside it, and far
+    narrower than the gap to the next month - so a position can still be honestly
+    unpriceable rather than quoted against the wrong contract.
+    """
+    if want is None:
+        return None
+    best, best_gap = None, None
+    for c in chain.contracts:
+        if c.option_type != leg.option_type:
+            continue
+        if abs(c.strike - leg.strike) >= 1e-6:
+            continue
+        try:
+            when = date.fromisoformat(str(c.expiration)[:10])
+        except (TypeError, ValueError):
+            continue
+        gap = abs((when - want).days)
+        if gap > tolerance_days:
+            continue
+        if best_gap is None or gap < best_gap:
+            best, best_gap = c, gap
+    return best
+
+
 def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, float]]:
     """What it costs to close the position's near-dated legs at today's mids.
 
@@ -1250,7 +1296,6 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
         # the near leg would be the LEAPS itself and "costs to close" would
         # come back negative - the chain quoting what selling it would PAY her.
         return None
-    exp = position.expiration.isoformat()
     entry_dtes = [leg.dte for leg in position.legs if leg.dte is not None]
     near_dte = min(entry_dtes) if entry_dtes else None
 
@@ -1260,11 +1305,7 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     for leg in position.legs:
         if near_dte is not None and leg.dte is not None and leg.dte != near_dte:
             continue   # far-dated leg (LEAPS / long-term protective put)
-        contract = next(
-            (c for c in chain.contracts
-             if c.expiration == exp and c.option_type == leg.option_type
-             and abs(c.strike - leg.strike) < 1e-6),
-            None)
+        contract = _contract_for_leg(chain, leg, position.expiration)
         if contract is None or contract.mid <= 0:
             return None
         priced_any = True
@@ -1309,14 +1350,7 @@ def position_value_from_chain(position: Position, chain,
     value = 0.0
     mids: list[tuple[Leg, float]] = []
     for leg in position.legs:
-        exp = position.leg_expiration(leg)
-        if exp is None:
-            return None
-        contract = next(
-            (c for c in chain.contracts
-             if c.expiration == exp.isoformat() and c.option_type == leg.option_type
-             and abs(c.strike - leg.strike) < 1e-6),
-            None)
+        contract = _contract_for_leg(chain, leg, position.leg_expiration(leg))
         if contract is None or contract.mid <= 0:
             return None
         # Unwinding sells what she is long and buys back what she is short.
