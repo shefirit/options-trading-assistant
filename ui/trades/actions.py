@@ -12,7 +12,7 @@ from typing import Optional
 
 import streamlit as st
 
-from src.engine.models import Action, OptionType
+from src.engine.models import Action, CheckStatus, OptionType
 from ui import components, theme
 from ui.trades.widgets import (
     _fill_price_input,
@@ -1212,3 +1212,147 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             st.session_state.pop("trades_rows", None)
             st.session_state.pop("_priced_positions", None)
             st.rerun()
+
+
+def _can_add_wing(p) -> bool:
+    """A defined-risk credit spread with only one side sold.
+
+    Not a condor already (both sides are on), not a PMCC or covered call (the
+    long leg there is the position, not protection under a wing), and not a
+    naked cash secured put (there is no long leg to make a vertical with, so
+    adding calls would be a strangle - which is not in her eight strategies).
+    """
+    from src.engine import wings
+
+    if p.status != "open" or p.is_iron_condor_shape or p.is_debit:
+        return False
+    side = wings.existing_side(p)
+    if side is None:
+        return False
+    # Needs a long leg on the SAME side: that is what makes it a vertical.
+    return any(l.action is Action.BUY and l.option_type is side for l in p.legs)
+
+
+def _add_wing_form(p) -> None:
+    """Sell the opposite wing onto an open credit spread, making it a condor.
+
+    Her ask (2026-09-18): "sometimes i want to add to credit spread the
+    oposite side so it makes it iron condor."
+
+    She types the fill rather than picking off a chain - her choice, and the
+    right one here: this is recorded AFTER the order filled in thinkorswim, so
+    the strikes and the credit are facts on her statement, not estimates off a
+    mid. The one thing typed entry cannot verify is the delta, so the form asks
+    for it and says plainly what it cannot check when she leaves it blank.
+
+    Warns, never blocks. Her Iron Condor page wants 0.15 per leg and her put
+    credit spread enters at 0.25, so a legged-in condor is nearly always wider
+    than the page describes. Rita's ruling: show her the number and let her
+    decide. `wings.blocking()` covers only the cases where the result would not
+    be an iron condor at all.
+    """
+    import datetime as dt
+
+    from src.engine import config_loader, wings
+
+    if not _can_add_wing(p):
+        return
+
+    side = wings.missing_side(p)
+    if side is None:
+        return
+    word = side.value
+    have = wings.existing_side(p)
+    width = wings.existing_width(p)
+
+    with st.expander(f"🦅 Add the {word} side (make it an iron condor)",
+                     key=f"wing_{p.trade_id}"):
+        theme.note(
+            f"You are short a {have.value} spread. Selling a {word} spread on "
+            f"top of it, at the SAME expiration, turns this one trade into an "
+            f"iron condor - you collect a second credit and, because price "
+            f"cannot break both sides at once, your broker holds margin for "
+            f"one wing rather than two.")
+
+        c1, c2 = st.columns(2)
+        short_strike = c1.number_input(
+            f"Short {word} strike (the one you SOLD)", min_value=0.0, step=1.0,
+            value=0.0, format="%.2f", key=f"wing_ss_{p.trade_id}",
+            help=f"Shows as -1 in thinkorswim. This is the strike your "
+                 f"{word} wing is defending.")
+        long_strike = c2.number_input(
+            f"Long {word} strike (the one you BOUGHT)", min_value=0.0, step=1.0,
+            value=0.0, format="%.2f", key=f"wing_ls_{p.trade_id}",
+            help=("Shows as +1 in thinkorswim - your protection. On a call "
+                  "wing it sits ABOVE the short strike; on a put wing, below."
+                  + (f" Your open wing is {width:g} wide, and matching it "
+                     f"keeps the risk the same on both sides." if width else "")))
+
+        c3, c4 = st.columns(2)
+        credit = c3.number_input(
+            "Credit collected on this wing ($)", min_value=0.0, step=5.0,
+            value=0.0, format="%.2f", key=f"wing_cr_{p.trade_id}",
+            help="What the new spread alone paid you, for all your contracts - "
+                 "straight off the TOS fill. It is ADDED to what the first "
+                 "wing collected, and the 50% target then measures against "
+                 "both.")
+        delta = c4.number_input(
+            f"Short {word} delta (optional)", min_value=0.0, max_value=1.0,
+            step=0.01, value=0.0, format="%.2f", key=f"wing_dl_{p.trade_id}",
+            help="The delta on the strike you sold, ignoring the minus sign. "
+                 "Leave it at 0 if you did not note it - the app will then say "
+                 "it cannot check the one rule your condor page is built on.")
+
+        added_on = st.date_input(
+            "Date you filled it", value=dt.date.today(),
+            format=components.DATE_FMT, key=f"wing_dt_{p.trade_id}")
+
+        stop = wings.blocking(p, word, float(short_strike), float(long_strike),
+                              p.expiration)
+        ready = float(short_strike) > 0 and float(long_strike) > 0
+
+        if ready and stop:
+            for reason in stop:
+                st.error(components._esc(reason))
+        elif ready:
+            settings = config_loader.load_settings()
+            strategy = config_loader.get_strategy("iron_condor") or {}
+            for check in wings.checks(
+                    p, word, float(short_strike), float(long_strike),
+                    float(credit), float(delta) or None, settings, strategy,
+                    quantity=int(p.contracts or 1)):
+                body = f"**{check.icon} {check.name}** - {check.message}"
+                if check.status is CheckStatus.WARN:
+                    st.warning(components._esc(body))
+                else:
+                    theme.note(body)
+
+        note = st.text_input("Note (optional)", key=f"wing_nt_{p.trade_id}")
+
+        if st.button("Record the wing I sold", type="primary",
+                     key=f"wingbtn_{p.trade_id}"):
+            if not ready:
+                st.warning("Type both strikes first.")
+            elif stop:
+                st.warning("Fix the problems above - what you have typed would "
+                           "not be an iron condor.")
+            elif not credit:
+                st.warning("Type the credit this wing collected - it is on "
+                           "your TOS fill.")
+            else:
+                from src.logging_tools.trade_logger import add_wing
+                add_wing(
+                    p.trade_id, p.underlying, p.strategy_name, word,
+                    short_strike=float(short_strike),
+                    long_strike=float(long_strike), credit=float(credit),
+                    short_delta=float(delta) or None,
+                    quantity=1, note=note, added_on=added_on,
+                    expiration=p.expiration, account=p.account)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Recorded: {p.underlying} is now an iron condor. "
+                    f"${float(credit):,.0f} more collected, "
+                    f"${float(p.credit) + float(credit):,.0f} in total - and "
+                    f"that total is what your 50% target measures against now.")
+                st.rerun()

@@ -36,6 +36,33 @@ from pydantic import BaseModel, Field
 from src.engine.models import Action, Leg, OptionType
 
 
+class WingEvent(BaseModel):
+    """The opposite wing sold onto an open credit spread, making it a condor.
+
+    Unlike a roll, nothing is bought back and nothing is banked: this only adds
+    legs and adds to the credit the profit target measures against.
+    """
+
+    added_on: Optional[date] = None
+    option_type: str = "call"                # the side that was ADDED
+    short_strike: float = 0.0
+    long_strike: float = 0.0
+    credit: float = 0.0                      # what this wing sold for on its own
+    short_delta: Optional[float] = None      # per share, as she typed it
+    quantity: int = 1
+    expiration: Optional[date] = None
+    note: str = ""
+
+    @property
+    def kind(self) -> OptionType:
+        return (OptionType.CALL if str(self.option_type).lower() == "call"
+                else OptionType.PUT)
+
+    @property
+    def width(self) -> float:
+        return abs(self.short_strike - self.long_strike)
+
+
 class RollEvent(BaseModel):
     """One roll of the income leg: buying back the option you sold and selling
     a further-out one in its place, usually for a net credit."""
@@ -154,6 +181,11 @@ class Position(BaseModel):
     passed_sop: str = ""
     note: str = ""
     legs: list[Leg] = Field(default_factory=list)
+    # Wings added after the open - the credit spread that became a condor.
+    # Kept as events (rather than only as legs) so the card can say WHEN the
+    # second side went on and what it collected, which is the whole story of
+    # a legged-in condor.
+    wings: list["WingEvent"] = Field(default_factory=list)
     # The legs exactly as she opened them. `legs` tracks what she holds TODAY -
     # a roll rewrites the short call's strike in place - so day-one strikes
     # would otherwise be gone by the second roll.
@@ -521,21 +553,46 @@ class Position(BaseModel):
         return self.is_uncovered or self.is_long_premium
 
     @property
+    def is_iron_condor_shape(self) -> bool:
+        """Both a put vertical and a call vertical, on one expiration.
+
+        This is what a credit spread becomes once she sells the other side onto
+        it. The row still says "Put Credit Spread" - it was one when she opened
+        it - but the position being managed is a condor, and the condor page is
+        what has a rule for two wings.
+        """
+        near = min((l.dte for l in self.legs if l.dte is not None), default=None)
+        here = [l for l in self.legs
+                if l.dte is None or near is None or l.dte == near]
+        types = {(l.option_type, l.action) for l in here}
+        return ({(OptionType.PUT, Action.SELL), (OptionType.PUT, Action.BUY),
+                 (OptionType.CALL, Action.SELL), (OptionType.CALL, Action.BUY)}
+                <= types)
+
+    @property
     def effective_strategy_key(self) -> str:
         """The strategy this position is actually RUNNING today.
 
-        Only one thing changes it: a bought LEAPS call with a short call
-        written against it is a Poor Man's Covered Call by shape, whatever the
-        row says it was logged as. That matters because the exit rules come
-        from the strategy - and the LEAPS page has no 50% target and no 21-day
-        exit, because it never expected a short call to manage. The PMCC page
-        has both, and they are what the written call needs.
+        Two things change it, and both are the same idea: the shape she holds
+        today outranks the name the row was written under, because the exit
+        rules come from the strategy.
+
+        A bought LEAPS call with a short call written against it is a Poor
+        Man's Covered Call - the LEAPS page has no 50% target and no 21-day
+        exit, because it never expected a short call to manage.
+
+        A credit spread with the opposite wing sold onto it is an Iron Condor -
+        and the condor page is the only one with a rule for two wings: 50% of
+        the combined net credit, and a close-or-roll decision per wing at 21
+        DTE.
 
         The trade keeps its own name and its own money on the card. This is
         about which exit rules to run, nothing else.
         """
         if self.is_leaps_call_trade and self.has_short_call:
             return "poor_mans_covered_call"
+        if self.is_iron_condor_shape:
+            return "iron_condor"
         return self.strategy_key
 
     @property
@@ -657,6 +714,46 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
         except (TypeError, ValueError):
             return data, []
     return data, legs
+
+
+def _apply_wing(pos: Position, wing: WingEvent) -> None:
+    """Sell the opposite wing onto an open credit spread.
+
+    Adds two legs and adds the wing's credit to the position's. It ADDS rather
+    than replaces (which is what a roll does) because her Iron Condor page
+    closes the whole thing at 50% of the NET credit - everything collected,
+    both wings - so replacing would measure the target against half the money.
+
+    The legs take the position's existing near expiration. An iron condor's two
+    wings expire together by definition; the form that writes this refuses a
+    mismatched date rather than letting one arrive here.
+    """
+    pos.wings.append(wing)
+
+    kind = wing.kind
+    dte = None
+    if wing.expiration is not None and pos.opened is not None:
+        dte = max((wing.expiration - pos.opened).days, 0)
+    if dte is None:
+        dte = min((l.dte for l in pos.legs if l.dte is not None), default=None)
+    exp = wing.expiration or pos.expiration
+
+    delta = wing.short_delta
+    if delta is not None:
+        # Stored per share with the chain's sign convention: puts negative.
+        delta = -abs(delta) if kind is OptionType.PUT else abs(delta)
+
+    pos.legs.append(Leg(
+        role=f"short_{kind.value}", action=Action.SELL, option_type=kind,
+        strike=wing.short_strike, quantity=wing.quantity, dte=dte,
+        expiration=exp, delta=delta or 0.0))
+    pos.legs.append(Leg(
+        role=f"long_{kind.value}", action=Action.BUY, option_type=kind,
+        strike=wing.long_strike, quantity=wing.quantity, dte=dte,
+        expiration=exp))
+
+    pos.credit = round(pos.credit + wing.credit, 2)
+    pos.open_cash = round(pos.open_cash + wing.credit, 2)
 
 
 def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
@@ -1011,6 +1108,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     roll_seq: dict[str, int] = {}
     assigns: list[tuple[str, dict[str, Any]]] = []
     leg_closes: list[tuple[str, LegCloseEvent]] = []
+    wings: list[tuple[str, WingEvent]] = []
     # Closes AND reopens, in the order they were written. A close ends the
     # trade, a reopen after it says that close never happened, and a close
     # after that ends it again - the last word wins, exactly as a corrected
@@ -1072,6 +1170,23 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if event == "edit" and trade_id:
             data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
             edits.append((trade_id, data))
+            continue
+
+        if event == "addwing" and trade_id:
+            # The wing's shape rides in Details JSON for the same reason a
+            # roll's does: no new column, no Apps Script redeploy.
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
+            wings.append((trade_id, WingEvent(
+                added_on=_to_date(_get(row, idx, "Date", 0)),
+                option_type=str(data.get("type") or "call"),
+                short_strike=_to_float(data.get("short")) or 0.0,
+                long_strike=_to_float(data.get("long")) or 0.0,
+                credit=_to_float(_get(row, idx, "Credit $", 7)) or 0.0,
+                short_delta=_to_float(data.get("delta")),
+                quantity=int(_to_float(data.get("qty")) or 1),
+                expiration=_to_date(_get(row, idx, "Expiration", 14)),
+                note=str(_get(row, idx, "Notes", 11) or ""),
+            )))
             continue
 
         if event == "roll" and trade_id:
@@ -1174,6 +1289,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_assignment(pos, a)
+
+    # Wings before rolls. A wing only ever ADDS legs, and a roll that came
+    # after it may well have moved one of them - so the legs have to exist
+    # before the roll goes looking for the near short on that side.
+    for trade_id, wing in sorted(wings, key=lambda r: r[1].added_on or date.min):
+        pos = opens.get(trade_id)
+        if pos is not None:
+            _apply_wing(pos, wing)
 
     # Rolls in the order they happened, so the last one wins on strike/date.
     for trade_id, _seq, roll in sorted(

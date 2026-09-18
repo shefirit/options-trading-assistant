@@ -10,7 +10,8 @@ from typing import Any, Optional
 
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
-from src.logging_tools.row import (COLUMNS, build_assign_row, build_close_row,
+from src.logging_tools.row import (COLUMNS, build_add_wing_row,
+                                   build_assign_row, build_close_row,
                                    build_edit_row, build_leg_close_row,
                                    build_reopen_row, build_roll_row, build_row,
                                    new_trade_id)
@@ -101,6 +102,35 @@ def roll_trade(
                          rolled_on=rolled_on, account=account,
                          option_type=option_type,
                          new_long_strike=new_long_strike)
+    return _append(row)
+
+
+def add_wing(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    option_type: str,
+    short_strike: float,
+    long_strike: float,
+    credit: float,
+    short_delta: Optional[float] = None,
+    quantity: int = 1,
+    note: str = "",
+    added_on: Optional[date] = None,
+    expiration: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Record the opposite wing being sold onto an open credit spread (an
+    "addwing" event on the same Trade ID). Returns (destination, went_to_sheet).
+
+    `credit` is the new wing's own net credit and adds to the position's; it is
+    not banked, because nothing was closed.
+    """
+    row = build_add_wing_row(trade_id, underlying, strategy_name, option_type,
+                             short_strike, long_strike, credit,
+                             short_delta=short_delta, quantity=quantity,
+                             note=note, added_on=added_on,
+                             expiration=expiration, account=account)
     return _append(row)
 
 

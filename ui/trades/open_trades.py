@@ -10,6 +10,7 @@ import streamlit as st
 
 from ui import components, theme
 from ui.trades.actions import (
+    _add_wing_form,
     _assign_form,
     _assignment_plan_panel,
     _close_form,
@@ -193,6 +194,10 @@ def _trade_card(it: dict, strategies, provider) -> None:
             # was the only route, and it turned one put rolled four times into
             # five separate trades with four losses between them.
             _roll_form(p, live, provider)
+        # Turning a one-sided credit spread into an iron condor by selling the
+        # other side onto it. Sits next to the roll because it is the same kind
+        # of decision - a change to a trade she is keeping, not a way out of it.
+        _add_wing_form(p)
         # Her third way out of a credit spread: sell the long put and let the
         # short one assign you. Offered before the close button, because it is
         # the decision the close button used to swallow.
