@@ -2698,6 +2698,141 @@ def _plan_editor(settings) -> None:
                "in permanently.")
 
 
+def _reconcile_panel(settings) -> None:
+    """Her log against what thinkorswim actually holds.
+
+    Built 2026-09-18, after reconciling her paperMoney book by hand found three
+    disagreements in nine positions - a short call the log had no row for, a
+    wing logged at half its size, and a spread that had never been opened. Her
+    own words on the missing call: "i sold it manually and forgot to log it. or
+    maybe it was mistake."
+
+    The point is not that she is careless. It is that the app can only see what
+    reaches the sheet, so there was no way for her to find out - and every
+    number the app reports is computed from that sheet. On the paper book it
+    cost $460 of pretend money. The same gap on the real account is a naked
+    call nobody knows about.
+
+    Deliberately read-only. It reports and never writes: what to do about a
+    finding is a judgement about her own trading, and a screen that silently
+    "corrected" her log from a pasted screenshot would be the worst possible
+    version of this.
+    """
+    from src.engine import positions as pos_mod, reconcile
+    from src.engine.models import Action
+    from src.logging_tools.trade_logger import fetch_all_rows
+    from ui.trades import account as trades_account
+
+    st.markdown("#### 🔍 Check your log against thinkorswim")
+    theme.note(
+        "Everything this app tells you - buying power, your monthly budget, "
+        "your 50% targets - is worked out from your trade log. If a trade is "
+        "missing from the log, or logged at the wrong size, those numbers are "
+        "wrong and nothing here can tell. This is the check.")
+
+    with st.expander("How to copy your positions out of thinkorswim",
+                     key="recon_how"):
+        theme.note(
+            "In thinkorswim, open the **Monitor** tab and expand the positions "
+            "you want checked (click the ▸ arrow beside a symbol to show its "
+            "legs). Select the rows, copy, and paste below.\n\n"
+            "**Paste the whole list, not part of it.** Anything you leave out "
+            "looks exactly like a trade you closed without logging, so a "
+            "partial paste produces alarming warnings that are not real.\n\n"
+            "Legs are optional but worth having: without them this can only "
+            "compare buying power, and it is the legs that catch a contract "
+            "you hold and the app has never heard of.")
+
+    book = st.radio(
+        "Which account are you checking?",
+        ["💵 Real money", "📝 Practice (PaperMoney)"],
+        horizontal=True, key="recon_book",
+        help="They are separate books and separate thinkorswim accounts - "
+             "checking one against the other's screen would flag every single "
+             "position.")
+    want = "real" if book.startswith("💵") else "paper"
+
+    pasted = st.text_area(
+        "Paste your thinkorswim positions here", height=180, key="recon_text",
+        placeholder="XSP — 761.81 -1.97 -0.26%   ...   (1,792.00$)   —\n"
+                    "+3 Sep 30 (12d) 725 P   ...\n"
+                    "-3 Sep 30 (12d) 735 P   ...")
+
+    if not st.button("Compare", type="primary", key="recon_go"):
+        return
+    if not pasted.strip():
+        st.warning("Paste your positions first.")
+        return
+
+    broker, unreadable = reconcile.parse_tos(pasted)
+    if not broker:
+        st.error("Nothing in that paste looked like a position. Copy the rows "
+                 "from the Monitor tab, including the line with the symbol on "
+                 "it, and try again.")
+        return
+
+    try:
+        header, rows, _src = fetch_all_rows()
+        app_open = [p for p in pos_mod.open_positions(pos_mod.parse_rows(header, rows))
+                    if (p.account or "") == want]
+    except Exception as e:
+        st.error(f"Could not read your trade log just now: {e}")
+        return
+
+    findings = reconcile.compare(app_open, broker)
+    s = reconcile.summary(app_open, broker, findings)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("In your log", f"{s['app_count']}", f"${s['app_bp']:,.0f}")
+    c2.metric("At your broker", f"{s['broker_count']}", f"${s['broker_bp']:,.0f}")
+    c3.metric("Buying power gap", f"${abs(s['gap']):,.0f}",
+              delta=None if abs(s["gap"]) < 25 else "worth a look",
+              delta_color="off")
+
+    # What it READ, always - a misparse that is not visible is a wrong answer
+    # wearing the clothes of a right one.
+    with st.expander(f"What the app read from your paste "
+                     f"({len(broker)} position(s))", key="recon_parsed"):
+        for b in broker:
+            bp = f"${b.bp_effect:,.2f}" if b.bp_effect is not None else "no BP read"
+            theme.note(f"**{b.symbol}** - {bp}" + ("" if not b.legs else "  \n" + "  \n".join(
+                f"&nbsp;&nbsp;&nbsp;&nbsp;{'+' if l.action is Action.BUY else '-'}"
+                f"{l.quantity} x {l.strike:g} {l.option_type.value}"
+                for l in b.legs)))
+        if unreadable:
+            st.warning(components._esc(
+                f"{len(unreadable)} line(s) could not be read and were "
+                f"ignored. If one of them was a position, this check is "
+                f"incomplete:\n\n" + "\n".join(f"- {u[:120]}" for u in unreadable[:8])))
+
+    if not findings:
+        st.success(f"**Everything matches.** All {s['app_count']} "
+                   f"{want} position(s) in your log line up with your broker, "
+                   f"legs and buying power.")
+        return
+
+    warns = [f for f in findings if f.severity == "warn"]
+    st.warning(components._esc(
+        f"**{len(findings)} thing(s) to look at** - {len(warns)} that change "
+        f"what you are actually holding, "
+        f"{len(findings) - len(warns)} about buying power."))
+
+    for f in findings:
+        with st.container(border=True):
+            if f.severity == "warn":
+                st.markdown(components._esc(f"**⚠️ {f.headline}**"))
+            else:
+                st.markdown(components._esc(f"**ℹ️ {f.headline}**"))
+            theme.note(f.detail)
+            if f.trade_id:
+                theme.note(f"Trade ID `{f.trade_id}` - find it in "
+                           f"**📒 My trades** to fix it.")
+
+    theme.note(
+        "Nothing here has been changed. Fix what is real in **📒 My trades** - "
+        "log a missing trade, record a close you forgot, or correct a size - "
+        "and run this again.")
+
 def _tab_settings(settings, provider) -> None:
     """The one home for connections, data status, and her plan numbers.
 
@@ -2724,6 +2859,8 @@ def _tab_settings(settings, provider) -> None:
     st.markdown("#### 🎯 Your goals and budget")
     _plan_metrics(settings)
     _plan_editor(settings)
+    st.divider()
+    _reconcile_panel(settings)
     st.markdown(f"[📖 Open your Notion hub]({settings['notion']['hub_url']})")
     live = trades_account.live_from(settings)
     if live is None:
