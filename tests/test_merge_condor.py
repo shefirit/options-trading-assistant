@@ -246,3 +246,71 @@ def test_a_plain_spread_is_priced_the_same_way():
     p = _by_id([CALL_WING])["T-CALL"]
     assert p.buying_power == 10 * 100 * 2          # the whole width
     assert p.max_loss == 10 * 100 * 2 - 272.0      # less the credit
+
+
+# ------------------------------ corrections that must survive the replay
+def test_a_roll_puts_back_the_size_it_took_off():
+    """Her paper SMH is short TWO 615 calls against one LEAPS. Buying the call
+    back drops the leg, and the roll that writes the next one used to re-add it
+    with a hardcoded quantity of 1 - silently turning a ratio into a single
+    every time that side was rolled, and wiping any correction she had made."""
+    from datetime import timedelta
+    from src.engine.models import Trade
+    from src.logging_tools.row import build_roll_row
+
+    opened = date(2026, 7, 21)
+    legs = [
+        Leg(role="long_call_leaps", action=Action.BUY, option_type=OptionType.CALL,
+            strike=460.0, premium=180.0, dte=331),
+        Leg(role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+            strike=615.0, premium=4.6, dte=87, quantity=2),
+    ]
+    t = Trade(strategy_key="poor_mans_covered_call", underlying="SMH",
+              legs=legs, contracts=1, underlying_price=563.0)
+    row = build_row(t, "Poor Man's Covered Call (PMCC)",
+                    {"credit": 460.0, "account": "paper"}, True, "",
+                    trade_id="SMH1", opened_on=opened)
+    # bought back with nothing written, then a new call sold a week later
+    back = build_roll_row("SMH1", "SMH", "PMCC", -300.0,
+                          rolled_on=opened + timedelta(days=7), account="paper")
+    again = build_roll_row("SMH1", "SMH", "PMCC", 470.0, new_strike=615.0,
+                           new_expiration=opened + timedelta(days=94),
+                           new_credit=470.0,
+                           rolled_on=opened + timedelta(days=8), account="paper")
+
+    p = parse_rows(COLUMNS, [row, back, again])[0]
+    short = next(l for l in p.legs if l.role == "short_call")
+    assert short.quantity == 2, "the ratio collapsed to a single on the roll"
+
+
+def test_a_typed_bp_effect_can_be_corrected_after_the_fact():
+    """Her standing ruling is that TOS is right. That has to be sayable about a
+    trade already in the log, not only when it is first written - the app
+    cannot derive the margin on SMH's uncovered call, so her broker's number is
+    the only honest source."""
+    from src.logging_tools.row import build_edit_row
+
+    edit = build_edit_row("T-CALL", "CRWD", "Call Credit Spread",
+                          {"bp_effect": 6563.5}, edited_on=date(2026, 9, 18))
+    p = _by_id([CALL_WING, edit])["T-CALL"]
+    assert p.bp_effect == 6563.5
+
+
+def test_one_malformed_edit_does_not_take_the_whole_log_down():
+    """A legs block written as a JSON string rather than a list used to raise
+    out of parse_rows, so ONE bad row made every trade in her sheet
+    unreadable."""
+    import json as _json
+    from src.logging_tools.row import build_edit_row
+
+    as_string = build_edit_row(
+        "T-CALL", "CRWD", "Call Credit Spread",
+        {"legs": _json.dumps([{"role": "short_call", "action": "sell",
+                               "type": "call", "strike": 240.0, "qty": 5}])},
+        edited_on=date(2026, 9, 18))
+    p = _by_id([CALL_WING, as_string])["T-CALL"]
+    assert [l.quantity for l in p.legs] == [5]      # parsed, not crashed
+
+    junk = build_edit_row("T-CALL", "CRWD", "Call Credit Spread",
+                          {"legs": ["not-a-leg", 42]}, edited_on=date(2026, 9, 18))
+    assert parse_rows(COLUMNS, [CALL_WING, junk])    # still reads

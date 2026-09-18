@@ -184,6 +184,11 @@ class Position(BaseModel):
     # Set when this trade turned out to be the other wing of another one. The
     # row stays in her sheet exactly as she wrote it; this says how to read it.
     merged_into: str = ""
+    # How many contracts of each short side she held before a buy-back dropped
+    # the leg. A roll that writes the next one has to put back what was there:
+    # assuming one silently collapses a ratio (her SMH is short TWO 615 calls
+    # against a single LEAPS) the first time that side is rolled.
+    prior_short_qty: dict[str, int] = Field(default_factory=dict)
     # Wings added after the open - the credit spread that became a condor.
     # Kept as events (rather than only as legs) so the card can say WHEN the
     # second side went on and what it collected, which is the whole story of
@@ -710,6 +715,11 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
         return {}, []
     legs = []
     for d in data.get("legs", []):
+        if not isinstance(d, dict):
+            # One malformed leg used to raise out of parse_rows and take the
+            # WHOLE log down with it - every trade unreadable because one edit
+            # row was written wrong. Skip the leg instead.
+            continue
         try:
             legs.append(Leg(
                 role=d.get("role", ""),
@@ -915,7 +925,18 @@ def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
 
 
 def _legs_from_json(raw: Any) -> list[Leg]:
-    """Legs out of an edit's changes block - same shape the open row stores."""
+    """Legs out of an edit's changes block - same shape the open row stores.
+
+    A caller that json.dumps()ed the list before handing it over is accepted
+    too. The cell is JSON either way, so the two are indistinguishable once
+    they are in her sheet, and refusing one of them only turns a writer's slip
+    into a log that will not parse.
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return []
     return _parse_details(json.dumps({"legs": raw}))[1] if raw else []
 
 
@@ -978,6 +999,15 @@ def _apply_edit(pos: Optional[Position],
         pos.max_loss = _to_float(changes["max_loss"]) or 0.0
     if "buying_power" in changes:
         pos.buying_power = _to_float(changes["buying_power"]) or 0.0
+    if "bp_effect" in changes:
+        # The real BP Effect read off thinkorswim. Her standing ruling is that
+        # where the app and TOS disagree, TOS is right - this is how that gets
+        # said about a trade already in the log, rather than only at the moment
+        # it was written. It wins over everything computed, so it is also the
+        # honest answer for a shape the app cannot model: her SMH holds two
+        # short calls against one LEAPS, and the margin on the uncovered one is
+        # not something the app knows how to derive.
+        pos.bp_override = _to_float(changes["bp_effect"])
     if "account" in changes:
         pos.account = _account_of(changes["account"], {})
     if "note" in changes:
@@ -1048,6 +1078,7 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
         # not hold that contract any more, and leaving it would keep counting
         # down to an expiration that no longer applies to her.
         if leg is not None:
+            pos.prior_short_qty[kind.value] = max(int(leg.quantity or 1), 1)
             pos.legs.remove(leg)
         pos.credit = 0.0
         pos.expiration = _long_side_expiration(pos) or pos.expiration
@@ -1063,9 +1094,13 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
                else None)
     if leg is None:
         # She was uncovered and has written a fresh one against the long side.
+        # Same size as the one that came off, not a hardcoded single: on a
+        # ratio the two are different numbers, and assuming one turns her SMH
+        # from short two calls into short one the moment it is rolled.
         pos.legs.append(Leg(
             role=f"short_{kind.value}", action=Action.SELL, option_type=kind,
-            strike=roll.new_strike, quantity=1, dte=new_dte))
+            strike=roll.new_strike,
+            quantity=pos.prior_short_qty.get(kind.value, 1), dte=new_dte))
     else:
         _move_leg(leg, roll.new_strike, new_dte)
 

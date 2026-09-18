@@ -341,7 +341,8 @@ def build_merge_row(
 # `strategy` / `underlying` are absent on purpose - changing either makes it a
 # different trade, and the honest fix for that is delete and re-log.
 EDITABLE = ("opened_on", "expiration", "contracts", "credit", "open_cash",
-            "legs", "strikes", "max_loss", "buying_power", "account", "note")
+            "legs", "strikes", "max_loss", "buying_power", "bp_effect",
+            "account", "note")
 
 
 def build_edit_row(
