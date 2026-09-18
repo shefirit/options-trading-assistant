@@ -31,7 +31,7 @@ account:
   #
   # Leave it empty to measure year one from live_from, which is the right answer
   # for an account whose plan has never changed.
-  plan_from: ""
+  plan_from: "2026-09-15"
 
 # Your income goals (from your Notion hub).
 targets:
