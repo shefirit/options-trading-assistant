@@ -52,7 +52,10 @@ def test_open_row_round_trips_into_a_position():
     assert p.underlying == "SPX"
     assert p.strategy_key == "put_credit_spread"
     assert p.credit == 300.0
-    assert p.buying_power == 2200.0
+    # Gross and net are different numbers now. The broker holds the whole
+    # 25-wide spread; she can only lose that less the credit she keeps.
+    assert p.buying_power == 2500.0
+    assert p.max_loss == 2200.0
     assert len(p.legs) == 2 and p.legs[0].strike == 5000
     assert p.expiration == date.today() + timedelta(days=30)
     assert p.dte_left() == 30
@@ -94,7 +97,7 @@ def test_bp_in_use_counts_only_open_trades():
         build_close_row("B", "SPX", "Put Credit Spread", 150.0, 150.0, "50%"),
     ]
     positions = parse_rows(COLUMNS, rows)
-    assert bp_in_use(positions) == 2200.0
+    assert bp_in_use(positions) == 2500.0
 
 
 def test_bp_committed_ignores_trades_opened_earlier_months():
@@ -108,8 +111,8 @@ def test_bp_committed_ignores_trades_opened_earlier_months():
     ]
     positions = parse_rows(COLUMNS, rows)
     # An open June trade is still capital at work, but it spent JUNE's budget.
-    assert bp_in_use(positions) == 4400.0
-    assert bp_committed_this_month(positions, today=today) == 2200.0
+    assert bp_in_use(positions) == 5000.0
+    assert bp_committed_this_month(positions, today=today) == 2500.0
 
 
 def test_bp_committed_counts_trades_already_closed_this_month():
@@ -126,9 +129,9 @@ def test_bp_committed_counts_trades_already_closed_this_month():
     ]
     positions = parse_rows(COLUMNS, rows)
     # One open + one closed, both opened this month = both counted.
-    assert bp_committed_this_month(positions, today=today) == 4400.0
+    assert bp_committed_this_month(positions, today=today) == 5000.0
     # The still-open figure is a different question and still answers it.
-    assert bp_in_use(positions) == 2200.0
+    assert bp_in_use(positions) == 2500.0
 
 
 def test_bp_committed_matches_the_month_view_tile():

@@ -112,7 +112,9 @@ def test_rolling_a_spread_wider_raises_the_risk_it_reports(open_put_spread_row):
                 new_credit=250.0, option_type="put", new_long_strike=85.0)
 
     assert p.max_loss == pytest.approx(1000.0 - 150.0 - 60.0)
-    assert p.buying_power == p.max_loss
+    # The broker holds the whole 10-wide spread and nets nothing off it -
+    # checked against her thinkorswim positions screen, 2026-09-18.
+    assert p.buying_power == pytest.approx(1000.0)
 
 
 # ------------------------------------------------------------------ old rows still read
