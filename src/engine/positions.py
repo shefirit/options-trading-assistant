@@ -551,11 +551,22 @@ class Position(BaseModel):
     def leg_expiration(self, leg: Leg) -> Optional[date]:
         """When this leg expires.
 
-        Quick Log stores each leg's DTE as measured from `opened` on the day it
-        was written (dte = (expiration - opened).days), so adding it back to
-        `opened` reproduces the exact date with no extra column to store. A
-        roll updates the short leg's dte the same way, keeping this true.
+        The stored date wins whenever the row has one. Rows written from Find a
+        trade since 2026-09-18 carry the chain's own expiration per leg, which
+        is the only fully reliable answer.
+
+        Otherwise: DTE is measured from `opened` on the day the row was written
+        (dte = (expiration - opened).days), so adding it back reproduces the
+        date - as long as the trade sits on an expiration that opened + dte
+        actually lands on. It often does not. That reconstruction is why every
+        chain lookup matches on the NEAREST expiration within a week rather than
+        an exact one, and it stays the fallback for every row written before
+        the real date was captured.
+
+        A roll updates the short leg's dte the same way, keeping this true.
         """
+        if leg.expiration is not None:
+            return leg.expiration
         if leg.dte is None or self.opened is None:
             return None
         return self.opened + timedelta(days=int(leg.dte))
@@ -641,6 +652,7 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
                 premium=float(d.get("premium", 0.0) or 0.0),
                 quantity=int(d.get("qty", 1) or 1),
                 dte=d.get("dte"),
+                expiration=d.get("exp") or None,
             ))
         except (TypeError, ValueError):
             return data, []
