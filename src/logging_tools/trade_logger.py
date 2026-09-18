@@ -167,9 +167,14 @@ def close_leg(
     note: str = "",
     closed_on: Optional[date] = None,
     account: str = "",
+    quantity: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Record that ONE leg came off while the rest of the trade stayed open (a
     "legclose" event on the same Trade ID).
+
+    `quantity` is how many contracts of that leg came off - leave it out for
+    the whole leg. A partial is for a leg bigger than the piece she took off,
+    such as buying back one of two short calls.
 
     The fill this is written for: a credit spread where she sells the long put
     back and leaves the short put alone so it can be assigned. Returns
@@ -178,6 +183,7 @@ def close_leg(
     defaults to today.
     """
     row = build_leg_close_row(trade_id, underlying, strategy_name, cash,
+                              quantity=quantity,
                               strike=strike, option_type=option_type, side=side,
                               for_assignment=for_assignment, note=note,
                               closed_on=closed_on, account=account)

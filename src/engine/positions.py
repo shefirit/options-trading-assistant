@@ -132,6 +132,15 @@ class LegCloseEvent(BaseModel):
     # the same fill could equally be someone taking the protection off to
     # squeeze the last dollar out of it, which wants the opposite advice.
     for_assignment: bool = False
+    # How many contracts of that leg came off. None means the whole leg, which
+    # is what every legclose written before this meant and still means.
+    #
+    # A partial exists because a leg can be bigger than the thing she wants to
+    # take off: her paper SMH is short TWO 615 calls against one LEAPS, so one
+    # of them is covered and the other is naked. Closing "the naked call" is
+    # closing ONE of the two, and recording it as the whole leg would report
+    # her out of a position she is still in.
+    quantity: Optional[int] = None
     note: str = ""
 
 
@@ -904,7 +913,15 @@ def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
 
     leg = _match_leg(pos, event)
     if leg is not None:
-        pos.legs.remove(leg)
+        held = max(int(leg.quantity or 1), 1)
+        taken = int(event.quantity) if event.quantity else held
+        if taken < held:
+            # Part of the leg came off and the rest is still hers. Shrinking it
+            # rather than removing it is the whole difference between "I closed
+            # the naked call" and "I have no short calls any more".
+            leg.quantity = held - taken
+        else:
+            pos.legs.remove(leg)
 
     if event.cash > 0:
         pos.credit = round(pos.credit + event.cash, 2)
@@ -1330,6 +1347,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 option_type=str(data.get("type") or "put"),
                 side=str(data.get("side") or "buy"),
                 for_assignment=bool(data.get("for_assignment")),
+                quantity=(int(_to_float(data.get("qty")) or 0) or None),
                 note=str(_get(row, idx, "Notes", 11) or ""),
             )))
             continue
