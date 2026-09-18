@@ -757,6 +757,10 @@ def _apply_wing(pos: Position, wing: WingEvent) -> None:
 
     pos.credit = round(pos.credit + wing.credit, 2)
     pos.open_cash = round(pos.open_cash + wing.credit, 2)
+    # The position is a different shape now, so what the broker holds against
+    # it is a different number. A roll already does this; a wing has to, or the
+    # condor keeps the buying power of one wing while risking the other.
+    _reprice_risk(pos)
 
 
 def _apply_merge(absorbed: Optional[Position],
@@ -809,6 +813,12 @@ def _apply_merge(absorbed: Optional[Position],
     ))
     absorbed.status = "merged"
     absorbed.merged_into = target.trade_id
+    # Its risk moved to the target, where it is now part of the wider-wing
+    # figure. Leaving it here would count the same money twice in the monthly
+    # buying-power guardrail - which is the double count she asked to be rid
+    # of, just moved from the cards into the budget.
+    absorbed.max_loss = 0.0
+    absorbed.buying_power = 0.0
 
 
 def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
@@ -1093,12 +1103,21 @@ def _reprice_risk(pos: Position) -> None:
     width. Both figures feed her monthly buying-power guardrail, so a stale one
     is not cosmetic.
 
-    Only the two shapes whose risk is a plain function of the strikes are
-    recomputed. An iron condor (risk is the wider side), a covered call (the
-    shares) and a PMCC (the LEAPS) keep the numbers they were logged with -
-    guessing at those would be worse than leaving them alone. A BP Effect she
-    typed off thinkorswim still wins over all of this: `bp_effect` reads the
-    override before it ever looks here.
+    Only the shapes whose risk is a plain function of the strikes are
+    recomputed. A covered call (the shares) and a PMCC (the LEAPS) keep the
+    numbers they were logged with - guessing at those would be worse than
+    leaving them alone. A BP Effect she typed off thinkorswim still wins over
+    all of this: `bp_effect` reads the override before it ever looks here.
+
+    The iron condor used to be on that leave-alone list, because a condor was
+    always opened as a condor and its logged numbers were right. Two ways of
+    BUILDING one changed that - selling the second wing onto an open spread,
+    and merging two separately logged wings - and both leave the position
+    holding the buying power of whichever wing happened to be logged first.
+    On her CRWD condor that was the 10-wide call wing against a 15-wide put
+    wing, understating the risk by a third. Price cannot break through both
+    sides at expiration, so a condor's risk is the WIDER wing, less everything
+    collected on both.
     """
     contracts = max(int(pos.contracts or 1), 1)
     collected = float(pos.open_credit or 0.0) + pos.banked_income
@@ -1121,6 +1140,33 @@ def _reprice_risk(pos: Position) -> None:
         # the 160 points between the LEAPS and the call written against it
         # instead of the several thousand dollars the LEAPS cost. Opening for a
         # credit is what makes a spread a spread here.
+        return
+
+    if pos.is_iron_condor_shape:
+        # The wider wing, because price can only breach one side. Each side is
+        # measured on its own short/long pair at the near expiration, so a
+        # lopsided condor is priced off the side that can actually hurt her.
+        #
+        # Everything collected counts, wings included: `open_credit` is only
+        # the wing she logged first, and using it alone would overstate the
+        # risk by the whole second credit.
+        collected_all = (float(pos.open_credit or 0.0)
+                         + sum(w.credit for w in pos.wings)
+                         + pos.banked_income)
+        near = min((l.dte for l in pos.legs if l.dte is not None), default=None)
+        worst = 0.0
+        for side in (puts, calls):
+            here = [l for l in side if near is None or l.dte == near]
+            shorts = [l for l in here if l.action == Action.SELL]
+            longs = [l for l in here if l.action == Action.BUY]
+            if len(shorts) != 1 or len(longs) != 1:
+                continue
+            qty = max(int(shorts[0].quantity or 1), 1)
+            worst = max(worst, abs(shorts[0].strike - longs[0].strike)
+                        * 100 * contracts * qty)
+        if worst:
+            pos.max_loss = round(max(worst - collected_all, 0.0), 2)
+            pos.buying_power = pos.max_loss
         return
 
     # A plain two-leg vertical, one side only: risk is the width less what she
