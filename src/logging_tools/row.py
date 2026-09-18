@@ -460,8 +460,12 @@ def build_leg_close_row(
     note: str = "",
     closed_on: Optional[date] = None,
     account: str = "",
+    quantity: Optional[int] = None,
 ) -> list[Any]:
     """The "legclose" event row - one leg came off, the trade carries on.
+
+    `quantity` is how many contracts of that leg came off; leave it out for the
+    whole leg, which is what every row written before it existed meant.
 
     Written when she takes a credit spread apart on purpose: sell the long put
     back, leave the short put open so it can assign her the shares. A "close"
@@ -506,7 +510,10 @@ def build_leg_close_row(
         "",                           # Exit Cost $ - not a close
         round(float(cash), 2),        # Realized P&L $: the cash banked today
         json.dumps({"type": option_type, "side": side,
-                    "for_assignment": bool(for_assignment)},
+                    "for_assignment": bool(for_assignment),
+                    # Omitted for a whole-leg close, so an old row and a new one
+                    # that happens to take everything stay indistinguishable.
+                    **({"qty": int(quantity)} if quantity else {})},
                    separators=(",", ":")),
         _account(account),
     ]

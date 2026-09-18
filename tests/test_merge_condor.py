@@ -314,3 +314,69 @@ def test_one_malformed_edit_does_not_take_the_whole_log_down():
     junk = build_edit_row("T-CALL", "CRWD", "Call Credit Spread",
                           {"legs": ["not-a-leg", 42]}, edited_on=date(2026, 9, 18))
     assert parse_rows(COLUMNS, [CALL_WING, junk])    # still reads
+
+
+# ------------------------------------------- taking part of a leg off
+def _pmcc_rows(*extra):
+    """A LEAPS with TWO short calls against it - one covered, one naked."""
+    from src.engine.models import Trade
+    legs = [
+        Leg(role="long_call_leaps", action=Action.BUY, option_type=OptionType.CALL,
+            strike=460.0, premium=180.0, dte=331),
+        Leg(role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+            strike=615.0, premium=4.6, dte=28, quantity=2),
+    ]
+    t = Trade(strategy_key="poor_mans_covered_call", underlying="SMH",
+              legs=legs, contracts=1, underlying_price=564.0)
+    return [build_row(t, "Poor Man's Covered Call (PMCC)",
+                      {"credit": 460.0, "account": "paper"}, True, "",
+                      trade_id="SMH1", opened_on=date(2026, 7, 21)), *extra]
+
+
+def test_closing_one_of_two_short_calls_leaves_the_other():
+    """Her ask: close the NAKED call. One of the two is covered by the LEAPS and
+    stays; recording the whole leg would report her out of a position she is
+    still in."""
+    from src.logging_tools.row import build_leg_close_row
+
+    partial = build_leg_close_row(
+        "SMH1", "SMH", "PMCC", cash=-458.0, strike=615.0, option_type="call",
+        side="sell", quantity=1, closed_on=date(2026, 9, 18), account="paper")
+    p = parse_rows(COLUMNS, _pmcc_rows(partial))[0]
+    short = next(l for l in p.legs if l.role == "short_call")
+    assert short.quantity == 1
+    assert not p.is_uncovered            # the LEAPS still has a call on it
+
+
+def test_closing_the_whole_leg_still_removes_it():
+    """No quantity means the whole leg, which is what every legclose written
+    before partials existed meant."""
+    from src.logging_tools.row import build_leg_close_row
+
+    whole = build_leg_close_row(
+        "SMH1", "SMH", "PMCC", cash=-916.0, strike=615.0, option_type="call",
+        side="sell", closed_on=date(2026, 9, 18), account="paper")
+    p = parse_rows(COLUMNS, _pmcc_rows(whole))[0]
+    assert not [l for l in p.legs if l.role == "short_call"]
+
+
+def test_taking_more_than_is_there_removes_the_leg():
+    """A typo must not leave a leg with a negative or zero size sitting in the
+    position for the pricer to trip over."""
+    from src.logging_tools.row import build_leg_close_row
+
+    toomany = build_leg_close_row(
+        "SMH1", "SMH", "PMCC", cash=-1400.0, strike=615.0, option_type="call",
+        side="sell", quantity=9, closed_on=date(2026, 9, 18), account="paper")
+    p = parse_rows(COLUMNS, _pmcc_rows(toomany))[0]
+    assert not [l for l in p.legs if l.role == "short_call"]
+
+
+def test_the_cost_of_buying_it_back_is_banked_on_the_day():
+    from src.logging_tools.row import build_leg_close_row
+
+    partial = build_leg_close_row(
+        "SMH1", "SMH", "PMCC", cash=-458.0, strike=615.0, option_type="call",
+        side="sell", quantity=1, closed_on=date(2026, 9, 18), account="paper")
+    p = parse_rows(COLUMNS, _pmcc_rows(partial))[0]
+    assert [(e.cash, e.quantity) for e in p.leg_closes] == [(-458.0, 1)]
