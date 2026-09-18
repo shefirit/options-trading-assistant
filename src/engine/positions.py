@@ -181,6 +181,9 @@ class Position(BaseModel):
     passed_sop: str = ""
     note: str = ""
     legs: list[Leg] = Field(default_factory=list)
+    # Set when this trade turned out to be the other wing of another one. The
+    # row stays in her sheet exactly as she wrote it; this says how to read it.
+    merged_into: str = ""
     # Wings added after the open - the credit spread that became a condor.
     # Kept as events (rather than only as legs) so the card can say WHEN the
     # second side went on and what it collected, which is the whole story of
@@ -756,6 +759,58 @@ def _apply_wing(pos: Position, wing: WingEvent) -> None:
     pos.open_cash = round(pos.open_cash + wing.credit, 2)
 
 
+def _apply_merge(absorbed: Optional[Position],
+                 target: Optional[Position]) -> None:
+    """Fold a separately-logged wing into the trade it really belongs to.
+
+    She logs each wing as it fills, which is the honest thing to do at the time
+    - the second wing is often not planned when the first goes on. The result
+    is two rows that are really one iron condor, and the app was reading them
+    as two trades: two cards, two 50% targets measured against half the credit
+    each, and the condor's actual rule (close the whole thing at 50% of the
+    NET credit) applying to neither.
+
+    The absorbed trade keeps its row in her sheet untouched and becomes
+    status "merged", which is neither open nor closed - so it drops out of the
+    open cards and never appears in the journal as a trade that ended. Its
+    premium still counts as sold in the month she sold it, because she did
+    sell it: `open_credit` is left alone and only `credit` moves.
+
+    Silently does nothing when either side is missing. A merge row naming a
+    trade id that is not in the log is a typo, and dropping a live position
+    over a typo would be far worse than ignoring the row.
+    """
+    if absorbed is None or target is None or absorbed is target:
+        return
+    if absorbed.status != "open" or target.status != "open":
+        return
+
+    side = next((l.option_type for l in absorbed.legs
+                 if l.action is Action.SELL), None)
+    if side is None:
+        return
+    shorts = [l for l in absorbed.legs
+              if l.action is Action.SELL and l.option_type is side]
+    longs = [l for l in absorbed.legs
+             if l.action is Action.BUY and l.option_type is side]
+    if not shorts or not longs:
+        return
+
+    _apply_wing(target, WingEvent(
+        added_on=absorbed.opened,
+        option_type=side.value,
+        short_strike=shorts[0].strike,
+        long_strike=longs[0].strike,
+        credit=float(absorbed.credit or 0.0),
+        short_delta=abs(shorts[0].delta) or None,
+        quantity=max(int(shorts[0].quantity or 1), 1),
+        expiration=absorbed.expiration,
+        note=f"Merged from {absorbed.trade_id}",
+    ))
+    absorbed.status = "merged"
+    absorbed.merged_into = target.trade_id
+
+
 def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
     """A short put became shares. Turn the position into what she now holds.
 
@@ -1109,6 +1164,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     assigns: list[tuple[str, dict[str, Any]]] = []
     leg_closes: list[tuple[str, LegCloseEvent]] = []
     wings: list[tuple[str, WingEvent]] = []
+    merges: list[tuple[str, str]] = []          # (absorbed trade, target trade)
     # Closes AND reopens, in the order they were written. A close ends the
     # trade, a reopen after it says that close never happened, and a close
     # after that ends it again - the last word wins, exactly as a corrected
@@ -1170,6 +1226,13 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if event == "edit" and trade_id:
             data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
             edits.append((trade_id, data))
+            continue
+
+        if event == "merge" and trade_id:
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
+            into = str(data.get("into") or "").strip()
+            if into:
+                merges.append((trade_id, into))
             continue
 
         if event == "addwing" and trade_id:
@@ -1326,6 +1389,12 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         pos.close_cash = ev["close_cash"]
         pos.realized_pl = ev["realized_pl"]
         pos.exit_reason = ev["reason"]
+
+    # Merges last, because both sides have to be finished first: the trade being
+    # absorbed carries its own rolls and its own corrections, and they are part
+    # of the wing that moves.
+    for absorbed_id, target_id in merges:
+        _apply_merge(opens.get(absorbed_id), opens.get(target_id))
 
     return ordered
 

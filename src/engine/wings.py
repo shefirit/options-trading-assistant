@@ -278,3 +278,52 @@ def _underlying_kind(symbol: str, settings: dict[str, Any]) -> str:
     if sym in (under.get("us_style") or []):
         return "etf"
     return "stock"
+
+
+def merge_candidates(position: Position,
+                     others: list[Position]) -> list[Position]:
+    """Open trades that look like the OTHER WING of this one.
+
+    She logs each wing as it fills, which is right at the time - the second
+    wing is often not planned when the first goes on. The result is two rows
+    that are really one iron condor, showing as two cards with two separate 50%
+    targets, each measured against half the credit. Her page's actual rule -
+    close the whole thing at 50% of the NET credit - then applies to neither.
+
+    What has to match is what makes two spreads one condor: the same
+    underlying, the same expiration, the same book, and opposite sides. Nothing
+    else is required, and contract counts deliberately are not: a 2-contract
+    put wing against a 1-contract call wing is a lopsided condor, not two
+    trades, and the form says so rather than hiding the pair.
+
+    Returned newest first, because when there is more than one the most
+    recently opened is nearly always the one she just filled.
+    """
+    if position.status != "open":
+        return []
+    side = existing_side(position)
+    if side is None or position.expiration is None:
+        return []
+
+    out = []
+    for other in others:
+        if other is position or other.status != "open":
+            continue
+        if other.trade_id == position.trade_id:
+            continue
+        if other.underlying.upper() != position.underlying.upper():
+            continue
+        if other.expiration != position.expiration:
+            continue
+        if (other.account or "") != (position.account or ""):
+            continue          # a paper wing is not part of a real condor
+        if other.is_iron_condor_shape or other.is_debit:
+            continue
+        theirs = existing_side(other)
+        if theirs is None or theirs is side:
+            continue          # same side is a second spread, not a wing
+        if not any(l.action is Action.BUY and l.option_type is theirs
+                   for l in other.legs):
+            continue          # no long leg: a naked put is not a wing
+        out.append(other)
+    return sorted(out, key=lambda p: p.opened or date.min, reverse=True)

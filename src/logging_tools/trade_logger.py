@@ -11,6 +11,7 @@ from typing import Any, Optional
 from src.engine.models import Trade
 from src.logging_tools import excel_logger, sheets_logger, webhook_logger
 from src.logging_tools.row import (COLUMNS, build_add_wing_row,
+                                   build_merge_row,
                                    build_assign_row, build_close_row,
                                    build_edit_row, build_leg_close_row,
                                    build_reopen_row, build_roll_row, build_row,
@@ -131,6 +132,26 @@ def add_wing(
                              short_delta=short_delta, quantity=quantity,
                              note=note, added_on=added_on,
                              expiration=expiration, account=account)
+    return _append(row)
+
+
+def merge_trades(
+    trade_id: str,
+    into_trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    note: str = "",
+    merged_on: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Record that `trade_id` is really the other wing of `into_trade_id` (a
+    "merge" event). Returns (destination, went_to_sheet).
+
+    Neither original row is touched. Delete this row and the two trades are
+    separate again.
+    """
+    row = build_merge_row(trade_id, into_trade_id, underlying, strategy_name,
+                          note=note, merged_on=merged_on, account=account)
     return _append(row)
 
 
