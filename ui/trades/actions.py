@@ -1356,3 +1356,86 @@ def _add_wing_form(p) -> None:
                     f"${float(p.credit) + float(credit):,.0f} in total - and "
                     f"that total is what your 50% target measures against now.")
                 st.rerun()
+
+
+def _merge_wing_form(p, all_open) -> None:
+    """Two rows that are really one iron condor - say so, without re-typing.
+
+    Her report (2026-09-18): "CRWD - you see 2 trades. but it's iron condor."
+    She had sold a call spread on 2 September and a put spread on 17 September,
+    same expiration, same size. Both true rows; one trade.
+
+    Offered instead of nothing rather than instead of the Add-a-wing form: that
+    one is for a wing she has not logged yet, this one is for a wing she
+    already has. Using Add-a-wing here would write the second wing TWICE.
+
+    Neither original row is touched. The merge is its own row saying how to
+    read them together, so deleting it puts the two trades back.
+    """
+    from src.engine import wings
+
+    if p.status != "open" or p.is_iron_condor_shape or p.is_debit:
+        return
+    matches = wings.merge_candidates(p, all_open)
+    if not matches:
+        return
+
+    with st.expander("🔗 This looks like half of an iron condor",
+                     key=f"merge_{p.trade_id}"):
+        theme.note(
+            f"There is another open {p.underlying} trade on the same "
+            f"expiration, on the opposite side. If you sold them as two halves "
+            f"of one iron condor, tell the app and it will track them as one "
+            f"trade - **one card, and your 50% target measured against the "
+            f"combined credit**, which is what your Iron Condor page actually "
+            f"says. Right now each half is being measured against its own "
+            f"credit, so neither is following the rule.")
+
+        labels = {}
+        for other in matches:
+            side = wings.existing_side(other)
+            strikes = "/".join(
+                f"{l.strike:g}" for l in other.legs
+                if l.option_type is side and l.action is Action.SELL)
+            longs = "/".join(
+                f"{l.strike:g}" for l in other.legs
+                if l.option_type is side and l.action is Action.BUY)
+            labels[(f"{strikes}/{longs} {side.value} spread · opened "
+                    f"{components.fmt_date(other.opened)} · "
+                    f"${other.credit:,.0f}")] = other
+
+        pick = st.radio("Which one is the other wing?", list(labels),
+                        key=f"mergepick_{p.trade_id}")
+        other = labels[pick]
+
+        combined = float(p.credit or 0.0) + float(other.credit or 0.0)
+        keep, absorb = ((p, other) if (p.opened or dt.date.max)
+                        <= (other.opened or dt.date.max) else (other, p))
+        theme.note(
+            f"**Combined credit ${combined:,.0f}** "
+            f"(${p.credit:,.0f} + ${other.credit:,.0f}). Your 50% target "
+            f"becomes ${combined / 2:,.0f}, and the condor closes as one. "
+            f"The trade opened first - {components.fmt_date(keep.opened)}, "
+            f"`{keep.trade_id}` - carries the position; the other row stays in "
+            f"your sheet exactly as you wrote it and stops showing as its own "
+            f"trade.")
+
+        if p.contracts != other.contracts:
+            st.warning(components._esc(
+                f"These are different sizes - {p.contracts} contract(s) against "
+                f"{other.contracts}. That is a lopsided condor, which is still "
+                f"one trade, but the bigger side is the one that can hurt you. "
+                f"Merge only if that is really how you filled them."))
+
+        if st.button("Yes - these are one iron condor", type="primary",
+                     key=f"mergebtn_{p.trade_id}"):
+            from src.logging_tools.trade_logger import merge_trades
+            merge_trades(absorb.trade_id, keep.trade_id, absorb.underlying,
+                         absorb.strategy_name, account=absorb.account)
+            st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
+            st.session_state["ql_flash"] = (
+                f"Merged: {p.underlying} is now one iron condor, "
+                f"${combined:,.0f} collected. Your 50% target is "
+                f"${combined / 2:,.0f} on the whole thing.")
+            st.rerun()

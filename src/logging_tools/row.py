@@ -302,6 +302,41 @@ def build_add_wing_row(
     ]
 
 
+def build_merge_row(
+    trade_id: str,
+    into_trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    note: str = "",
+    merged_on: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "merge" event row - this trade is really the other wing of another
+    one, and the two are one iron condor.
+
+    Written on the trade being ABSORBED, naming the one it joins. She logs each
+    wing as it fills, which is the honest thing to do at the time - the second
+    wing may not have been planned when the first went on. This is how the two
+    become one position afterwards without re-typing either.
+
+    Nothing is deleted. Her sheet keeps both original rows exactly as she wrote
+    them; this row only says how to read them together. Removing it puts the
+    two trades back.
+    """
+    return [
+        (merged_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        "", "", "", "", "", "", "", "",
+        note or f"Really the other wing of {into_trade_id} - one iron condor",
+        trade_id,
+        "merge",
+        "", "", "",
+        json.dumps({"into": into_trade_id}, separators=(",", ":")),
+        _account(account),
+    ]
+
+
 # Fields an edit row may carry. Anything not listed here is left alone, and
 # `strategy` / `underlying` are absent on purpose - changing either makes it a
 # different trade, and the honest fix for that is delete and re-log.

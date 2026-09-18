@@ -12,6 +12,7 @@ from ui import components, theme
 from ui.trades.actions import (
     _add_wing_form,
     _assign_form,
+    _merge_wing_form,
     _assignment_plan_panel,
     _close_form,
     _roll_form,
@@ -85,7 +86,11 @@ def _open_section(items, strategies, provider, priced_at) -> None:
                 "what needs doing first), so the highlighted row is somewhere "
                 "else now. Click any row to switch.")
     st.write("")
-    _trade_card(ordered[picked], strategies, provider)
+    # Every open position, so the card can spot the one that is really the
+    # other wing of this trade. It has to be the whole list and not just the
+    # card's own row - the match is by definition a DIFFERENT trade.
+    _trade_card(ordered[picked], strategies, provider,
+                [i["position"] for i in ordered])
 
 
 def _card_index(ordered, event) -> tuple[int, bool]:
@@ -130,7 +135,7 @@ def _follow_trade(ids: list, raw: int, was_row, was_id) -> int:
     return raw
 
 
-def _trade_card(it: dict, strategies, provider) -> None:
+def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
     """One open trade: what it is doing, then what she can do about it."""
     from src.engine import glance
     from src.engine import wheel
@@ -198,6 +203,11 @@ def _trade_card(it: dict, strategies, provider) -> None:
         # other side onto it. Sits next to the roll because it is the same kind
         # of decision - a change to a trade she is keeping, not a way out of it.
         _add_wing_form(p)
+        # And the case where she already logged the other wing as its own
+        # trade. Offered after Add-a-wing, never instead of it: one is for a
+        # wing not yet in the log, the other for a wing already in it, and
+        # using the wrong one would write the same wing twice.
+        _merge_wing_form(p, all_open or [])
         # Her third way out of a credit spread: sell the long put and let the
         # short one assign you. Offered before the close button, because it is
         # the decision the close button used to swallow.
