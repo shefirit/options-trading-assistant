@@ -1638,7 +1638,9 @@ def _tab_analyze(settings, provider, strategies) -> None:
     # somebody who sells options for a living, while seasonality (which says in
     # its own words that it is never a reason to trade) sat fourth.
     #
-    #   1-2  the verdict, and the picture behind it
+    #   1-2  the picture, then the verdict it explains. Rita's call
+    #        (2026-09-18): Overview leads. You want to know what a name IS
+    #        before a grade on it means anything.
     #   3-4  the two reads that decide WHICH trade: what the option market is
     #        paying, and whether the one strategy that buys is worth it here
     #   5-7  is the company any good, what is it worth, what does the street
@@ -1646,18 +1648,24 @@ def _tab_analyze(settings, provider, strategies) -> None:
     #        when she might end up owning the shares
     #    8   seasonality, a tiebreaker on timing and nothing more
     #
+    # "Spread check", not "Candidate", because the old label said nothing about
+    # what was being graded. This tab reads BOTH sides against her SOP - the
+    # put spread at 0.25 delta and the call spread at 0.10 - and sends her to an
+    # iron condor when both grade workable. Her words: "candidate need to change
+    # to spreads candidates or better name."
+    #
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind
     # a scroll arrow. Each tab restates its own full title as a heading anyway.
-    (t_cand, t_over, t_opts, t_leaps, t_screen, t_calc, t_analyst, t_season) = st.tabs(
-        ["🩺 Candidate", "📋 Overview", "⛓️ Options", "🔭 LEAPS",
+    (t_over, t_cand, t_opts, t_leaps, t_screen, t_calc, t_analyst, t_season) = st.tabs(
+        ["📋 Overview", "🩺 Spread check", "⛓️ Options", "🔭 LEAPS",
          "✅ Screener", "🧮 Fair price", "🎯 Analysts", "📅 Seasons"])
 
+    with t_over:
+        _analyze_overview(sym, settings, provider, strategies)
     with t_cand:
         _guard(ui_candidate.render, sym, _classify(sym, settings), provider,
                settings, strategies)
-    with t_over:
-        _analyze_overview(sym, settings, provider, strategies)
     with t_opts:
         _research_options(settings, provider, sym)
     # Each tool guards itself rather than the whole tab gating on a symbol: the

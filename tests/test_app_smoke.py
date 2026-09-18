@@ -54,7 +54,7 @@ def test_the_look_alike_tabs_are_gone(demo_app):
 # LAST, behind four company-research tools, on a tab used by somebody who sells
 # options for a living, while seasonality sat fourth despite saying in its own
 # words that it is never a reason to trade.
-ANALYZE_SUB_TABS = ("🩺 Candidate", "📋 Overview", "⛓️ Options", "🔭 LEAPS",
+ANALYZE_SUB_TABS = ("📋 Overview", "🩺 Spread check", "⛓️ Options", "🔭 LEAPS",
                     "✅ Screener", "🧮 Fair price", "🎯 Analysts", "📅 Seasons")
 
 
@@ -83,6 +83,9 @@ def test_the_analyze_sub_tabs_run_decision_first_garnish_last(demo_app):
     seen = [lbl for lbl in labels if lbl in ANALYZE_SUB_TABS]
     assert seen == list(ANALYZE_SUB_TABS), f"the Analyze row drifted: {seen}"
 
+    # Overview leads: her call, 2026-09-18. You want to know what a name IS
+    # before a grade on it means anything.
+    assert seen[0] == "📋 Overview"
     # The two that would hurt most if they slid back.
     assert seen.index("⛓️ Options") <= 2, "the options read sank down the row again"
     assert seen.index("📅 Seasons") == len(ANALYZE_SUB_TABS) - 1, (
