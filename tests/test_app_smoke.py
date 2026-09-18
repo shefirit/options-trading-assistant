@@ -49,8 +49,13 @@ def test_the_look_alike_tabs_are_gone(demo_app):
         assert tool in labels, f"{tool} was lost in the merge"
 
 
-ANALYZE_SUB_TABS = ("📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
-                    "✅ Screener", "🧮 Fair price", "⛓️ Options")
+# In order. Rita's report (2026-09-18): "in analyze tab, the order of sub tabs
+# doesn't make sense." It had drifted into none - the options market read sat
+# LAST, behind four company-research tools, on a tab used by somebody who sells
+# options for a living, while seasonality sat fourth despite saying in its own
+# words that it is never a reason to trade.
+ANALYZE_SUB_TABS = ("📋 Overview", "🩺 Spread check", "⛓️ Options", "🔭 LEAPS",
+                    "✅ Screener", "🧮 Fair price", "🎯 Analysts", "📅 Seasons")
 
 
 def test_the_analyze_sub_tabs_stay_short_enough_to_fit(demo_app):
@@ -60,7 +65,31 @@ def test_the_analyze_sub_tabs_stay_short_enough_to_fit(demo_app):
     labels = [t.label for t in demo_app.run().tabs]
     for lbl in ANALYZE_SUB_TABS:
         assert lbl in labels
-    assert sum(len(lbl) for lbl in ANALYZE_SUB_TABS) <= 75, "the tab row got long again"
+    assert sum(len(lbl) for lbl in ANALYZE_SUB_TABS) <= 85, "the tab row got long again"
+
+
+def test_the_analyze_sub_tabs_run_decision_first_garnish_last(demo_app):
+    """The ORDER, not just the membership. Membership was already pinned and
+    the row still ended up in an order nobody had chosen: the options market
+    read - implied volatility, the expected move, whether there is premium
+    worth selling at all - was EIGHTH, behind seasonality and three company
+    valuation tools.
+
+    The rule this holds to: how directly a tab answers "should I trade options
+    on this name, and how". The verdict and its picture, then the two reads
+    that pick the trade, then the slower company questions, then the
+    tiebreaker."""
+    labels = [t.label for t in demo_app.run().tabs]
+    seen = [lbl for lbl in labels if lbl in ANALYZE_SUB_TABS]
+    assert seen == list(ANALYZE_SUB_TABS), f"the Analyze row drifted: {seen}"
+
+    # Overview leads: her call, 2026-09-18. You want to know what a name IS
+    # before a grade on it means anything.
+    assert seen[0] == "📋 Overview"
+    # The two that would hurt most if they slid back.
+    assert seen.index("⛓️ Options") <= 2, "the options read sank down the row again"
+    assert seen.index("📅 Seasons") == len(ANALYZE_SUB_TABS) - 1, (
+        "seasonality is a tiebreaker and belongs last")
 
 
 def test_the_research_tools_stay_offline_in_demo_mode(demo_app):

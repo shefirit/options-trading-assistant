@@ -212,14 +212,14 @@ def _render_layers(report) -> None:
 
 # ---------------------------------------------------------------------- entry
 def render(sym: str, kind: str, provider, settings, strategies) -> None:
-    theme.section("Is this a credit-spread candidate?", "CANDIDATE CHECK")
+    theme.section("Is this a credit-spread candidate?", "SPREAD CHECK")
 
     if not sym:
         theme.note("Pick an index, ETF, or stock at the top of this tab and its "
-                   "candidate check appears here.")
+                   "spread check appears here.")
         return
     if not provider.is_real:
-        st.info("The candidate check needs real market data - connect to the "
+        st.info("The spread check needs real market data - connect to the "
                 "internet first.")
         return
 
