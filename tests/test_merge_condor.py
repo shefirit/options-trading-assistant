@@ -45,8 +45,13 @@ def _spread(trade_id, opened, side, short, long_, credit, contracts=2,
             else "Put Credit Spread (Bull Put Spread)")
     t = Trade(strategy_key=f"{side}_credit_spread", underlying="CRWD",
               legs=legs, contracts=contracts, underlying_price=230.0)
+    # Max loss and buying power as the open row records them - the width less
+    # the credit. This is what a merged condor has to OVERRIDE, so the fixture
+    # has to carry it or the tests below prove nothing.
+    risk = round(abs(short - long_) * 100 * contracts - credit, 2)
     return build_row(t, name, {"credit": credit, "open_cash": credit,
-                               "account": account},
+                               "account": account, "max_loss": risk,
+                               "buying_power": risk},
                      True, "", trade_id=trade_id, opened_on=opened)
 
 
@@ -187,3 +192,57 @@ def test_different_sizes_still_count_as_one_condor():
     open_pos = _open([CALL_WING, small])
     call = next(p for p in open_pos if p.trade_id == "T-CALL")
     assert [m.trade_id for m in wings.merge_candidates(call, open_pos)] == ["T-SMALL"]
+
+
+# ------------------------------------------------- what the broker holds
+def test_the_condor_is_priced_off_the_WIDER_wing():
+    """Her ask, 2026-09-18. CRWD's call wing is 10 wide and its put wing 15;
+    the position was carrying the 10-wide figure because that wing was logged
+    first, understating the risk by a third. Price can only breach one side, so
+    the risk is the wider wing less everything collected on both."""
+    p = _by_id([CALL_WING, PUT_WING, MERGE])["T-CALL"]
+    # wider wing 15 x 100 x 2 contracts = 3,000, less the 702 collected
+    assert p.max_loss == 2298.0
+    assert p.buying_power == 2298.0
+
+
+def test_the_absorbed_wings_risk_stops_counting_separately():
+    """Otherwise the double count she asked to be rid of just moves off the
+    cards and into the monthly buying-power budget."""
+    positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, MERGE])
+    absorbed = next(p for p in positions if p.trade_id == "T-PUT")
+    assert absorbed.buying_power == 0.0 and absorbed.max_loss == 0.0
+    assert pos_mod.bp_in_use(positions) == 2298.0
+
+
+def test_both_credits_count_against_the_risk():
+    """open_credit is only the wing logged first. Using it alone would
+    overstate the risk by the whole second credit."""
+    p = _by_id([CALL_WING, PUT_WING, MERGE])["T-CALL"]
+    assert p.open_credit == 272.0          # unchanged - it is a month figure
+    assert p.max_loss == 3000.0 - 702.0    # but BOTH credits reduce the risk
+
+
+def test_a_matched_condor_is_priced_the_same_either_way():
+    """A condor whose wings are equal must not change value by being merged."""
+    even_put = _spread("T-EVEN", date(2026, 9, 17), "put", 215, 205, 430.0)
+    merge = build_merge_row("T-EVEN", "T-CALL", "CRWD", "x",
+                            merged_on=date(2026, 9, 18), account="real")
+    p = _by_id([CALL_WING, even_put, merge])["T-CALL"]
+    assert p.max_loss == 10 * 100 * 2 - 702.0
+
+
+def test_a_lopsided_condor_is_priced_off_the_side_that_can_hurt_her():
+    wide = _spread("T-WIDE", date(2026, 9, 17), "put", 215, 165, 430.0)
+    merge = build_merge_row("T-WIDE", "T-CALL", "CRWD", "x",
+                            merged_on=date(2026, 9, 18), account="real")
+    p = _by_id([CALL_WING, wide, merge])["T-CALL"]
+    assert p.max_loss == 50 * 100 * 2 - 702.0      # the 50-wide put wing
+
+
+def test_a_plain_spread_keeps_the_numbers_it_was_logged_with():
+    """Only a condor is repriced. A one-sided spread that has not been rolled
+    keeps its open row's figures, exactly as before."""
+    p = _by_id([CALL_WING])["T-CALL"]
+    assert p.max_loss == 10 * 100 * 2 - 272.0
+    assert p.buying_power == p.max_loss
