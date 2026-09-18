@@ -11,7 +11,7 @@ anything added here:
   - Say what it MEANS to her, not what a textbook says. Every definition ends
     up somewhere she can act on.
   - Tie it to what she sees: thinkorswim shows a bought leg as +1 and a sold
-    leg as -1, and her own numbers are $100,000 capital and 1 contract.
+    leg as -1, and her own numbers are her config's capital and 1 contract.
   - Real dollars beat percentages.
   - No jargon inside a definition unless that word is also in here.
 """

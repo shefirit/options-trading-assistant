@@ -7,8 +7,8 @@ drawn three times, an all-time view measured against a monthly target.
 Two of them are named regression tests for defects this rebuild set out to fix:
 
   * exactly ONE progress bar on the page. There used to be three, all showing
-    the month against the same $3,500.
-  * the all-time scope never says "of your $3,500 goal". It used to hand a
+    the month against the same monthly goal.
+  * the all-time scope never says "of your <monthly> goal". It used to hand a
     whole account's total to a band that divided by the monthly number.
 
 Every number in the fixtures is invented. This repo is public.
@@ -22,9 +22,30 @@ from datetime import date, timedelta
 
 import pytest
 
+from src.engine.config_loader import load_settings
 from src.logging_tools.row import COLUMNS
 
 PCS = "Put Credit Spread"
+
+
+def _plan() -> dict[str, float]:
+    """Her plan's numbers, from config - never spelled out as literals here.
+
+    These assertions are about the SHAPE of the page (one band, the right
+    target on the right scope), not about any particular dollar figure. Pinning
+    the literals meant every plan change broke four unrelated regression tests
+    and taught whoever fixed them that the old numbers were the contract.
+    """
+    s = load_settings()
+    t = s.get("targets") or {}
+    return {"monthly": float(t.get("monthly", 0) or 0),
+            "year_one": float(t.get("year_one_end_balance", 0) or 0),
+            "capital": float((s.get("account") or {}).get("starting_capital", 0) or 0)}
+
+
+def _goal_phrase() -> str:
+    """"of your $4,500 goal" as the page actually escapes it."""
+    return f"of your &#36;{_plan()['monthly']:,.0f} goal"
 
 
 def _closed_row(trade_id="20260801-101500-SPX", opened=None, closed=None,
@@ -116,7 +137,7 @@ def test_all_time_is_never_measured_against_a_one_month_goal(app_with_rows):
     assert "Since you started you have banked" in page
     # The dashboard's own band says it once, about THIS MONTH, which is right.
     # A second one would be the all-time total wearing a monthly target.
-    assert page.count("of your &#36;3,500 goal") == 1
+    assert page.count(_goal_phrase()) == 1
 
 
 def test_the_month_in_progress_does_not_print_its_band_twice(app_with_rows):
@@ -192,7 +213,8 @@ def test_the_practice_legend_appears_when_the_log_holds_both_books(app_with_rows
 def test_the_year_one_track_is_on_the_real_book(app_with_rows):
     at = app_with_rows(_closed_row()).run()
     page = _page(at)
-    assert "142,000" in page and "100,000" in page
+    plan = _plan()
+    assert f"{plan['year_one']:,.0f}" in page and f"{plan['capital']:,.0f}" in page
     assert "year one" in page.lower()
 
 
@@ -694,7 +716,7 @@ def test_the_profit_hero_does_not_repeat_the_bands_sentence(app_with_rows):
     at = app_with_rows(_closed_row()).run()
     page = _page(at)
     assert page.lower().count("banked this month") == 1
-    assert page.count("of your &#36;3,500 goal") == 1
+    assert page.count(_goal_phrase()) == 1
 
 
 def test_the_journal_holds_open_and_closed_trades_in_one_table(app_with_rows):

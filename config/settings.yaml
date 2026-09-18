@@ -5,7 +5,7 @@
 # ============================================================
 
 account:
-  starting_capital: 100000      # dollars you began with
+  starting_capital: 150000      # dollars you began with
   platform: "thinkorswim"
   # The day real money started. Trades opened BEFORE this date are practice
   # (thinkorswim PaperMoney) and are kept out of your real-money income report;
@@ -19,9 +19,9 @@ account:
 
 # Your income goals (from your Notion hub).
 targets:
-  weekly: 808
-  monthly: 3500
-  year_one_end_balance: 142000
+  weekly: 1038
+  monthly: 4500
+  year_one_end_balance: 204000
 
 # Which strategy the pickers open on, in Quick Log and in Find a trade.
 #
@@ -37,7 +37,7 @@ defaults:
 
 # Hard risk limits the app will warn you about.
 risk_limits:
-  monthly_bp_limit: 50000       # do not use more than this in buying power per month
+  monthly_bp_limit: 65000       # do not use more than this in buying power per month
   position_delta_red_flag: 90   # if a position's net delta passes this, it is a red flag
   # Only bought-premium trades (the LEAPS long call) use this. Every other
   # strategy here sells premium and can be stopped out partway; a long call has

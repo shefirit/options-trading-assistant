@@ -2639,7 +2639,7 @@ def _plan_editor(settings) -> None:
             help="What the month's income report measures against.")
         auto = c4.checkbox(
             "Set the weekly goal from the monthly one", value=True,
-            help="A month is 52/12 weeks, not 4. Your $3,500 and $808 already "
+            help="A month is 52/12 weeks, not 4. Your $4,500 and $1,038 already "
                  "sit on exactly that ratio.")
         weekly = st.number_input(
             "Weekly income goal ($)", min_value=0.0, step=10.0,
