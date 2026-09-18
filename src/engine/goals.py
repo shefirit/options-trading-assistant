@@ -32,6 +32,10 @@ never contained it.
 year_one() is the one function with no `mode` parameter, on purpose: an account
 balance goal is about money that exists. PaperMoney has no balance to grow.
 
+It is also the one function measured from `plan_start` rather than `live_from`.
+A plan that changes mid-flight needs a date for "since when has this been the
+goal", separate from "since when has this been real money".
+
 Pure functions: no network, no Streamlit, fully unit-tested.
 """
 
@@ -59,6 +63,41 @@ def targets_from(settings: dict) -> dict[str, float]:
         "year_one": float(t.get("year_one_end_balance", 0) or 0),
         "bp_limit": float(risk.get("monthly_bp_limit", 0) or 0),
     }
+
+
+def plan_start(settings: dict, live_from: Optional[date] = None) -> Optional[date]:
+    """The day the CURRENT plan began - what year one is measured from.
+
+    `live_from` is the day real money started and splits practice from real. It
+    must never move. This is a different date: the day today's capital and
+    today's goal came into force. They were the same date until the plan changed
+    mid-flight, and on an account whose plan never changes they stay the same.
+
+    Why year one needs its own date: she went live on 31 July with $100,000 and
+    a $3,500 month, then funded $50,000 more in September and moved to $4,500.
+    Measuring year one from 31 July charges those first seven weeks at the NEW
+    rate - about $1,600 of shortfall she never actually fell behind by, because
+    that goal did not exist yet.
+
+    DELIBERATELY NARROW. Only year one reads this. The month band still runs on
+    calendar months, the cumulative ramp and the month-by-month table still run
+    from `live_from`, because those are a record of what she banked and when -
+    zeroing out July and August there would erase that she was trading to a plan
+    then, which is a different lie from the one this fixes.
+
+    A missing, empty or unparseable value falls back to `live_from`, so a
+    half-filled config measures year one the way it always did rather than
+    crashing the tab.
+    """
+    raw = (settings.get("account") or {}).get("plan_from")
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return date.fromisoformat(raw.strip())
+        except ValueError:
+            return live_from
+    return live_from
 
 
 def _days_in(d: date) -> int:
@@ -168,10 +207,12 @@ def bullet_rows(positions: list[Position], settings: dict,
 
     week_start = today - timedelta(days=today.weekday())          # Monday
     month_start = _month_start(today)
-    # Year one runs from the day the money went in. Before that there is no
-    # year one to be in, so the span starts at the first thing that happened.
+    # Year one runs from the day the CURRENT plan started - which is the day
+    # the money went in, unless the plan has changed since. Before that there is
+    # no year one to be in, so the span starts at the first thing that happened.
     events = cash_events(scoped)
-    year_start = live_from or (events[0]["date"] if events else today)
+    year_start = (plan_start(settings, live_from)
+                  or (events[0]["date"] if events else today))
 
     monthly = t["monthly"]
     weekly = t["weekly"]
@@ -265,15 +306,19 @@ def cumulative_series(positions: list[Position], settings: dict,
 def year_one(positions: list[Position], settings: dict,
              live_from: Optional[date] = None,
              today: Optional[date] = None) -> dict[str, Any]:
-    """Progress toward the $142,000 year-one balance.
+    """Progress toward the year-one balance in config.
 
     Real money only. An account-balance goal is about money that exists, and
     showing a PaperMoney total against it would be the one confusion this app
     must never create.
 
-    pct is measured against the INCOME half - the $42,000 she has to earn - not
-    against the $142,000 headline. Otherwise an account that has earned nothing
-    would open at 70% and the bar would be a decoration.
+    pct is measured against the INCOME half - what she has to EARN - not against
+    the balance headline. Otherwise an account that has earned nothing would
+    open at 70% and the bar would be a decoration.
+
+    Measured from `plan_start`, not `live_from`: see that function for why the
+    two came apart. Income banked under a previous plan stays in the journal and
+    in the month-by-month report; it just does not count toward THIS goal.
     """
     today = today or date.today()
     t = targets_from(settings)
@@ -283,7 +328,8 @@ def year_one(positions: list[Position], settings: dict,
     to_earn = max(goal - capital, 0.0)
 
     events = cash_events(real)
-    start = live_from or (events[0]["date"] if events else today)
+    start = (plan_start(settings, live_from)
+             or (events[0]["date"] if events else today))
     banked = _banked_between(real, start, today)
     balance = capital + banked
 

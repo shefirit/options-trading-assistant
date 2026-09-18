@@ -2599,23 +2599,31 @@ def _data_mode_note(provider) -> None:
 
 def _plan_metrics(settings, per_row: int = 4) -> None:
     acct, tgt, risk = settings["account"], settings["targets"], settings["risk_limits"]
+    since = str(acct.get("plan_from") or "").strip()
     vals = [("Capital", money(acct["starting_capital"])),
             ("Monthly goal", money(tgt["monthly"])),
             ("Weekly goal", money(tgt["weekly"])),
-            ("BP limit", money(risk["monthly_bp_limit"]))]
+            ("BP limit", money(risk["monthly_bp_limit"])),
+            ("Plan since", since or "when you went live")]
     cols = st.columns(per_row)
     for i, (label, v) in enumerate(vals):
         cols[i % per_row].metric(label, v)
 
 
 def _plan_editor(settings) -> None:
-    """Set the four numbers that define the plan, from inside the app.
+    """Set the numbers that define the plan, from inside the app.
 
     They drive the goal bars, the pace read and the buying-power guardrail, so
     editing them by hand in a YAML file was the one part of her own plan she
     could not change without a text editor.
+
+    The date at the bottom is the newest of them and the least obvious. A plan
+    that changes mid-flight - more capital in, a bigger goal - needs to say
+    WHEN, or year one silently charges the whole span at the new rate and
+    invents a shortfall out of a plan that did not exist yet.
     """
     from src.engine import config_loader, plan_settings
+    from ui import components
 
     current = plan_settings.read(settings)
 
@@ -2648,26 +2656,39 @@ def _plan_editor(settings) -> None:
             format="%.0f", disabled=auto,
             help="The same target at the rhythm you actually trade in - the "
                  "dashed line on the by-week chart.")
+        plan_from = st.date_input(
+            "The day this plan started", value=current["plan_from"],
+            format=components.DATE_FMT,
+            help="Year one is measured from here - twelve months from this day, "
+                 "and only income banked after it counts toward the balance "
+                 "goal. Set it when your plan CHANGES: the day you funded more "
+                 "capital, or the day a new income goal took effect. Leave it "
+                 "empty and year one runs from the day you first went live, "
+                 "which is right for a plan that has never changed. This is not "
+                 "the practice/real split - that never moves.")
         submitted = st.form_submit_button("Save my plan", type="primary")
 
     if submitted:
         values = {"capital": capital, "monthly": monthly,
                   "weekly": (plan_settings.weekly_from_monthly(monthly)
                              if auto else weekly),
-                  "bp_limit": bp_limit}
+                  "bp_limit": bp_limit, "plan_from": plan_from}
         try:
             plan_settings.save(values)
         except ValueError as e:
             st.error(str(e))
         else:
             config_loader.clear_cache()
+            since = (f", running from {values['plan_from']:%d %b %Y}"
+                     if values.get("plan_from") else "")
             st.success(f"Saved. Goal **{money(values['monthly'])} a month** "
                        f"({money(values['weekly'])} a week) on "
                        f"{money(values['capital'])}, with a "
-                       f"{money(values['bp_limit'])} monthly buying-power budget.")
+                       f"{money(values['bp_limit'])} monthly buying-power "
+                       f"budget{since}.")
             st.rerun()
 
-    theme.note("These four numbers drive the goal bars in **📒 My trades**, the "
+    theme.note("These numbers drive the goal bars in **📒 My trades**, the "
                "pace read on the income report, and the buying-power warning in "
                "**🎯 Find a trade**.")
     theme.note("**One caveat on the hosted app:** a saved plan lives in the app's "
