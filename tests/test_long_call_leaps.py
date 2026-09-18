@@ -17,7 +17,7 @@ import pytest
 
 from src.data.chain import OptionContract
 from src.engine import exit_rules, payoff, rules, scanner, sizing, tos_ticket, validator
-from src.engine.config_loader import get_strategy
+from src.engine.config_loader import get_strategy, load_settings
 from src.engine.models import Action, CheckStatus, Leg, OptionType, Trade
 from src.engine.positions import Position
 
@@ -164,8 +164,15 @@ def test_the_financing_put_band_is_settled_at_the_csp_delta():
 
 def test_two_puts_are_held_back_by_buying_power_not_by_a_new_rule():
     """Why the band needs no extra cap: two 0.26 delta puts on a $300 stock
-    reserve essentially the whole $50,000 month, so the existing check stops it
-    the moment anything else is open."""
+    reserve most of the month's budget, so the existing check stops it as soon
+    as the rest of the month is committed - no new rule required.
+
+    The budget is read from config rather than written in, because it moves
+    with her plan (it has already gone $50,000 -> $65,000). What is being
+    pinned is that buying power is the thing that holds two puts back, not that
+    any particular dollar figure does.
+    """
+    limit = float(load_settings()["risk_limits"]["monthly_bp_limit"])
     leg = _leg()
     put = Leg(role="financing_put", action=Action.SELL, option_type=OptionType.PUT,
               strike=270.0, premium=20.75, dte=leg.dte, delta=-0.26, quantity=2,
@@ -174,9 +181,18 @@ def test_two_puts_are_held_back_by_buying_power_not_by_a_new_rule():
                   underlying_price=305.5, legs=[leg, put])
 
     alone = validator.validate_trade(trade, existing_month_bp=0)
-    crowded = validator.validate_trade(trade, existing_month_bp=5_000)
-
     assert _check(alone, "Puts sold per call").status == CheckStatus.WARN
+
+    # The two puts alone take the lion's share of the budget: that is the claim
+    # the band rests on, so assert it rather than assuming it.
+    reserved = sizing.estimate(trade, get_strategy("long_call_leaps"))["buying_power"]
+    assert reserved > limit * 0.6, (
+        f"two puts reserve ${reserved:,.0f} of a ${limit:,.0f} budget - if this "
+        f"is no longer most of the month, the band DOES need its own cap")
+
+    # Commit whatever room is left, and the existing check fails the trade.
+    crowded = validator.validate_trade(
+        trade, existing_month_bp=(limit - reserved) + 1_000)
     assert _check(crowded, "buying power").status == CheckStatus.FAIL
     assert not crowded.passed
 
@@ -774,7 +790,7 @@ LOG_DTE = (LOG_EXPIRY - LOG_OPENED).days
 
 def _reversal_row(puts=3, call_cost=2115.0, put_price=6.25):
     """One financed LEAPS as the log holds it - the open event row."""
-    from src.engine.config_loader import get_strategy
+    from src.engine.config_loader import get_strategy, load_settings
     from src.engine.quick_log import (apply_fill_prices, legs_from_strategy,
                                       sizing_from_fill)
     from src.logging_tools.row import build_row
@@ -901,7 +917,7 @@ def test_a_typed_bp_effect_still_wins():
 def _leaps_logged_the_old_way():
     """What the log holds for one of those: one leg, and a credit that is
     really the debit with the sign the other way round."""
-    from src.engine.config_loader import get_strategy
+    from src.engine.config_loader import get_strategy, load_settings
     from src.engine.positions import parse_rows
     from src.engine.quick_log import legs_from_strategy
     from src.logging_tools.row import COLUMNS, build_row
@@ -934,7 +950,7 @@ def test_adding_the_puts_repairs_the_trade_without_deleting_it():
     """The correction the panel writes: the same trade id, both legs, and the
     money rebuilt from the two fills rather than reversed out of a ledger that
     was wrong to begin with."""
-    from src.engine.config_loader import get_strategy
+    from src.engine.config_loader import get_strategy, load_settings
     from src.engine.models import Action, Leg, OptionType
     from src.engine.positions import parse_rows
     from src.engine.quick_log import resize_bought_call
@@ -979,7 +995,7 @@ def test_adding_the_puts_repairs_the_trade_without_deleting_it():
 def test_taking_the_puts_off_again_leaves_a_plain_bought_call():
     """Set the count back to 0 and the leg goes away - the same panel has to
     undo a put entered by mistake, and the money has to follow it."""
-    from src.engine.config_loader import get_strategy
+    from src.engine.config_loader import get_strategy, load_settings
     from src.engine.positions import parse_rows
     from src.engine.quick_log import resize_bought_call
     from src.logging_tools.row import COLUMNS, build_edit_row

@@ -899,6 +899,20 @@ def candidates_dataframe(candidates: list[Candidate]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _bp_limit_text() -> str:
+    """Her monthly buying-power budget, read from config rather than spelled
+    out in prose. The number moves when her plan does (it has already gone
+    $50,000 -> $65,000); a hardcoded copy would quietly keep teaching the old
+    one from a tooltip she cannot see is stale."""
+    try:
+        from src.engine.config_loader import load_settings
+        limit = float((load_settings().get("risk_limits") or {})
+                      .get("monthly_bp_limit", 0) or 0)
+    except Exception:
+        limit = 0.0
+    return f"${limit:,.0f} monthly limit" if limit > 0 else "monthly limit"
+
+
 def candidates_column_config():
     """Hover help for the one table she actually picks a trade from. Every other
     table in the app explains its columns; this one used to show a bare Greek
@@ -941,7 +955,7 @@ def candidates_column_config():
         "Buying power $": st.column_config.NumberColumn(
             format="$%d",
             help="Cash the broker sets aside while the trade is open. It counts "
-                 "against your $50,000 monthly limit."),
+                 f"against your {_bp_limit_text()}."),
         "Return/Risk": st.column_config.TextColumn(
             help="Credit divided by max loss - what you earn per dollar at risk. "
                  "Higher is richer premium, but it usually comes with a higher "
