@@ -70,6 +70,11 @@ def _leg(role: str, action: Action, c: OptionContract) -> Leg:
     return Leg(
         role=role, action=action, option_type=c.option_type,
         strike=c.strike, delta=c.delta, premium=c.mid, dte=c.dte,
+        # The contract's own expiration, not a count of days. This is the one
+        # place the real date is in hand, and dropping it here was what forced
+        # every later reader to reconstruct it as opened + dte and get a date
+        # the exchange never listed.
+        expiration=c.expiration,
         open_interest=c.open_interest, bid=c.bid, ask=c.ask,
     )
 

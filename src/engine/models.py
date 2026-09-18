@@ -11,6 +11,7 @@ Plain-English reminders used throughout:
 from __future__ import annotations
 
 from enum import Enum
+from datetime import date
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -46,6 +47,13 @@ class Leg(BaseModel):
     premium: float = 0.0
     quantity: int = 1                 # contracts of THIS leg per 1 unit of the position
     dte: Optional[int] = None         # days to expiration for this leg
+    # The REAL expiration off the chain, when the leg came from one. dte alone
+    # cannot reproduce it: the log stores DTE at entry, so a reader has to do
+    # opened + dte, and 45 days from a Friday lands on a Monday that was never
+    # a listed expiration. None means "not captured" - an older row, or a leg
+    # built by hand - which is different from a guess, and callers fall back to
+    # opened + dte for exactly those.
+    expiration: Optional[date] = None
     # How many contracts are open at this strike. Carried only where a rule
     # reads it - the LEAPS long call, whose SOP wants 250+ before entering,
     # because a thin far-dated contract is expensive to get back out of.
@@ -127,6 +135,22 @@ class Trade(BaseModel):
         """The nearest expiration in the trade - what your exit rules count down to."""
         dtes = [leg.dte for leg in self.legs if leg.dte is not None]
         return min(dtes) if dtes else None
+
+    @property
+    def expiration(self) -> Optional[date]:
+        """The NEAR expiration as a real date, when the chain gave one.
+
+        Pairs with `dte` above: same leg, the date instead of the count. The
+        logger writes this rather than recomputing opened + dte, which is how a
+        spread came to be filed against an expiration that does not exist.
+
+        None when no leg carried a date - a hand-built trade, or a test - and
+        the logger then falls back to the old arithmetic.
+        """
+        dated = [leg for leg in self.legs if leg.expiration is not None]
+        if not dated:
+            return None
+        return min(leg.expiration for leg in dated)
 
     @property
     def short_legs(self) -> list[Leg]:

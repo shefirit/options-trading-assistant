@@ -69,6 +69,12 @@ def _details_json(trade: Trade, sizing: Optional[dict[str, float]] = None) -> st
                 "premium": leg.premium,
                 "qty": leg.quantity,
                 "dte": leg.dte,
+                # Per leg, because a PMCC's LEAPS and its short call expire in
+                # different months and one date on the row cannot carry both.
+                # Omitted when the leg has none, so an old row and a hand-built
+                # leg stay tellable apart from a real date.
+                **({"exp": leg.expiration.isoformat()}
+                   if leg.expiration is not None else {}),
             }
             for leg in trade.legs
         ],
@@ -118,9 +124,16 @@ def build_row(
     opened_on = opened_on or date.today()
     strikes = " / ".join(f"{leg.strike:g}" for leg in trade.legs)
     short_delta = max((leg.abs_delta for leg in trade.short_legs), default=0.0)
+    # In order: what the caller passed (Quick Log asks her for the date), then
+    # the real one off the chain the trade was built from, and only then the
+    # opened + dte arithmetic. That last one is a guess - 45 days from a Friday
+    # is a Monday - and it used to be the ONLY answer for anything logged from
+    # Find a trade, which is how a live position became unpriceable.
     expiration = ""
     if expiration_on is not None:
         expiration = expiration_on.isoformat()
+    elif trade.expiration is not None:
+        expiration = trade.expiration.isoformat()
     elif trade.dte is not None:
         expiration = (opened_on + timedelta(days=int(trade.dte))).isoformat()
     return [
