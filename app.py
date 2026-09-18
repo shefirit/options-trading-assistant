@@ -1632,33 +1632,47 @@ def _tab_analyze(settings, provider, strategies) -> None:
 
     _compare_panel(held, provider, settings)
 
+    # ORDER: how directly each one answers "should I trade options on this
+    # name, and how". It had drifted into no order at all - the options market
+    # read sat LAST, behind four company-research tools, on a tab used by
+    # somebody who sells options for a living, while seasonality (which says in
+    # its own words that it is never a reason to trade) sat fourth.
+    #
+    #   1-2  the verdict, and the picture behind it
+    #   3-4  the two reads that decide WHICH trade: what the option market is
+    #        paying, and whether the one strategy that buys is worth it here
+    #   5-7  is the company any good, what is it worth, what does the street
+    #        think - the slower questions, and the ones that only really bite
+    #        when she might end up owning the shares
+    #    8   seasonality, a tiebreaker on timing and nothing more
+    #
     # Short labels on purpose: the full names needed 1320px of tab bar and a
     # 1280-wide laptop gives about 1183, so "Options data" sat off-screen behind
     # a scroll arrow. Each tab restates its own full title as a heading anyway.
-    (t_cand, t_over, t_leaps, t_season, t_analyst, t_screen, t_calc, t_opts) = st.tabs(
-        ["🩺 Candidate", "📋 Overview", "🔭 LEAPS", "📅 Seasons", "🎯 Analysts",
-         "✅ Screener", "🧮 Fair price", "⛓️ Options"])
+    (t_cand, t_over, t_opts, t_leaps, t_screen, t_calc, t_analyst, t_season) = st.tabs(
+        ["🩺 Candidate", "📋 Overview", "⛓️ Options", "🔭 LEAPS",
+         "✅ Screener", "🧮 Fair price", "🎯 Analysts", "📅 Seasons"])
 
     with t_cand:
         _guard(ui_candidate.render, sym, _classify(sym, settings), provider,
                settings, strategies)
     with t_over:
         _analyze_overview(sym, settings, provider, strategies)
+    with t_opts:
+        _research_options(settings, provider, sym)
     # Each tool guards itself rather than the whole tab gating on a symbol: the
     # LEAPS Finder's scan mode hunts for candidates and needs no symbol at all,
     # and gating would have made it unreachable until you picked one.
     with t_leaps:
         _research_leaps(settings, provider, sym)
-    with t_season:
-        _research_seasonality(settings, provider, sym)
-    with t_analyst:
-        _research_analyst(settings, provider, sym)
     with t_screen:
         _research_analyzer(settings, provider, sym)
     with t_calc:
         _research_calculator(settings, provider, sym)
-    with t_opts:
-        _research_options(settings, provider, sym)
+    with t_analyst:
+        _research_analyst(settings, provider, sym)
+    with t_season:
+        _research_seasonality(settings, provider, sym)
 
 
 def _analyze_overview(sym, settings, provider, strategies) -> None:
