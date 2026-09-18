@@ -42,10 +42,13 @@ def config(tmp_path):
     return path
 
 
-def test_reads_the_four_numbers_off_the_settings():
+def test_reads_the_plan_off_the_settings():
+    """plan_from comes back None when the file does not set one - the editor
+    then shows an empty box rather than guessing a day."""
     values = ps.read(yaml.safe_load(SAMPLE))
     assert values == {"capital": 100_000.0, "monthly": 3500.0,
-                      "weekly": 808.0, "bp_limit": 50_000.0}
+                      "weekly": 808.0, "bp_limit": 50_000.0,
+                      "plan_from": None}
 
 
 def test_saving_keeps_every_comment_in_the_file(config):

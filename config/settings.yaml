@@ -17,6 +17,22 @@ account:
   # history, they just stop counting as income.
   live_from: "2026-07-31"
 
+  # The day the CURRENT plan started - when the account was funded to its
+  # present size and today's income goal began. Year one is measured from here.
+  #
+  # This is NOT live_from. live_from splits practice from real money and must
+  # never move, or 21 real trades would be re-read as paper. plan_from answers a
+  # different question: "since when has THIS goal been the goal?"
+  #
+  # She went live on 2026-07-31 with $100,000 and a $3,500 month. In September
+  # 2026 she funded another $50,000 and the goal became $4,500. Without this
+  # date the year-one track charges the whole span at the NEW rate, inventing a
+  # shortfall out of a plan she was never running.
+  #
+  # Leave it empty to measure year one from live_from, which is the right answer
+  # for an account whose plan has never changed.
+  plan_from: ""
+
 # Your income goals (from your Notion hub).
 targets:
   weekly: 1038
