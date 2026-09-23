@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "teeinblue": {
+      "type": "http",
+      "url": "https://api.teeinblue.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TEEINBLUE_MCP_TOKEN}"
+      }
+    }
+  }
+}
