@@ -380,3 +380,43 @@ def test_the_cost_of_buying_it_back_is_banked_on_the_day():
         side="sell", quantity=1, closed_on=date(2026, 9, 18), account="paper")
     p = parse_rows(COLUMNS, _pmcc_rows(partial))[0]
     assert [(e.cash, e.quantity) for e in p.leg_closes] == [(-458.0, 1)]
+
+
+# ------------------------------------------------- the condor closes as a whole
+# Her report, 2026-09-30: an SPX call wing merged on 18 September still showed
+# as an open trade on expiration day, flagged "Take the win", though she had
+# bought the whole condor back on the 23rd. Merges ran after closes and refused
+# a target that was no longer open, so the wing never joined.
+from src.logging_tools.row import build_close_row  # noqa: E402
+
+CONDOR_CLOSE = build_close_row("T-CALL", "CRWD",
+                               "Call Credit Spread (Bear Call Spread)",
+                               exit_cost=500.0, realized_pl=202.0,
+                               reason="Closed early",
+                               closed_on=date(2026, 9, 23), account="real")
+
+
+def test_closing_the_condor_closes_the_merged_wing_too():
+    positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, MERGE, CONDOR_CLOSE])
+    by_id = {p.trade_id: p for p in positions}
+    assert pos_mod.open_positions(positions) == []
+    assert by_id["T-PUT"].status == "merged"
+    assert by_id["T-CALL"].status == "closed"
+    assert by_id["T-CALL"].is_iron_condor_shape
+
+
+def test_the_merged_wing_is_not_counted_twice_once_closed():
+    """One closed trade in the journal, carrying the condor's one result."""
+    positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, MERGE, CONDOR_CLOSE])
+    closed = pos_mod.closed_positions(positions)
+    assert [p.trade_id for p in closed] == ["T-CALL"]
+    assert closed[0].realized_total == 202.0
+
+
+def test_a_merge_written_after_the_close_is_refused():
+    """That wing was never part of the trade she ended - it stays its own."""
+    late = build_merge_row("T-PUT", "T-CALL", "CRWD",
+                           "Put Credit Spread (Bull Put Spread)",
+                           merged_on=date(2026, 9, 25), account="real")
+    positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, CONDOR_CLOSE, late])
+    assert [p.trade_id for p in pos_mod.open_positions(positions)] == ["T-PUT"]

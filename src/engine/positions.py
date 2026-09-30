@@ -791,7 +791,8 @@ def _apply_wing(pos: Position, wing: WingEvent) -> None:
 
 
 def _apply_merge(absorbed: Optional[Position],
-                 target: Optional[Position]) -> None:
+                 target: Optional[Position],
+                 merged_on: Optional[date] = None) -> None:
     """Fold a separately-logged wing into the trade it really belongs to.
 
     She logs each wing as it fills, which is the honest thing to do at the time
@@ -813,7 +814,19 @@ def _apply_merge(absorbed: Optional[Position],
     """
     if absorbed is None or target is None or absorbed is target:
         return
-    if absorbed.status != "open" or target.status != "open":
+    if absorbed.status != "open":
+        return
+    # A target that has since CLOSED still takes the wing. Merges are applied
+    # after closes, so her SPX condor - merged 18 September, bought back whole
+    # on the 23rd - found its target already closed, skipped the merge, and
+    # left the call wing showing as an open trade a week after TOS said it was
+    # gone. Closing the condor closed both wings. Only a merge written AFTER
+    # the close is refused: that wing was never part of the trade she ended.
+    if target.status == "closed":
+        if (merged_on is not None and target.closed_on is not None
+                and merged_on > target.closed_on):
+            return
+    elif target.status != "open":
         return
 
     side = next((l.option_type for l in absorbed.legs
@@ -1292,7 +1305,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     assigns: list[tuple[str, dict[str, Any]]] = []
     leg_closes: list[tuple[str, LegCloseEvent]] = []
     wings: list[tuple[str, WingEvent]] = []
-    merges: list[tuple[str, str]] = []          # (absorbed trade, target trade)
+    # (absorbed trade, target trade, day the merge was written)
+    merges: list[tuple[str, str, Optional[date]]] = []
     # Closes AND reopens, in the order they were written. A close ends the
     # trade, a reopen after it says that close never happened, and a close
     # after that ends it again - the last word wins, exactly as a corrected
@@ -1361,7 +1375,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
             data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
             into = str(data.get("into") or "").strip()
             if into:
-                merges.append((trade_id, into))
+                merges.append((trade_id, into,
+                               _to_date(_get(row, idx, "Date", 0))))
             continue
 
         if event == "addwing" and trade_id:
@@ -1522,8 +1537,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # Merges last, because both sides have to be finished first: the trade being
     # absorbed carries its own rolls and its own corrections, and they are part
     # of the wing that moves.
-    for absorbed_id, target_id in merges:
-        _apply_merge(opens.get(absorbed_id), opens.get(target_id))
+    for absorbed_id, target_id, merged_on in merges:
+        _apply_merge(opens.get(absorbed_id), opens.get(target_id), merged_on)
 
     # Every position, not only the rolled ones. _reprice_risk used to run at the
     # end of a roll and nowhere else, so a trade she never rolled kept whatever
