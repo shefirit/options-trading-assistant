@@ -805,6 +805,14 @@ def test_the_story_tells_the_added_wing_on_its_own_day():
     assert steps[-1]["running"] == pytest.approx(272.0 + 430.0 + 274.0)
 
 
+def test_the_journal_leaves_out_the_half_that_was_merged():
+    """It is part of the condor now - listing it again showed a second CRWD
+    trade, still open, carrying only its own credit."""
+    from ui.trades.journal import journal_trades
+    positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, MERGE])
+    assert [p.trade_id for p in journal_trades(positions)] == ["T-CALL"]
+
+
 # --------------------------------------- selling the long put, on a condor
 # Her CRWD card offered "Sell the long put, keep the short one". Recording it
 # marks the trade as waiting for assignment, which switches off the 50%

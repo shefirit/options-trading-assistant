@@ -49,7 +49,7 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
     theme.section("Every trade you have logged, and the story of any one",
                   "Journal")
 
-    trades = [p for p in all_pos]
+    trades = journal_trades(all_pos)
     if not trades:
         theme.note("**Nothing logged yet.** Use **➕ Log a trade** at the top of "
                    "this tab for a trade you already placed, or **Log this "
@@ -76,6 +76,19 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
 
 
 # ---------------------------------------------------------------- the rows
+def journal_trades(all_pos) -> list:
+    """Every trade she has logged, less the halves that were joined to another.
+
+    A wing logged as its own trade and then merged into a condor is status
+    "merged": its row stays in her sheet, but the trade is the condor now. The
+    Journal listed it anyway, as a second trade "still open" with only its own
+    credit - her CRWD put spread from 17 September showed up that way beside
+    the condor it belongs to, and with the newer date it was the row that
+    opened when she filtered to CRWD. The condor's story tells that wing now.
+    """
+    return [p for p in all_pos if p.status != "merged"]
+
+
 def _rows(trades: list) -> list[dict[str, Any]]:
     """One dict per trade, newest activity first.
 
