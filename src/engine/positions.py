@@ -579,20 +579,46 @@ class Position(BaseModel):
 
     @property
     def is_iron_condor_shape(self) -> bool:
-        """Both a put vertical and a call vertical, on one expiration.
+        """Both a put vertical and a call vertical.
 
         This is what a credit spread becomes once she sells the other side onto
         it. The row still says "Put Credit Spread" - it was one when she opened
         it - but the position being managed is a condor, and the condor page is
         what has a rule for two wings.
+
+        Each wing has to be a VERTICAL - its short and long leg on one
+        expiration - but the two wings need not share one. Rolling one wing
+        out leaves them a week apart, and it is still a condor: her CRWD put
+        side went from 16 to 23 October on 2026-10-05 with the calls left on
+        the 16th, and requiring all four legs on the near date turned it back
+        into a call credit spread. Requiring each side to be a vertical is
+        what keeps a PMCC (a LEAPS a year beyond its short call) out.
         """
-        near = min((l.dte for l in self.legs if l.dte is not None), default=None)
-        here = [l for l in self.legs
-                if l.dte is None or near is None or l.dte == near]
-        types = {(l.option_type, l.action) for l in here}
-        return ({(OptionType.PUT, Action.SELL), (OptionType.PUT, Action.BUY),
-                 (OptionType.CALL, Action.SELL), (OptionType.CALL, Action.BUY)}
-                <= types)
+        return all(self._vertical_side(kind) for kind in OptionType)
+
+    def _vertical_side(self, kind: OptionType) -> bool:
+        """This side has something sold AND something bought, all on one
+        expiration. Legs with no date at all match anything, as before."""
+        side = [l for l in self.legs if l.option_type == kind]
+        actions = {l.action for l in side}
+        if {Action.SELL, Action.BUY} - actions:
+            return False
+        dates = {self.leg_expiration(l) for l in side} - {None}
+        return len(dates) <= 1
+
+    @property
+    def near_short_expiration(self) -> Optional[date]:
+        """When the first option she is SHORT expires.
+
+        What a credit position counts down to once its legs sit on more than
+        one date - a condor with one wing rolled out. The 21-day clock is about
+        the gamma risk of a short option close to expiry, and the nearer short
+        leg is the one that reaches it first.
+        """
+        dates = [self.leg_expiration(l) for l in self.legs
+                 if l.action == Action.SELL]
+        dates = [d for d in dates if d is not None]
+        return min(dates) if dates else None
 
     @property
     def effective_strategy_key(self) -> str:
@@ -952,6 +978,10 @@ def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
 
     if not pos.legs:
         pos.expiration = None
+    elif not pos.is_debit:
+        # The near wing of a split-date condor coming off hands the countdown
+        # to the wing still open, same rule as a roll.
+        pos.expiration = pos.near_short_expiration or pos.expiration
 
 
 def _legs_from_json(raw: Any) -> list[Leg]:
@@ -1148,6 +1178,15 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
             _move_leg(long_leg, roll.new_long_strike, new_dte,
                       roll.new_expiration)
 
+    if not pos.is_debit:
+        # A credit position counts down to whichever short leg expires FIRST,
+        # not to wherever this roll went. Rolling one wing of a condor out a
+        # week left the countdown on the later wing while the other expired
+        # first. On a single spread or a CSP the two are the same date. The
+        # PMCC and covered calls keep the roll's date: their near leg IS the
+        # short call that just moved.
+        pos.expiration = pos.near_short_expiration or pos.expiration
+
     _reprice_risk(pos)
 
 
@@ -1221,7 +1260,8 @@ def _reprice_risk(pos: Position) -> None:
     On her CRWD condor that was the 10-wide call wing against a 15-wide put
     wing, understating the risk by a third. Price cannot break through both
     sides at expiration, so a condor's risk is the WIDER wing, less everything
-    collected on both.
+    collected on both - as long as the wings share a date and do not overlap.
+    `_condor_worst_loss` covers the cases where they do not.
     """
     contracts = max(int(pos.contracts or 1), 1)
     collected = float(pos.open_credit or 0.0) + pos.banked_income
@@ -1247,27 +1287,13 @@ def _reprice_risk(pos: Position) -> None:
         return
 
     if pos.is_iron_condor_shape:
-        # The wider wing, because price can only breach one side. Each side is
-        # measured on its own short/long pair at the near expiration, so a
-        # lopsided condor is priced off the side that can actually hurt her.
-        #
         # Everything collected counts, wings included: `open_credit` is only
         # the wing she logged first, and using it alone would overstate the
         # risk by the whole second credit.
         collected_all = (float(pos.open_credit or 0.0)
                          + sum(w.credit for w in pos.wings)
                          + pos.banked_income)
-        near = min((l.dte for l in pos.legs if l.dte is not None), default=None)
-        worst = 0.0
-        for side in (puts, calls):
-            here = [l for l in side if near is None or l.dte == near]
-            shorts = [l for l in here if l.action == Action.SELL]
-            longs = [l for l in here if l.action == Action.BUY]
-            if len(shorts) != 1 or len(longs) != 1:
-                continue
-            qty = max(int(shorts[0].quantity or 1), 1)
-            worst = max(worst, abs(shorts[0].strike - longs[0].strike)
-                        * 100 * contracts * qty)
+        worst = _condor_worst_loss(pos, puts, calls, contracts)
         if worst:
             pos.max_loss = round(max(worst - collected_all, 0.0), 2)
             pos.buying_power = worst      # gross - see the note below
@@ -1290,6 +1316,56 @@ def _reprice_risk(pos: Position) -> None:
         pos.max_loss = round(max(width - collected, 0.0), 2)
         pos.buying_power = width          # gross - see the note below
         return
+
+
+def _condor_worst_loss(pos: Position, puts: list[Leg], calls: list[Leg],
+                       contracts: int) -> float:
+    """The most a two-wing position can lose at expiration, gross of credit.
+
+    Three cases, one rule underneath - the worst the strikes allow:
+
+      same date, ordinary   short put below short call. Price can only be on
+                            one side at expiration, so it is the WIDER wing.
+      same date, inverted   short put ABOVE short call (or the wings overlap).
+                            Between the strikes both wings are in the money at
+                            once, so the loss can run to both widths together.
+      different dates       one wing rolled out. The first can expire at full
+                            loss and price can then cross to breach the other,
+                            so each wing can lose its whole width: the SUM.
+                            This is also what thinkorswim holds - two separate
+                            verticals - which on her CRWD was 4,000 against
+                            the 2,000 the near-date rule left behind.
+
+    The same-date cases are walked rather than special-cased: the payoff of
+    verticals is a straight line between strikes, so the worst is at a strike
+    or out in a tail, and checking each one covers ordinary, inverted and
+    lopsided condors alike. 0.0 when either side is not a single short/long
+    pair, which leaves the logged numbers alone.
+    """
+    wings: list[tuple[Leg, Leg]] = []
+    for side in (puts, calls):
+        shorts = [l for l in side if l.action == Action.SELL]
+        longs = [l for l in side if l.action == Action.BUY]
+        if len(shorts) != 1 or len(longs) != 1:
+            return 0.0
+        wings.append((shorts[0], longs[0]))
+
+    def loss(leg: Leg, price: float) -> float:
+        """What this leg costs her at expiration with the stock at `price`."""
+        inside = (max(leg.strike - price, 0.0) if leg.option_type == OptionType.PUT
+                  else max(price - leg.strike, 0.0))
+        sign = 1.0 if leg.action == Action.SELL else -1.0
+        return sign * inside * max(int(leg.quantity or 1), 1) * 100 * contracts
+
+    def worst_of(legs: list[Leg]) -> float:
+        strikes = [l.strike for l in legs]
+        prices = [0.0, *strikes, max(strikes) * 2]
+        return max(sum(loss(l, p) for l in legs) for p in prices)
+
+    dates = {pos.leg_expiration(l) for pair in wings for l in pair} - {None}
+    if len(dates) > 1:
+        return round(sum(worst_of(list(pair)) for pair in wings), 2)
+    return round(worst_of([l for pair in wings for l in pair]), 2)
 
 
 def _long_side_expiration(pos: Position) -> Optional[date]:
