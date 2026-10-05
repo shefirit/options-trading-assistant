@@ -679,6 +679,27 @@ class Position(BaseModel):
         return self.strategy_key
 
     @property
+    def shown_strategy_name(self) -> str:
+        """The name the screens call this trade by.
+
+        The row keeps the name it was logged under - a credit spread that had
+        its other wing sold on is still "Call Credit Spread" in her sheet,
+        because that is what it was the day it opened. But the open table, the
+        Journal and the story all printed that name, so her CRWD condor read
+        as a call credit spread everywhere while the app was managing it by
+        the Iron Condor page. Her report, 2026-10-05: "the hosted app doesn't
+        show that it's iron condor".
+
+        Only the condor is renamed. A LEAPS call she writes calls against is
+        run by the PMCC exit rules too, but she still thinks of that trade as
+        her LEAPS, and nobody asked for it to change.
+        """
+        if (self.effective_strategy_key == "iron_condor"
+                and self.strategy_key != "iron_condor"):
+            return "Iron Condor"
+        return self.strategy_name
+
+    @property
     def far_legs(self) -> list[Leg]:
         """The long-dated legs: the LEAPS on a PMCC, the protective put on a
         covered call. Empty on single-expiration positions."""
@@ -2230,7 +2251,27 @@ def story(position: Position) -> list[dict[str, Any]]:
     minus money out so far, not a result.
     """
     steps: list[dict[str, Any]] = []
-    steps.extend(_opening_steps(position))
+    # A wing sold onto the trade later - or logged as its own trade and merged
+    # in - adds its credit to open_cash, so without this the story dated that
+    # money to day one and never said the other side was ever added. Her CRWD
+    # condor's Journal showed a call spread opened for $702 on 2 September;
+    # $430 of that was the put side, sold on the 17th.
+    wing_cash = round(sum(w.credit for w in position.wings), 2)
+    steps.extend(_opening_steps(position, later_wings=wing_cash))
+
+    for w in sorted(position.wings, key=lambda w: w.added_on or date.min):
+        side = "put" if w.option_type == "put" else "call"
+        detail = (f"Sold the {w.short_strike:g} {side}, "
+                  f"bought the {w.long_strike:g} {side}")
+        if w.note.startswith("Merged from"):
+            detail += " - logged as its own trade, joined to this one"
+        steps.append({
+            "on": w.added_on,
+            "what": f"You added the {side} side - now an iron condor",
+            "detail": detail,
+            "cash": round(w.credit, 2),
+            "kind": "wing",
+        })
 
     for lc in position.leg_closes:
         steps.append({
@@ -2285,7 +2326,8 @@ def story(position: Position) -> list[dict[str, Any]]:
     return steps
 
 
-def _opening_steps(position: Position) -> list[dict[str, Any]]:
+def _opening_steps(position: Position,
+                   later_wings: float = 0.0) -> list[dict[str, Any]]:
     """Day one, as one row or as two.
 
     ONE row on the credit shapes, where the opening fill IS a single number:
@@ -2310,15 +2352,17 @@ def _opening_steps(position: Position) -> list[dict[str, Any]]:
     # is the same complaint one step further on: the opening line was carrying a
     # share purchase that happened weeks later.
     later = position.shares_cost if position.assigned_on is not None else 0.0
+    # Wings sold later are told on their own lines, so their credit comes out
+    # of day one here; open_bought_cost nets it the other way.
     premium = position.open_premium
-    bought = round(position.open_bought_cost - later, 2)
+    bought = round(position.open_bought_cost + later_wings - later, 2)
 
     if premium <= 0 or bought <= 0:
         return [{
             "on": position.opened,
             "what": "You opened the trade",
             "detail": _open_detail(position),
-            "cash": round(position.open_cash + later, 2),
+            "cash": round(position.open_cash + later - later_wings, 2),
             "kind": "open",
         }]
 

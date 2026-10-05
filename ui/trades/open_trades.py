@@ -146,7 +146,7 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
 
     with st.container(border=True):
         dte = p.dte_left()
-        head = (f"{p.underlying} · {components.short_strategy(p.strategy_name)}"
+        head = (f"{p.underlying} · {components.short_strategy(p.shown_strategy_name)}"
                 + (f" · {dte} day{'s' if dte != 1 else ''} left"
                    if dte is not None else ""))
         # The instruction rides on the same line as the name now. Stacked, the

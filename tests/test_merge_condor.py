@@ -777,3 +777,29 @@ def test_price_position_fetches_each_wing_date_and_merges_them(monkeypatch):
     assert sorted(asked) == [near, far]
     assert out["priced"] is True
     assert out["cost_to_close"] == 1800.0
+
+
+# ------------------------------------------- what the screens call it, and its story
+# Her report, 2026-10-05: "the hosted app doesn't show that it's iron condor and
+# journal doesn't follow the changes". Every screen printed the name the first
+# wing was logged under, and the story put the put side's credit on day one.
+def test_a_merged_condor_is_shown_as_an_iron_condor():
+    by_id = _by_id([CALL_WING, PUT_WING, MERGE])
+    assert by_id["T-CALL"].shown_strategy_name == "Iron Condor"
+    assert by_id["T-CALL"].strategy_name.startswith("Call Credit Spread")
+
+
+def test_a_plain_spread_keeps_its_own_name():
+    p = _by_id([CALL_WING])["T-CALL"]
+    assert p.shown_strategy_name == p.strategy_name
+
+
+def test_the_story_tells_the_added_wing_on_its_own_day():
+    rows = [CALL_WING, PUT_WING, MERGE, _put_roll(date(2026, 9, 28), 230, 210)]
+    steps = pos_mod.story(_by_id(rows)["T-CALL"])
+    assert [s["kind"] for s in steps] == ["open", "wing", "roll"]
+    assert steps[0]["cash"] == 272.0
+    assert steps[1]["on"] == date(2026, 9, 17)
+    assert steps[1]["cash"] == 430.0
+    assert "215 put" in steps[1]["detail"]
+    assert steps[-1]["running"] == pytest.approx(272.0 + 430.0 + 274.0)
