@@ -158,6 +158,7 @@ class Position(BaseModel):
     # Premium collected for the short leg(s) - the basis for the 50% profit
     # target and the 2x stop. On a credit spread that IS the whole position; on
     # a PMCC it is only the short call, and a roll replaces it with the new one.
+    # On a condor a roll replaces only the rolled wing's part (wing_credit).
     credit: float = 0.0
     # The credit as it was on the day she opened, kept even after a roll
     # replaces `credit` with the new call's. The month report's "premium sold"
@@ -203,6 +204,11 @@ class Position(BaseModel):
     # second side went on and what it collected, which is the whole story of
     # a legged-in condor.
     wings: list["WingEvent"] = Field(default_factory=list)
+    # What each wing of a credit position is carrying towards `credit`, by
+    # side ("put" / "call"). Empty until the position has two wings. A roll of
+    # one wing replaces that wing's share only, so the condor's target and
+    # stop keep measuring against both - see _apply_roll.
+    wing_credit: dict[str, float] = Field(default_factory=dict)
     # The legs exactly as she opened them. `legs` tracks what she holds TODAY -
     # a roll rewrites the short call's strike in place - so day-one strikes
     # would otherwise be gone by the second roll.
@@ -621,6 +627,32 @@ class Position(BaseModel):
         return min(dates) if dates else None
 
     @property
+    def split_expirations(self) -> list[date]:
+        """Every expiration a CREDIT position's legs sit on, when there is more
+        than one - otherwise empty.
+
+        Her CRWD condor after the 2026-10-05 put roll: calls on 16 October,
+        puts on the 23rd. Closing it means buying back both wings, so pricing
+        has to fetch and match each wing on its own date. The PMCC and covered
+        calls (debit) are excluded: their far leg is not part of what the 50%
+        rule measures, and they keep their near-leg pricing.
+
+        Every date has to carry a leg she is SHORT. That is what tells a
+        rolled wing from a far leg on shape alone, which matters because
+        `is_debit` cannot: a legacy PMCC row has its open_cash defaulted to
+        the credit and reads as a credit trade. A LEAPS or a protective put
+        sits on a date with nothing sold on it.
+        """
+        if self.is_debit or self.shares_cost > 0:
+            return []
+        dates = {self.leg_expiration(l) for l in self.legs} - {None}
+        shorts = {self.leg_expiration(l) for l in self.legs
+                  if l.action is Action.SELL}
+        if len(dates) < 2 or not dates <= shorts:
+            return []
+        return sorted(dates)
+
+    @property
     def effective_strategy_key(self) -> str:
         """The strategy this position is actually RUNNING today.
 
@@ -772,6 +804,31 @@ def _parse_details(details: Any) -> tuple[dict[str, Any], list[Leg]]:
     return data, legs
 
 
+def _other_side(kind: OptionType) -> OptionType:
+    return OptionType.CALL if kind is OptionType.PUT else OptionType.PUT
+
+
+def _wing_credits(pos: Position) -> dict[str, float]:
+    """What each wing of a two-sided credit position carries of `credit`.
+
+    Recorded when a wing is added or merged in. A condor logged as ONE row
+    never had its credit split, so the legs' own fill prices apportion it;
+    with no prices on them at all, each wing is taken as half.
+    """
+    if {"put", "call"} <= set(pos.wing_credit):
+        return dict(pos.wing_credit)
+    net = {kind.value: 0.0 for kind in OptionType}
+    for leg in pos.legs:
+        sign = 1.0 if leg.action is Action.SELL else -1.0
+        net[leg.option_type.value] += sign * float(leg.premium or 0.0) * leg.quantity
+    total = net["put"] + net["call"]
+    if net["put"] <= 0 or net["call"] <= 0 or total <= 0:
+        share = {"put": 0.5, "call": 0.5}
+    else:
+        share = {k: v / total for k, v in net.items()}
+    return {k: round(pos.credit * share[k], 2) for k in share}
+
+
 def _apply_wing(pos: Position, wing: WingEvent) -> None:
     """Sell the opposite wing onto an open credit spread.
 
@@ -787,6 +844,12 @@ def _apply_wing(pos: Position, wing: WingEvent) -> None:
     pos.wings.append(wing)
 
     kind = wing.kind
+    # Before the wing goes on, everything collected so far belongs to the side
+    # already there - which is what a later roll of EITHER wing needs to know.
+    held = {l.option_type for l in pos.legs if l.action is Action.SELL}
+    if not pos.is_debit and held == {_other_side(kind)}:
+        pos.wing_credit = {_other_side(kind).value: round(pos.credit, 2),
+                           kind.value: round(wing.credit, 2)}
     dte = None
     if wing.expiration is not None and pos.opened is not None:
         dte = max((wing.expiration - pos.opened).days, 0)
@@ -964,6 +1027,9 @@ def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
 
     if event.cash > 0:
         pos.credit = round(pos.credit + event.cash, 2)
+        side = event.option_type if event.option_type in ("put", "call") else "put"
+        if side in pos.wing_credit:
+            pos.wing_credit[side] = round(pos.wing_credit[side] + event.cash, 2)
 
     if pos.short_puts and not pos.has_long_put:
         cash_needed = pos.assignment_cash_needed
@@ -1147,7 +1213,19 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
     if roll.new_expiration is not None:
         pos.expiration = roll.new_expiration
     if roll.new_credit > 0:
-        pos.credit = roll.new_credit
+        if not pos.is_debit and any(
+                l.action is Action.SELL and l.option_type is _other_side(kind)
+                for l in pos.legs):
+            # One wing of a condor rolled. The other wing's credit is still
+            # hers to keep or lose, so the target and stop measure against it
+            # plus the rolled wing's new credit - not the new credit alone.
+            # Her CRWD put rolls left the 272 call wing out of the basis.
+            split = _wing_credits(pos)
+            split[kind.value] = round(roll.new_credit, 2)
+            pos.wing_credit = split
+            pos.credit = round(sum(split.values()), 2)
+        else:
+            pos.credit = roll.new_credit
 
     new_dte = (max((roll.new_expiration - pos.opened).days, 0)
                if roll.new_expiration is not None and pos.opened is not None
@@ -1705,7 +1783,7 @@ def bp_committed_this_month(positions: list[Position], today: date | None = None
 
 
 # ------------------------------------------------------------------ live pricing math
-def _contract_for_leg(chain, leg, want, tolerance_days: int = 7):
+def _contract_for_leg(chain, leg, want, tolerance_days: int = 7, avoid=()):
     """The contract in `chain` that this leg actually sits on.
 
     The trade log stores DTE AT ENTRY, never an expiration date, so a leg's
@@ -1730,6 +1808,12 @@ def _contract_for_leg(chain, leg, want, tolerance_days: int = 7):
     any gap between a synthetic date and the real expiration beside it, and far
     narrower than the gap to the next month - so a position can still be honestly
     unpriceable rather than quoted against the wrong contract.
+
+    `avoid` is the position's OTHER leg dates. A week is exactly the gap
+    between two weeklies, so on her CRWD condor (calls 16 October, puts the
+    23rd) a put with no 23 October quote would have matched the 16th's. A
+    contract at least as near another leg's date as this one's is that leg's
+    expiration, never this one's.
     """
     if want is None:
         return None
@@ -1746,6 +1830,8 @@ def _contract_for_leg(chain, leg, want, tolerance_days: int = 7):
         gap = abs((when - want).days)
         if gap > tolerance_days:
             continue
+        if any(abs((when - other).days) <= gap for other in avoid):
+            continue
         if best_gap is None or gap < best_gap:
             best, best_gap = c, gap
     return best
@@ -1759,7 +1845,13 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     for spreads and iron condors it is every leg). Returns
     {"cost_to_close": dollars, "short_delta": per-share} or None when the
     chain doesn't carry the needed contracts.
+
+    A credit position whose legs sit on more than one date - a condor with one
+    wing rolled out - prices EVERY leg on its own expiration, so `chain` has to
+    carry all of them (DataProvider.price_position merges one per date).
+    Picking the near legs alone priced only her CRWD call wing.
     """
+    split = position.split_expirations
     if not position.can_track or position.expiration is None:
         return None
     if position.is_uncovered:
@@ -1774,9 +1866,14 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     short_delta = 0.0
     priced_any = False
     for leg in position.legs:
-        if near_dte is not None and leg.dte is not None and leg.dte != near_dte:
+        if split:
+            want = position.leg_expiration(leg)
+            contract = _contract_for_leg(chain, leg, want,
+                                         avoid=[d for d in split if d != want])
+        elif near_dte is not None and leg.dte is not None and leg.dte != near_dte:
             continue   # far-dated leg (LEAPS / long-term protective put)
-        contract = _contract_for_leg(chain, leg, position.expiration)
+        else:
+            contract = _contract_for_leg(chain, leg, position.expiration)
         if contract is None or contract.mid <= 0:
             return None
         priced_any = True

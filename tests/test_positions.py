@@ -197,6 +197,68 @@ def test_cost_to_close_skips_far_dated_legs():
     assert out["cost_to_close"] == 150.0    # only the short call, at 1.5 mid
 
 
+def test_a_pmcc_is_never_priced_as_a_split_credit_position():
+    """The PMCC above has no open_cash, so is_debit calls it a credit trade -
+    exactly what a legacy PMCC row looks like. Its LEAPS date has nothing sold
+    on it, which is what keeps it on near-leg pricing."""
+    p = Position(
+        trade_id="T1", underlying="AAPL", strategy_key="poor_mans_covered_call",
+        opened=date.today(), expiration=date.today() + timedelta(days=30),
+        credit=250.0, open_cash=250.0,
+        legs=[
+            Leg(role="long_call_leaps", action=Action.BUY,
+                option_type=OptionType.CALL, strike=150, dte=400),
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=220, dte=30),
+        ])
+    assert not p.is_debit
+    assert p.split_expirations == []
+
+
+def test_a_covered_call_with_a_protective_put_keeps_near_leg_pricing():
+    """Short call near, protective put far, shares underneath: only the call
+    is what the 50% rule buys back."""
+    near = date.today() + timedelta(days=30)
+    far = date.today() + timedelta(days=200)
+    p = Position(
+        trade_id="CC", underlying="IWM", strategy_key="covered_call",
+        opened=date.today(), expiration=near, credit=180.0,
+        open_cash=-20_000.0, shares_cost=20_000.0,
+        legs=[
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=230, dte=30),
+            Leg(role="long_put", action=Action.BUY,
+                option_type=OptionType.PUT, strike=190, dte=200),
+        ])
+    assert p.split_expirations == []
+    chain = OptionChain(underlying="IWM", underlying_price=220.0, contracts=[
+        OptionContract(option_type=OptionType.CALL, strike=230,
+                       expiration=near.isoformat(), dte=30, bid=1.0, ask=1.2),
+        OptionContract(option_type=OptionType.PUT, strike=190,
+                       expiration=far.isoformat(), dte=200, bid=4.0, ask=4.4),
+    ])
+    assert cost_to_close_from_chain(p, chain)["cost_to_close"] == 110.0
+
+
+def test_the_matcher_refuses_a_contract_that_belongs_to_another_leg_date():
+    """A week's tolerance is exactly the gap between two weeklies. Told the
+    16th is another leg's date, a leg on the 23rd must not take the 16th's."""
+    from src.engine.positions import _contract_for_leg
+
+    leg = Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+              strike=260)
+    wrong_week = OptionChain(underlying="CRWD", underlying_price=255.0,
+                             contracts=[OptionContract(
+                                 option_type=OptionType.PUT, strike=260,
+                                 expiration="2026-10-16", dte=11, bid=8, ask=8)])
+    want, other = date(2026, 10, 23), date(2026, 10, 16)
+    assert _contract_for_leg(wrong_week, leg, want) is not None
+    assert _contract_for_leg(wrong_week, leg, want, avoid=[other]) is None
+    # A synthetic date three days off its real Friday still matches it.
+    assert _contract_for_leg(wrong_week, leg, date(2026, 10, 19),
+                             avoid=[date(2026, 10, 30)]) is not None
+
+
 def test_to_date_handles_sheet_utc_instants():
     """The sheet hands ISO dates back as UTC instants; we want the LOCAL
     calendar day of that instant, not a truncation (which shifts a day for
