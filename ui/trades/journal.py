@@ -292,6 +292,26 @@ def _headline(p) -> str:
     return "  ·  ".join(bits)
 
 
+def _credit_card(p) -> tuple[str, str, str]:
+    """Label, value and sub-line for the credit card.
+
+    It said "CREDIT TAKEN - what you collected to open it" on every trade, but
+    the figure is `credit`: what the legs she holds NOW sold for, and the
+    number her 50% target is measured on. On a trade that was never rolled
+    those are the same thing. On her CRWD condor they were not - $836 under
+    "collected to open it", for a trade she opened for $272 and has collected
+    $1,475 on in all. Her ask, 2026-10-05: relabel it more clearly.
+    """
+    value = theme.money(p.credit)
+    if not (p.rolls or p.wings):
+        return "CREDIT TAKEN", value, "what you collected to open it"
+    if p.status == "closed":
+        return ("LAST CREDIT", value,
+                "what the legs you closed had sold for, after the rolls")
+    return ("CREDIT ON IT NOW", value,
+            "what the legs you hold sold for - your 50% target is half of this")
+
+
 def _summary_stats(p) -> None:
     """The five numbers that answer "how did this go" without scrolling."""
     # dte_left and days_held are METHODS on Position, not properties. Read as
@@ -305,8 +325,7 @@ def _summary_stats(p) -> None:
     cards = [
         theme.stat("OPENED", components.fmt_date(p.opened),
                    f"expires {components.fmt_date(p.expiration)}"),
-        theme.stat("CREDIT TAKEN", theme.money(p.credit),
-                   "what you collected to open it"),
+        theme.stat(*_credit_card(p)),
     ]
     if p.rolls:
         cards.append(theme.stat(
