@@ -1132,7 +1132,7 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
             strike=roll.new_strike,
             quantity=pos.prior_short_qty.get(kind.value, 1), dte=new_dte))
     else:
-        _move_leg(leg, roll.new_strike, new_dte)
+        _move_leg(leg, roll.new_strike, new_dte, roll.new_expiration)
 
     # The protection under it, when a whole vertical rolled as one order. It
     # goes to the new expiration whether or not its strike changed: both legs
@@ -1145,22 +1145,31 @@ def _apply_roll(pos: Position, roll: RollEvent) -> None:
                 role=f"long_{kind.value}", action=Action.BUY, option_type=kind,
                 strike=roll.new_long_strike, quantity=1, dte=new_dte))
         else:
-            _move_leg(long_leg, roll.new_long_strike, new_dte)
+            _move_leg(long_leg, roll.new_long_strike, new_dte,
+                      roll.new_expiration)
 
     _reprice_risk(pos)
 
 
-def _move_leg(leg: Leg, strike: float, dte: Optional[int]) -> None:
+def _move_leg(leg: Leg, strike: float, dte: Optional[int],
+              expiration: Optional[date] = None) -> None:
     """Point one leg at the contract she holds now.
 
     dte stays measured from `opened`, the invariant leg_expiration() and the
     near/far split both rely on. The old contract's delta and premium describe
     an option she no longer holds; leaving them would quietly feed a stale
     delta to the red-flag check.
+
+    The stored expiration moves too. leg_expiration() reads it BEFORE dte, so
+    a leg logged with its real date and then rolled out kept answering with
+    the old date - priced off the chain she had left. Her CRWD put spread,
+    rolled from 16 to 23 October on 2026-10-05, would have been.
     """
     leg.strike = float(strike)
     if dte is not None:
         leg.dte = dte
+    if expiration is not None:
+        leg.expiration = expiration
     leg.delta = 0.0
     leg.premium = 0.0
 
@@ -1505,9 +1514,30 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if pos is not None:
             _apply_wing(pos, wing)
 
+    # A roll on a condor written on or after the day its wings were merged
+    # moves a leg the MERGE brings in, so it has to wait for the merge below.
+    # Applied in the normal place, it found no put on the call trade, read
+    # that as "uncovered, writing a fresh one", and added the new put spread
+    # beside the old one - her CRWD condor showed both 215/200 and 230/210
+    # after its 28 September roll, a put spread she had already closed.
+    merged_on_by_target: dict[str, date] = {}
+    for _absorbed, target_id, merged_on in merges:
+        if merged_on is not None:
+            prior = merged_on_by_target.get(target_id)
+            merged_on_by_target[target_id] = (merged_on if prior is None
+                                              else min(prior, merged_on))
+
+    def _after_merge(item: tuple[str, int, RollEvent]) -> bool:
+        merged_on = merged_on_by_target.get(item[0])
+        rolled_on = item[2].rolled_on
+        return (merged_on is not None and rolled_on is not None
+                and rolled_on >= merged_on)
+
     # Rolls in the order they happened, so the last one wins on strike/date.
-    for trade_id, _seq, roll in sorted(
-            rolls, key=lambda r: r[2].rolled_on or date.min):
+    ordered_rolls = sorted(rolls, key=lambda r: r[2].rolled_on or date.min)
+    for trade_id, _seq, roll in ordered_rolls:
+        if _after_merge((trade_id, _seq, roll)):
+            continue
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_roll(pos, roll)
@@ -1539,6 +1569,14 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # of the wing that moves.
     for absorbed_id, target_id, merged_on in merges:
         _apply_merge(opens.get(absorbed_id), opens.get(target_id), merged_on)
+
+    # Now the rolls that were waiting on a merge, still in date order.
+    for trade_id, _seq, roll in ordered_rolls:
+        if not _after_merge((trade_id, _seq, roll)):
+            continue
+        pos = opens.get(trade_id)
+        if pos is not None:
+            _apply_roll(pos, roll)
 
     # Every position, not only the rolled ones. _reprice_risk used to run at the
     # end of a roll and nowhere else, so a trade she never rolled kept whatever
