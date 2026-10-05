@@ -216,6 +216,32 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
         _close_form(p, live)
 
 
+def _legs_line(p) -> str:
+    """The strikes she holds and when they expire.
+
+    One date for the whole position used to be printed after every strike, so
+    her CRWD condor read "240 / 250 / 260 / 250 · expires 16/10/2026" while the
+    260/250 put side expires on the 23rd. Legs on different dates now say so.
+    """
+    groups: dict = {}
+    for leg in p.legs:
+        groups.setdefault(p.leg_expiration(leg) or p.expiration, []).append(leg)
+    size = f"{p.contracts} contract(s)"
+    if len(groups) <= 1:
+        strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
+        return (f"Legs: **{strikes}** · {size}"
+                + (f" · expires {components.fmt_date(p.expiration)}"
+                   if p.expiration else ""))
+    parts = []
+    for when, legs in sorted(groups.items(),
+                             key=lambda kv: (kv[0] is None, kv[0])):
+        strikes = " / ".join(f"{leg.strike:g} {leg.option_type.value}"
+                             for leg in legs)
+        parts.append(f"**{strikes}** expire {components.fmt_date(when)}"
+                     if when else f"**{strikes}**")
+    return "Legs: " + " · ".join(parts) + f" · {size}"
+
+
 def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
     """The full read-out, folded away behind the card's summary."""
     from src.engine import positions as pos_mod
@@ -231,6 +257,16 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                        help="Nothing, and that is right: you BOUGHT this one. "
                             "What the put(s) you sold paid you came off the "
                             "price of the call rather than counting as income.")
+    elif not p.is_debit and p.has_history and p.whole_trade_collected > 0:
+        # Rolled, or a wing added: `credit` is only what the legs held now sold
+        # for. Her CRWD condor showed "Credit received $836" on a trade that had
+        # collected $1,475.
+        cols[1].metric("Collected in all", money(p.whole_trade_collected),
+                       help="Everything this trade has brought in: the opening "
+                            "credit, any side added later and every roll. The "
+                            f"legs you hold now sold for {money(p.credit)} - "
+                            "your 50% target is measured on that. Your stop is "
+                            "measured on this.")
     else:
         cols[1].metric("Credit received", money(p.credit),
                        help="What the short call paid you - the basis for your "
@@ -295,21 +331,41 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                 f"is the **{cushion['strike']:g} {side}** - price would have to "
                 f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
                 f"Your SOP says think about rolling once that room drops under 1.5%.")
+        for lk in cushion.get("locked") or []:
+            lside = "call" if lk["option_type"] == "call" else "put"
+            theme.note(f"The **{lk['strike']:g} {lside}** side is past both of its "
+                       f"strikes, so its loss is already the full width - there is "
+                       f"nothing left to defend on it.")
 
     target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
     if sig.profit_pct is not None and p.credit > 0:
+        stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
+        whole = (sig.stop_base is not None and sig.stop_pl is not None
+                 and abs(sig.stop_base - p.credit) > 0.005)
         if sig.profit_pct >= 0:
             st.progress(min(sig.profit_pct / target_pct, 1.0))
             theme.note(f"You've kept **{sig.profit_pct:.0f}%** of the credit so far - "
                        f"your SOP takes the win at **{target_pct:.0f}%**.")
+        elif whole:
+            # Her ruling, 2026-10-05: the stop is measured on the whole trade
+            # once it has been rolled or had a wing added.
+            st.progress(0.0)
+            stop_pct = sig.stop_pl / sig.stop_base * 100
+            if sig.stop_pl >= 0:
+                theme.note(f"The legs you hold now cost more to close than they sold "
+                           f"for, but over the whole trade you are still "
+                           f"**up \\${sig.stop_pl:,.0f}** on the "
+                           f"\\${sig.stop_base:,.0f} collected.")
+            else:
+                theme.note(f"Over the whole trade you are **\\${-sig.stop_pl:,.0f} down** "
+                           f"on the \\${sig.stop_base:,.0f} collected "
+                           f"({stop_pct:.0f}%). Your stop-loss rule says close if "
+                           f"that reaches **-{stop_mult * 100:.0f}%** "
+                           f"(a \\${stop_mult * sig.stop_base:,.0f} loss).")
         else:
-            stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
             st.progress(0.0)
             theme.note(f"Right now closing costs **more** than you collected "
                        f"({sig.profit_pct:.0f}% of the credit). Your stop-loss rule "
                        f"says close if that reaches **-{stop_mult * 100:.0f}%**.")
     if p.legs:
-        strikes = " / ".join(f"{leg.strike:g}" for leg in p.legs)
-        theme.note(f"Legs: **{strikes}** · {p.contracts} contract(s)"
-                   + (f" · expires {components.fmt_date(p.expiration)}"
-                      if p.expiration else ""))
+        theme.note(_legs_line(p))

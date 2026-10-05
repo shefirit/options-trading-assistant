@@ -41,6 +41,12 @@ class ExitSignal(BaseModel):
     pl_dollars: Optional[float] = None      # profit (+) / loss (-) right now
     profit_pct: Optional[float] = None      # % of the credit kept so far
     notes: list[str] = Field(default_factory=list)  # extra warnings worth seeing
+    # What the stop is measured on. The same as credit / pl_dollars on a trade
+    # nothing has happened to since it opened; on one that was rolled or had a
+    # wing added it is the WHOLE trade - her ruling, 2026-10-05: "measure the
+    # stop on the whole trade".
+    stop_base: Optional[float] = None       # dollars collected, the 1x
+    stop_pl: Optional[float] = None         # profit (+) / loss (-) on that base
 
 
 def pct_text(pct: float) -> str:
@@ -64,10 +70,22 @@ def _strike_notes(position: Position, underlying_price: float,
     the strategy she chose.
     """
     notes = []
+    # A condor side past BOTH its strikes has already lost its full width.
+    # "Roll up and out for a credit" on it was advice about a loss she could no
+    # longer change - her CRWD 240 call, with the 260 put the live risk.
+    from src.engine.positions import _locked_shorts
+    locked = _locked_shorts(position, underlying_price)
     for leg in position.legs:
         if leg.action != Action.SELL or leg.strike <= 0:
             continue
         k = leg.strike
+        if id(leg) in locked:
+            side = "put" if leg.option_type == OptionType.PUT else "call"
+            notes.append(
+                f"Your {k:g} {side} side is past both of its strikes, so its loss "
+                "is already the full width - rolling it now would only add cost. "
+                "Watch the other side.")
+            continue
         if leg.option_type == OptionType.PUT:
             if underlying_price <= k:
                 notes.append(
@@ -389,6 +407,21 @@ def evaluate(
         pl = credit - current_cost
         profit_pct = pl / credit * 100
 
+    # The stop's base. Once a credit trade has been rolled or had a wing added,
+    # `credit` is only what the legs held NOW sold for, and measuring the stop
+    # on it ignores every roll credit already banked: her CRWD condor read
+    # "-177% of the credit" on $836 when the trade had collected $1,475 and was
+    # 57% down on it. Debit shapes keep the credit - their open_cash is the
+    # LEAPS or shares, not money collected.
+    stop_base, stop_pl = credit, pl
+    if not position.is_debit and position.has_history:
+        collected = position.whole_trade_collected
+        if collected > 0:
+            stop_base = collected
+            stop_pl = (None if current_cost is None
+                       else round(collected - current_cost, 2))
+    whole = dict(stop_base=stop_base, stop_pl=stop_pl)
+
     # ---- collect watch-level warnings first (they ride along on any signal)
     notes: list[str] = []
     accepts_assignment = bool(exit_cfg.get("accepts_assignment"))
@@ -405,15 +438,17 @@ def evaluate(
 
     # ---- 1. Stop loss - the one rule that protects your account.
     sl = exit_cfg.get("stop_loss_multiple")
-    if sl and pl is not None and -pl >= float(sl) * credit - 1e-9:
+    if sl and stop_pl is not None and -stop_pl >= float(sl) * stop_base - 1e-9:
+        over = (" over the whole trade" if stop_base != credit else "")
         return ExitSignal(
             action="stop", tone="red",
             headline="Close now - stop loss hit",
-            reason=(f"You collected ${credit:,.0f} and it now costs ${current_cost:,.0f} "
-                    f"to close - a loss of ${-pl:,.0f}, which reached your stop of "
-                    f"{float(sl):g}x the credit (${float(sl) * credit:,.0f}). Your SOP: "
-                    "close immediately, no rolling at this point."),
-            pl_dollars=pl, profit_pct=profit_pct, notes=notes)
+            reason=(f"You collected ${stop_base:,.0f}{over} and it now costs "
+                    f"${current_cost:,.0f} to close - a loss of ${-stop_pl:,.0f}, "
+                    f"which reached your stop of {float(sl):g}x what you collected "
+                    f"(${float(sl) * stop_base:,.0f}). Your SOP: close immediately, "
+                    "no rolling at this point."),
+            pl_dollars=pl, profit_pct=profit_pct, notes=notes, **whole)
 
     # ---- 2. Time exit - never drift into the fast-risk zone without deciding.
     te = exit_cfg.get("time_exit_dte")
@@ -430,7 +465,7 @@ def evaluate(
                         "or roll to a fresh ~45-day spread back at your delta target, "
                         "but ONLY if the roll fills for a net credit. If you cannot get "
                         "a credit, close instead of forcing it."),
-                pl_dollars=pl, profit_pct=profit_pct, notes=notes)
+                pl_dollars=pl, profit_pct=profit_pct, notes=notes, **whole)
         notes.insert(0, (
             f"Only {dte_left} days to expiration, and you entered inside the "
             f"{int(te)}-day window (allowed for cash-settled indexes). Manage this "
@@ -445,7 +480,7 @@ def evaluate(
             reason=(f"You have kept {profit_pct:.0f}% of the ${credit:,.0f} credit "
                     f"(${pl:,.0f} profit). Your SOP says close at {float(pt):g}% - "
                     "don't wait for 100%. Lock it in and move on."),
-            pl_dollars=pl, profit_pct=profit_pct, notes=notes)
+            pl_dollars=pl, profit_pct=profit_pct, notes=notes, **whole)
 
     # ---- 4. Watch - nothing forces an exit, but something needs eyes on it.
     if notes:
@@ -453,7 +488,7 @@ def evaluate(
             action="watch", tone="amber",
             headline="Watch closely - see why below",
             reason=notes[0],
-            pl_dollars=pl, profit_pct=profit_pct, notes=notes[1:])
+            pl_dollars=pl, profit_pct=profit_pct, notes=notes[1:], **whole)
 
     # ---- 5. Hold (or unpriced, if we couldn't get live prices).
     if pl is None:
@@ -470,4 +505,4 @@ def evaluate(
         headline="Hold - nothing triggered",
         reason=(f"You have kept {profit_pct:.0f}% of the credit so far{days}. "
                 "No exit rule has triggered - let time decay keep working for you."),
-        pl_dollars=pl, profit_pct=profit_pct, notes=notes)
+        pl_dollars=pl, profit_pct=profit_pct, notes=notes, **whole)

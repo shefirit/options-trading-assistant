@@ -430,6 +430,29 @@ class Position(BaseModel):
         return round(self.roll_income + self.leg_close_cash, 2)
 
     @property
+    def has_history(self) -> bool:
+        """Something happened after the open: a roll, a wing added, a leg sold.
+
+        From then on `credit` is only what the legs she holds NOW sold for, and
+        the money the trade has really brought in is a different number - see
+        whole_trade_collected.
+        """
+        return bool(self.rolls or self.wings or self.leg_closes)
+
+    @property
+    def whole_trade_collected(self) -> float:
+        """Every dollar the trade has brought in so far, net of any it paid out.
+
+        The opening fill (wings included - they add to open_cash) plus every
+        roll and leg banked since. On her CRWD condor that is $1,475 against a
+        `credit` of $836: the two rolls banked $773, which the open card left
+        out, so it read $1,478 down on a trade that was $839 down. Only
+        meaningful on the credit shapes; a debit trade's open_cash is the
+        LEAPS or shares she paid for.
+        """
+        return round(float(self.open_cash or 0.0) + self.banked_income, 2)
+
+    @property
     def awaiting_assignment(self) -> bool:
         """She took the long leg off and is WAITING to be assigned on the short.
 
@@ -1886,6 +1909,15 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
     per_share = 0.0
     short_delta = 0.0
     priced_any = False
+    # A condor side already past both strikes has a delta near 1 and nothing
+    # left to lose. Letting it set the red-flag delta told her to "consider
+    # rolling or closing" her CRWD 240 call, a loss already locked, while the
+    # 260 put was the side that could still move.
+    px = getattr(chain, "underlying_price", None)
+    locked = _locked_shorts(position, px) if px else set()
+    if locked and all(id(l) in locked for l in position.legs
+                      if l.action == Action.SELL):
+        locked = set()
     for leg in position.legs:
         if split:
             want = position.leg_expiration(leg)
@@ -1900,7 +1932,8 @@ def cost_to_close_from_chain(position: Position, chain) -> Optional[dict[str, fl
         priced_any = True
         if leg.action == Action.SELL:
             per_share += contract.mid * leg.quantity   # you buy it back
-            short_delta = max(short_delta, abs(contract.delta))
+            if id(leg) not in locked:
+                short_delta = max(short_delta, abs(contract.delta))
         else:
             per_share -= contract.mid * leg.quantity   # you sell it back
     if not priced_any:
@@ -2187,10 +2220,20 @@ def strike_cushion(position: Position,
     """
     if underlying_price is None or underlying_price <= 0:
         return None
+    # On an iron condor, a side price has gone right through - past the long
+    # strike too - has nothing left to lose: its loss is the full width and is
+    # locked. Reporting it as "the one closest to trouble" pointed her CRWD
+    # condor at its 240 call (-12%, a loss already taken) while the 260 put,
+    # 4.7% below price, was the side that could still cost her.
+    locked = _locked_shorts(position, underlying_price)
+    live_shorts = [leg for leg in position.legs
+                   if leg.action == Action.SELL and leg.strike > 0
+                   and id(leg) not in locked]
+    if not live_shorts:
+        live_shorts = [leg for leg in position.legs
+                       if leg.action == Action.SELL and leg.strike > 0]
     nearest: Optional[dict[str, Any]] = None
-    for leg in position.legs:
-        if leg.action != Action.SELL or leg.strike <= 0:
-            continue
+    for leg in live_shorts:
         if leg.option_type == OptionType.PUT:
             room = (underlying_price - leg.strike) / underlying_price
         else:
@@ -2202,7 +2245,36 @@ def strike_cushion(position: Position,
                 "room_pct": room,
                 "breached": room < 0,
             }
+    if nearest is not None:
+        nearest["locked"] = [
+            {"strike": leg.strike, "option_type": leg.option_type.value}
+            for leg in position.legs if id(leg) in locked]
     return nearest
+
+
+def _locked_shorts(position: Position, underlying_price: float) -> set[int]:
+    """ids of the short legs on an iron condor whose whole side is breached.
+
+    Condors only. A covered call model 3 sells two puts against one, and past
+    its long put the loss keeps growing - nothing is locked there.
+    """
+    if not position.is_iron_condor_shape:
+        return set()
+    out: set[int] = set()
+    for short in position.legs:
+        if short.action != Action.SELL:
+            continue
+        for long_ in position.legs:
+            if (long_.action != Action.BUY
+                    or long_.option_type != short.option_type
+                    or (long_.quantity or 1) < (short.quantity or 1)):
+                continue
+            if short.option_type == OptionType.CALL:
+                if long_.strike > short.strike and underlying_price >= long_.strike:
+                    out.add(id(short))
+            elif long_.strike < short.strike and underlying_price <= long_.strike:
+                out.add(id(short))
+    return out
 
 
 # ------------------------------------------------------------------ results
