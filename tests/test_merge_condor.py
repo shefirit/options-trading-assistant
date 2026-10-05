@@ -420,3 +420,71 @@ def test_a_merge_written_after_the_close_is_refused():
                            merged_on=date(2026, 9, 25), account="real")
     positions = parse_rows(COLUMNS, [CALL_WING, PUT_WING, CONDOR_CLOSE, late])
     assert [p.trade_id for p in pos_mod.open_positions(positions)] == ["T-PUT"]
+
+
+# ------------------------------------------------- a roll after the merge
+# Her CRWD condor, 2026-10-05: the put side rolled on 28 September, after the
+# wings were merged on the 18th, showed as TWO put spreads - the closed one and
+# the new one. Merges ran after rolls, so the roll found no put on the call
+# trade, wrote a fresh one, and the merge then added the old wing beside it.
+from src.logging_tools.row import build_roll_row  # noqa: E402
+
+
+def _put_roll(on, short, long_, expiration=EXP, cash=274.0, credit=342.0):
+    return build_roll_row("T-CALL", "CRWD",
+                          "Call Credit Spread (Bear Call Spread)", cash,
+                          new_strike=short, new_expiration=expiration,
+                          new_credit=credit, rolled_on=on, account="real",
+                          option_type="put", new_long_strike=long_)
+
+
+def _strikes(p, kind):
+    return sorted(l.strike for l in p.legs if l.option_type is kind)
+
+
+def test_a_roll_after_the_merge_moves_the_merged_wing():
+    rows = [CALL_WING, PUT_WING, MERGE, _put_roll(date(2026, 9, 28), 230, 210)]
+    p = _by_id(rows)["T-CALL"]
+    assert _strikes(p, OptionType.PUT) == [210, 230]
+    assert _strikes(p, OptionType.CALL) == [240, 250]
+    assert p.is_iron_condor_shape
+
+
+def test_a_second_roll_to_a_later_date_moves_the_legs_there():
+    """Both put legs land on the new date; the calls stay where they were."""
+    later = date(2026, 10, 23)
+    rows = [CALL_WING, PUT_WING, MERGE,
+            _put_roll(date(2026, 9, 28), 230, 210),
+            _put_roll(date(2026, 10, 5), 260, 250, expiration=later,
+                      cash=498.69, credit=564.0)]
+    p = _by_id(rows)["T-CALL"]
+    assert _strikes(p, OptionType.PUT) == [250, 260]
+    for leg in p.legs:
+        want = later if leg.option_type is OptionType.PUT else EXP
+        assert p.leg_expiration(leg) == want
+    assert p.banked_income == pytest.approx(274.0 + 498.69)
+
+
+def test_a_roll_before_the_merge_still_happens_first():
+    """A call roll dated before the merge is the call trade's own history."""
+    call_roll = build_roll_row("T-CALL", "CRWD",
+                               "Call Credit Spread (Bear Call Spread)", 50.0,
+                               new_strike=245, new_expiration=EXP,
+                               new_credit=200.0, rolled_on=date(2026, 9, 10),
+                               account="real", option_type="call",
+                               new_long_strike=255)
+    p = _by_id([CALL_WING, call_roll, PUT_WING, MERGE])["T-CALL"]
+    assert _strikes(p, OptionType.CALL) == [245, 255]
+    assert _strikes(p, OptionType.PUT) == [200, 215]
+
+
+def test_a_rolled_leg_that_carried_its_date_takes_the_new_one():
+    """leg_expiration() reads the stored date first, so a roll has to move it."""
+    later = date(2026, 10, 23)
+    rows = [PUT_WING, build_roll_row(
+        "T-PUT", "CRWD", "Put Credit Spread (Bull Put Spread)", 100.0,
+        new_strike=210, new_expiration=later, new_credit=300.0,
+        rolled_on=date(2026, 9, 28), account="real", option_type="put",
+        new_long_strike=200)]
+    p = _by_id(rows)["T-PUT"]
+    assert all(p.leg_expiration(l) == later for l in p.legs)
