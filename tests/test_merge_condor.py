@@ -803,3 +803,20 @@ def test_the_story_tells_the_added_wing_on_its_own_day():
     assert steps[1]["cash"] == 430.0
     assert "215 put" in steps[1]["detail"]
     assert steps[-1]["running"] == pytest.approx(272.0 + 430.0 + 274.0)
+
+
+# --------------------------------------- selling the long put, on a condor
+# Her CRWD card offered "Sell the long put, keep the short one". Recording it
+# marks the trade as waiting for assignment, which switches off the 50%
+# target, the 21-day clock and the stop - with the call wing $30 in the money.
+def test_a_condor_is_not_offered_selling_its_long_put():
+    from ui.trades.actions import _sellable_long_puts
+
+    assert _sellable_long_puts(_by_id(_crwd_today())["T-CALL"]) == []
+
+
+def test_a_put_credit_spread_still_is():
+    from ui.trades.actions import _sellable_long_puts
+
+    longs = _sellable_long_puts(_by_id([PUT_WING])["T-PUT"])
+    assert [l.strike for l in longs] == [200]
