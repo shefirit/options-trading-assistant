@@ -813,6 +813,17 @@ def test_the_journal_leaves_out_the_half_that_was_merged():
     assert [p.trade_id for p in journal_trades(positions)] == ["T-CALL"]
 
 
+def test_the_credit_card_says_what_the_number_is():
+    """"Collected to open it" is only true until the first roll or wing."""
+    from ui.trades.journal import _credit_card
+    plain = _by_id([CALL_WING])["T-CALL"]
+    assert _credit_card(plain)[0] == "CREDIT TAKEN"
+    rows = [CALL_WING, PUT_WING, MERGE, _put_roll(date(2026, 9, 28), 230, 210)]
+    label, _value, sub = _credit_card(_by_id(rows)["T-CALL"])
+    assert label == "CREDIT ON IT NOW"
+    assert "50% target" in sub
+
+
 # --------------------------------------- selling the long put, on a condor
 # Her CRWD card offered "Sell the long put, keep the short one". Recording it
 # marks the trade as waiting for assignment, which switches off the 50%
