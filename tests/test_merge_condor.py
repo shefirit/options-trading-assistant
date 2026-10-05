@@ -488,3 +488,102 @@ def test_a_rolled_leg_that_carried_its_date_takes_the_new_one():
         new_long_strike=200)]
     p = _by_id(rows)["T-PUT"]
     assert all(p.leg_expiration(l) == later for l in p.legs)
+
+
+# ------------------------------------- wings on two dates, wings that overlap
+# Her CRWD condor after the 2026-10-05 put roll: the calls still on 16 October,
+# the puts moved to the 23rd and up to 260/250 - above the 240 short call. The
+# app measured risk at the near date only, so it never saw a condor: max loss
+# stayed at the 3,024 left by the first roll, the card ran call-spread rules,
+# and the countdown followed the puts while the calls expired a week earlier.
+LATER = date(2026, 10, 23)
+
+
+def _crwd_today():
+    return [CALL_WING, PUT_WING, MERGE,
+            _put_roll(date(2026, 9, 28), 230, 210),
+            _put_roll(date(2026, 10, 5), 260, 250, expiration=LATER,
+                      cash=498.69, credit=564.0)]
+
+
+def test_wings_on_two_dates_are_still_a_condor():
+    p = _by_id(_crwd_today())["T-CALL"]
+    assert p.is_iron_condor_shape
+    assert p.effective_strategy_key == "iron_condor"
+
+
+def test_wings_on_two_dates_can_each_lose_their_whole_width():
+    """The calls can expire at full loss on the 16th and price can still fall
+    through the puts by the 23rd - so both widths, less all 1,474.69 collected.
+    The gross is what thinkorswim holds: two verticals, 4,000."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    assert p.buying_power == 4000.0
+    assert p.max_loss == pytest.approx(4000.0 - 1474.69)
+
+
+def test_split_dates_add_up_even_when_the_wings_do_not_overlap():
+    rows = [CALL_WING, PUT_WING, MERGE,
+            _put_roll(date(2026, 10, 5), 215, 200, expiration=LATER)]
+    p = _by_id(rows)["T-CALL"]
+    assert p.buying_power == (10 + 15) * 100 * 2
+
+
+def test_an_inverted_condor_on_one_date_can_lose_both_widths():
+    """Short put above the short call: at 250 both wings are in
+    the money together, so the wider-wing rule would understate it by half."""
+    inv = _spread("T-INV", date(2026, 9, 17), "put", 260, 250, 430.0)
+    merge = build_merge_row("T-INV", "T-CALL", "CRWD", "x",
+                            merged_on=date(2026, 9, 18), account="real")
+    p = _by_id([CALL_WING, inv, merge])["T-CALL"]
+    assert p.is_iron_condor_shape
+    assert p.buying_power == 4000.0
+    assert p.max_loss == 4000.0 - 702.0
+
+
+def test_overlapping_wings_lose_more_than_one_width_but_less_than_two():
+    """Puts 255/245 against calls 240/250: at 245 the put wing is lost and the
+    call wing half lost - 15 points, not 10 and not 20."""
+    lap = _spread("T-LAP", date(2026, 9, 17), "put", 255, 245, 430.0)
+    merge = build_merge_row("T-LAP", "T-CALL", "CRWD", "x",
+                            merged_on=date(2026, 9, 18), account="real")
+    p = _by_id([CALL_WING, lap, merge])["T-CALL"]
+    assert p.buying_power == 15 * 100 * 2
+
+
+def test_the_countdown_follows_the_wing_that_expires_first():
+    p = _by_id(_crwd_today())["T-CALL"]
+    assert p.expiration == EXP
+    assert p.dte_left(date(2026, 10, 5)) == 11
+
+
+def test_once_the_near_wing_is_off_the_countdown_moves_to_the_other():
+    from src.logging_tools.row import build_leg_close_row
+
+    off = [build_leg_close_row("T-CALL", "CRWD", "Call Credit Spread", cash=c,
+                               strike=k, option_type="call", side=s,
+                               closed_on=EXP, account="real")
+           for k, s, c in ((240, "sell", 0.0), (250, "buy", 0.0))]
+    p = _by_id(_crwd_today() + off)["T-CALL"]
+    assert _strikes(p, OptionType.CALL) == []
+    assert p.expiration == LATER
+
+
+def test_a_plain_spread_rolled_out_counts_down_to_the_new_date():
+    rows = [PUT_WING, build_roll_row(
+        "T-PUT", "CRWD", "Put Credit Spread (Bull Put Spread)", 100.0,
+        new_strike=210, new_expiration=LATER, new_credit=300.0,
+        rolled_on=date(2026, 9, 28), account="real", option_type="put",
+        new_long_strike=200)]
+    assert _by_id(rows)["T-PUT"].expiration == LATER
+
+
+def test_a_pmcc_roll_still_counts_down_to_the_new_short_call():
+    """The LEAPS is the far leg and the short call the near one, so the roll's
+    own date is still the answer - and a PMCC is never a condor."""
+    new_exp = date(2026, 10, 30)
+    roll = build_roll_row("SMH1", "SMH", "PMCC", 120.0, new_strike=630.0,
+                          new_expiration=new_exp, new_credit=400.0,
+                          rolled_on=date(2026, 9, 18), account="paper")
+    p = parse_rows(COLUMNS, _pmcc_rows(roll))[0]
+    assert p.expiration == new_exp
+    assert not p.is_iron_condor_shape
