@@ -677,14 +677,14 @@ def _open_label(p) -> str:
     she thinks in, and the picker is already sorted that way.
     """
     return (f"{components.fmt_date(p.opened)}  ·  {p.underlying}  ·  "
-            f"{components.short_strategy(p.strategy_name)}"
+            f"{components.short_strategy(p.shown_strategy_name)}"
             + (f"  ·  banked ${p.realized_total:,.0f} so far"
                if p.realized_total else ""))
 
 
 def _closed_label(p) -> str:
     return (f"{components.fmt_date(p.closed_on)}  ·  {p.underlying}  ·  "
-            f"{components.short_strategy(p.strategy_name)}"
+            f"{components.short_strategy(p.shown_strategy_name)}"
             f"  ·  {'+' if (p.realized_total or 0) >= 0 else '-'}"
             f"${abs(p.realized_total or 0):,.0f}")
 

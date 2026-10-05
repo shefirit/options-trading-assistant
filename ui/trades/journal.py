@@ -105,7 +105,7 @@ def _rows(trades: list) -> list[dict[str, Any]]:
             "result": word,
             "status": p.status,
             "symbol": p.underlying or "-",
-            "strategy": components.short_strategy(p.strategy_name),
+            "strategy": components.short_strategy(p.shown_strategy_name),
             "opened": p.opened,
             "closed": p.closed_on,
             "sort": p.closed_on or p.opened or _dt.date.min,
@@ -273,7 +273,7 @@ def _trade_page(position, settings, strategies, provider) -> None:
 
 
 def _headline(p) -> str:
-    bits = [p.underlying or "-", components.short_strategy(p.strategy_name)]
+    bits = [p.underlying or "-", components.short_strategy(p.shown_strategy_name)]
     if p.contracts:
         bits.append(f"{p.contracts} contract{'' if p.contracts == 1 else 's'}")
     return "  ·  ".join(bits)

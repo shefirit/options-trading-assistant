@@ -1266,7 +1266,7 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Price now": px,
             "You sold": strike_label,
             "Room to it": (cushion["room_pct"] * 100) if cushion else None,
-            "Strategy": short_strategy(pos.strategy_name),
+            "Strategy": short_strategy(pos.shown_strategy_name),
             "Days left": pos.dte_left(),
             # A trade she is holding to expiration on purpose has no 21-day
             # decision to date - saying "overdue" there would nag her about a
@@ -1854,7 +1854,7 @@ def render_story(position, steps: list[dict]) -> None:
 
     head = (f'<div class="ota-story-head">'
             f'<div class="ota-story-title">{_story_esc(position.underlying)} '
-            f'&middot; {_story_esc(short_strategy(position.strategy_name))}</div>'
+            f'&middot; {_story_esc(short_strategy(position.shown_strategy_name))}</div>'
             f'<div class="ota-story-when">{when}</div>'
             f'{headline}'
             f'<div class="ota-story-resultsub">{sub}</div></div>')
