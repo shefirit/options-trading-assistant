@@ -720,14 +720,16 @@ def test_the_profit_target_measures_against_both_wings():
 
 
 def test_the_stop_measures_against_both_wings():
-    """2x of 836 is a 1,672 loss, so the stop sits at 2,508 to close - against
-    564 alone it fired at 1,692."""
+    """Against 564 alone it fired at 1,692 to close; against the 836 on both
+    wings it would at 2,508. Her ruling, 2026-10-05, measures it on the WHOLE
+    trade - every roll credit banked too - so neither fires it."""
     p = _by_id(_crwd_today())["T-CALL"]
     cfg = {"stop_loss_multiple": 2}
-    assert exit_rules.evaluate(p, cfg, current_cost=2400.0,
-                               today=date(2026, 10, 5)).action != "stop"
-    assert exit_rules.evaluate(p, cfg, current_cost=2508.0,
-                               today=date(2026, 10, 5)).action == "stop"
+    sig = exit_rules.evaluate(p, cfg, current_cost=2508.0,
+                              today=date(2026, 10, 5))
+    assert sig.action != "stop"
+    assert sig.stop_base == pytest.approx(p.whole_trade_collected)
+    assert sig.stop_base > p.credit
 
 
 def test_price_position_fetches_each_wing_date_and_merges_them(monkeypatch):

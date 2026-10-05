@@ -1260,6 +1260,11 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
         pl = sig.pl_dollars
         if pos.is_debit and live.get("open_pl") is not None:
             pl = live["open_pl"]
+        elif getattr(sig, "stop_pl", None) is not None and pos.has_history:
+            # Rolled, or a wing added: credit minus cost to close leaves out
+            # every roll credit already banked. Whole trade, as the comment
+            # above promises - the same figure the card's headline uses.
+            pl = sig.stop_pl
         rows.append({
             "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
             "Symbol": pos.underlying,
@@ -1313,15 +1318,16 @@ def positions_column_config():
                  "just holding; on it you decide - close, or roll for a credit. "
                  "\"Today\" or \"overdue\" means that day has arrived."),
         "Credit $": st.column_config.NumberColumn(format="$%.0f", width=80,
-            help="Cash you collected for the short leg when you opened it. On a "
-                 "PMCC or covered call that is the short call only - the LEAPS "
-                 "or the shares are not in this number."),
+            help="What the legs you hold now sold for - your 50% target is "
+                 "measured on it. After a roll that is the new legs only; the "
+                 "roll credits are in P&L. On a PMCC or covered call it is the "
+                 "short call only - the LEAPS or the shares are not in it."),
         "Close now $": st.column_config.NumberColumn(format="$%.0f", width=95,
             help="What it costs to buy the short side back right now (mid prices)."),
         "P&L $": st.column_config.NumberColumn(format="$%.0f", width=78,
-            help="What the whole trade is worth if you closed it today - on a "
-                 "PMCC or covered call the long leg and your banked roll credits "
-                 "are counted in."),
+            help="What the whole trade is worth if you closed it today - your "
+                 "banked roll credits are counted in, and on a PMCC or covered "
+                 "call the long leg too."),
         "% kept": st.column_config.NumberColumn(format="%.0f%%", width=76,
             help="How much of the SHORT CALL's credit is yours so far. Your SOP "
                  "takes the win at 50%. On a PMCC this is about the call only - "

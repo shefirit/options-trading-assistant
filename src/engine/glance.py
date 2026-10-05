@@ -88,7 +88,23 @@ def summary_line(position, live: dict, signal, target_pct: float = 50.0,
     credit = float(position.credit or 0.0)
     cost = live.get("cost_to_close")
 
-    if cost is not None and credit > 0:
+    whole = (not getattr(position, "is_debit", False)
+             and getattr(position, "has_history", False)
+             and float(getattr(position, "whole_trade_collected", 0.0) or 0.0) > 0)
+    if cost is not None and whole:
+        # Rolled, or a wing added: `credit` is only what the legs held now sold
+        # for. "Against the $836 you collected, $1,478 down" was her CRWD
+        # condor, on a trade that had collected $1,475 and was $839 down.
+        collected = float(position.whole_trade_collected)
+        net = collected - float(cost)
+        if net >= 0:
+            bits.append(f"up {_money(net)} on the whole trade - "
+                        f"{_money(collected)} collected, {_money(cost)} to close")
+        else:
+            bits.append(f"closing it costs {_money(cost)} against the "
+                        f"{_money(collected)} collected over the whole trade, "
+                        f"so it is {_money(net)} down")
+    elif cost is not None and credit > 0:
         kept = credit - float(cost)
         if kept >= 0:
             bits.append(f"kept {_money(kept)} of the {_money(credit)} credit "
@@ -120,6 +136,10 @@ def summary_line(position, live: dict, signal, target_pct: float = 50.0,
             room = abs(float(cushion.get("room_pct") or 0.0)) * 100
             bits.append(f"price is {room:.1f}% clear of your "
                         f"{cushion['strike']:g} {side}")
+        for lk in cushion.get("locked") or []:
+            lside = "call" if lk.get("option_type") == "call" else "put"
+            bits.append(f"the {lk['strike']:g} {lside} side is past both "
+                        f"strikes, so its loss is already locked")
 
     if not bits:
         return "Not enough price data to say how this one is doing today."
