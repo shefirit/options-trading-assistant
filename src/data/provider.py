@@ -916,6 +916,8 @@ class DataProvider:
         try:
             if self.mode == "schwab":
                 chain = self.get_chain(sym)
+            elif position.split_expirations:
+                chain = self._split_expiration_chain(sym, position.split_expirations)
             else:
                 chain = cache.get_or_fetch(
                     f"poschain:{sym}:{position.expiration}",
@@ -945,6 +947,34 @@ class DataProvider:
             out["position_value"] = whole["value"]
             out.update({k: v for k, v in whole.items() if k != "value"})
         return out
+
+    def _split_expiration_chain(self, sym: str, dates) -> Optional[OptionChain]:
+        """One chain carrying every expiration a split-date credit position sits
+        on - her CRWD condor's calls on 16 October and puts on the 23rd.
+
+        _expiration_chain() returns ONE expiration, so the wing on the other
+        date was simply missing and only the near wing ever got priced. Each
+        date is fetched on its own and merged, the way _price_whole_position
+        does for a PMCC's LEAPS. Any date that cannot be fetched makes the
+        whole thing None: a cost to close with a wing left out is a lie.
+        """
+        today = date.today()
+        contracts: list = []
+        first = None
+        for d in dates:
+            part = cache.get_or_fetch(
+                f"poschain:{sym}:{d.isoformat()}",
+                lambda d=d: self._expiration_chain(sym, max((d - today).days, 0)),
+                300)
+            if part is None:
+                return None
+            first = first or part
+            contracts.extend(part.contracts)
+        if first is None:
+            return None
+        return OptionChain(underlying=first.underlying,
+                           underlying_price=first.underlying_price,
+                           contracts=contracts)
 
     def _price_whole_position(self, position, near_chain,
                               underlying_price) -> Optional[dict]:

@@ -587,3 +587,193 @@ def test_a_pmcc_roll_still_counts_down_to_the_new_short_call():
     p = parse_rows(COLUMNS, _pmcc_rows(roll))[0]
     assert p.expiration == new_exp
     assert not p.is_iron_condor_shape
+
+
+# ---------------------------------------- live exit checks on the split condor
+# The same CRWD condor, priced. Three things were wrong on 2026-10-05: only
+# the call wing was priced (the near-dte legs), the chain fetched carried only
+# one expiration, and the credit the 50% target and stop measure against was
+# the put wing's new 564 alone - the 272 call wing had dropped out of it.
+from src.data.chain import OptionChain, OptionContract  # noqa: E402
+from src.engine import exit_rules  # noqa: E402
+from src.engine.positions import cost_to_close_from_chain  # noqa: E402
+
+
+def _quote(kind, strike, exp, mid, delta=0.2):
+    return OptionContract(option_type=kind, strike=strike,
+                          expiration=exp.isoformat(), dte=0,
+                          delta=delta if kind is OptionType.CALL else -delta,
+                          bid=mid, ask=mid)
+
+
+# The right contracts, plus the same strikes on the OTHER week at prices that
+# would give a different answer if a leg were matched to the wrong date.
+CRWD_CHAIN = [
+    _quote(OptionType.CALL, 240, EXP, 6.0, delta=0.35),
+    _quote(OptionType.CALL, 250, EXP, 2.0),
+    _quote(OptionType.PUT, 260, LATER, 9.0, delta=0.6),
+    _quote(OptionType.PUT, 250, LATER, 4.0),
+    _quote(OptionType.CALL, 240, LATER, 7.5),
+    _quote(OptionType.CALL, 250, LATER, 3.5),
+    _quote(OptionType.PUT, 260, EXP, 8.0),
+    _quote(OptionType.PUT, 250, EXP, 2.5),
+]
+
+
+def _chain(contracts):
+    return OptionChain(underlying="CRWD", underlying_price=255.0,
+                       contracts=list(contracts))
+
+
+def test_a_put_roll_keeps_the_call_wings_credit_in_the_basis():
+    """272 for the untouched calls plus the puts' newest 564 - not 564 alone."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    assert p.credit == 272.0 + 564.0
+    assert p.wing_credit == {"call": 272.0, "put": 564.0}
+
+
+def test_each_roll_replaces_only_its_own_wings_part():
+    rows = [CALL_WING, PUT_WING, MERGE, _put_roll(date(2026, 9, 28), 230, 210)]
+    assert _by_id(rows)["T-CALL"].credit == 272.0 + 342.0
+
+
+def test_rolling_the_call_wing_keeps_the_put_wings_credit():
+    call_roll = build_roll_row("T-CALL", "CRWD",
+                               "Call Credit Spread (Bear Call Spread)", 40.0,
+                               new_strike=245, new_expiration=LATER,
+                               new_credit=310.0, rolled_on=date(2026, 9, 25),
+                               account="real", option_type="call",
+                               new_long_strike=255)
+    p = _by_id([CALL_WING, PUT_WING, MERGE, call_roll])["T-CALL"]
+    assert p.credit == 430.0 + 310.0
+
+
+def test_a_plain_spread_roll_still_replaces_the_credit():
+    rows = [PUT_WING, build_roll_row(
+        "T-PUT", "CRWD", "Put Credit Spread (Bull Put Spread)", 100.0,
+        new_strike=210, new_expiration=LATER, new_credit=300.0,
+        rolled_on=date(2026, 9, 28), account="real", option_type="put",
+        new_long_strike=200)]
+    assert _by_id(rows)["T-PUT"].credit == 300.0
+
+
+def test_a_condor_logged_as_one_row_splits_its_credit_by_the_fills():
+    """No wing was ever added, so nothing recorded the split. The fills do:
+    puts netted 0.90 and calls 0.60, so the puts carry 60% of the 300."""
+    legs = [
+        Leg(role="short_put", action=Action.SELL, option_type=OptionType.PUT,
+            strike=215, premium=1.5, dte=44, expiration=EXP),
+        Leg(role="long_put", action=Action.BUY, option_type=OptionType.PUT,
+            strike=200, premium=0.6, dte=44, expiration=EXP),
+        Leg(role="short_call", action=Action.SELL, option_type=OptionType.CALL,
+            strike=240, premium=1.0, dte=44, expiration=EXP),
+        Leg(role="long_call", action=Action.BUY, option_type=OptionType.CALL,
+            strike=250, premium=0.4, dte=44, expiration=EXP),
+    ]
+    t = Trade(strategy_key="iron_condor", underlying="CRWD", legs=legs,
+              contracts=2, underlying_price=230.0)
+    row = build_row(t, "Iron Condor", {"credit": 300.0, "open_cash": 300.0,
+                                       "account": "real"},
+                    True, "", trade_id="T-IC", opened_on=date(2026, 9, 2))
+    roll = build_roll_row("T-IC", "CRWD", "Iron Condor", 50.0,
+                          new_strike=210, new_expiration=LATER,
+                          new_credit=200.0, rolled_on=date(2026, 9, 28),
+                          account="real", option_type="put",
+                          new_long_strike=195)
+    p = _by_id([row, roll])["T-IC"]
+    assert p.credit == pytest.approx(120.0 + 200.0)
+
+
+def test_the_split_condor_spans_both_dates():
+    assert _by_id(_crwd_today())["T-CALL"].split_expirations == [EXP, LATER]
+
+
+def test_both_wings_are_priced_each_on_its_own_date():
+    """Calls 6.00 - 2.00 on the 16th, puts 9.00 - 4.00 on the 23rd: 9.00 a
+    share, x100 x2 contracts. Pricing the calls alone said 800."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    out = cost_to_close_from_chain(p, _chain(CRWD_CHAIN))
+    assert out["cost_to_close"] == 1800.0
+    assert out["short_delta"] == 0.6
+
+
+def test_a_wing_missing_from_its_week_is_not_priced_off_the_other_week():
+    """The 16th is exactly seven days from the 23rd - inside the matcher's
+    tolerance - so without the guard the puts would quietly take the 16th's
+    quotes. Unpriced is the honest answer."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    no_later_puts = [c for c in CRWD_CHAIN
+                     if not (c.option_type is OptionType.PUT
+                             and c.expiration == LATER.isoformat())]
+    assert cost_to_close_from_chain(p, _chain(no_later_puts)) is None
+
+
+def test_the_profit_target_measures_against_both_wings():
+    """836 collected and 400 to close is 52% kept - the take-the-win line.
+    Against the 564 alone it read 29% and said hold."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    sig = exit_rules.evaluate(p, {"profit_target_pct": 50,
+                                  "stop_loss_multiple": 2},
+                              current_cost=400.0, today=date(2026, 10, 5))
+    assert sig.action == "profit"
+    assert sig.profit_pct == pytest.approx((836.0 - 400.0) / 836.0 * 100)
+
+
+def test_the_stop_measures_against_both_wings():
+    """2x of 836 is a 1,672 loss, so the stop sits at 2,508 to close - against
+    564 alone it fired at 1,692."""
+    p = _by_id(_crwd_today())["T-CALL"]
+    cfg = {"stop_loss_multiple": 2}
+    assert exit_rules.evaluate(p, cfg, current_cost=2400.0,
+                               today=date(2026, 10, 5)).action != "stop"
+    assert exit_rules.evaluate(p, cfg, current_cost=2508.0,
+                               today=date(2026, 10, 5)).action == "stop"
+
+
+def test_price_position_fetches_each_wing_date_and_merges_them(monkeypatch):
+    """The provider used to fetch ONE expiration - the near one - so the put
+    wing's contracts were never in the chain at all."""
+    from datetime import timedelta
+
+    from src.data import cache, yfinance_client
+    from src.data.provider import DataProvider
+    from src.engine.positions import Position
+
+    today = date.today()
+    near, far = today + timedelta(days=11), today + timedelta(days=18)
+    p = Position(
+        trade_id="SPLIT", underlying="ZZSPLIT",
+        opened=today - timedelta(days=33), expiration=near, contracts=2,
+        credit=836.0, open_cash=702.0,
+        legs=[
+            Leg(role="short_call", action=Action.SELL,
+                option_type=OptionType.CALL, strike=240, expiration=near),
+            Leg(role="long_call", action=Action.BUY,
+                option_type=OptionType.CALL, strike=250, expiration=near),
+            Leg(role="short_put", action=Action.SELL,
+                option_type=OptionType.PUT, strike=260, expiration=far),
+            Leg(role="long_put", action=Action.BUY,
+                option_type=OptionType.PUT, strike=250, expiration=far),
+        ])
+    # Each fetch returns ONE expiration, as _expiration_chain really does.
+    by_date = {near: EXP, far: LATER}
+    asked = []
+
+    def one_expiration(sym, target_dte, tradable=False):
+        d = today + timedelta(days=target_dte)
+        asked.append(d)
+        return _chain(c.model_copy(update={"expiration": d.isoformat()})
+                      for c in CRWD_CHAIN
+                      if c.expiration == by_date[d].isoformat())
+
+    provider = DataProvider("yahoo")
+    monkeypatch.setattr(provider, "_expiration_chain", one_expiration)
+    monkeypatch.setattr(yfinance_client, "get_price", lambda s: 255.0)
+    for d in (near, far):
+        cache.clear(f"poschain:ZZSPLIT:{d.isoformat()}")
+    cache.clear("px:ZZSPLIT")
+
+    out = provider.price_position(p)
+    assert sorted(asked) == [near, far]
+    assert out["priced"] is True
+    assert out["cost_to_close"] == 1800.0
