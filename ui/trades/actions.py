@@ -831,12 +831,18 @@ def _wheel_panel(p, price: Optional[float]) -> None:
 def _sellable_long_puts(p) -> list:
     """The long puts she could sell off while keeping the short put open.
 
-    Only on a credit shape (a spread or a condor), and only while a short put
-    is still there to be left behind - selling the protection off a position
-    with nothing short under it is just closing it, which the close form
-    already does properly.
+    Only on a put credit spread, and only while a short put is still there to
+    be left behind - selling the protection off a position with nothing short
+    under it is just closing it, which the close form already does properly.
+
+    Not on a condor. Recording it there marks the trade as waiting for
+    assignment, which switches off the 50% target, the 21-day clock and the
+    stop - while a call wing is still open and can lose its full width. Her
+    CRWD condor was offered it with that call wing $30 in the money.
     """
     if p.status != "open" or p.assigned_strike or p.is_debit:
+        return []
+    if p.is_iron_condor_shape:
         return []
     if not p.short_puts:
         return []

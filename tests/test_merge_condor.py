@@ -822,3 +822,20 @@ def test_the_credit_card_says_what_the_number_is():
     label, _value, sub = _credit_card(_by_id(rows)["T-CALL"])
     assert label == "CREDIT ON IT NOW"
     assert "50% target" in sub
+
+
+# --------------------------------------- selling the long put, on a condor
+# Her CRWD card offered "Sell the long put, keep the short one". Recording it
+# marks the trade as waiting for assignment, which switches off the 50%
+# target, the 21-day clock and the stop - with the call wing $30 in the money.
+def test_a_condor_is_not_offered_selling_its_long_put():
+    from ui.trades.actions import _sellable_long_puts
+
+    assert _sellable_long_puts(_by_id(_crwd_today())["T-CALL"]) == []
+
+
+def test_a_put_credit_spread_still_is():
+    from ui.trades.actions import _sellable_long_puts
+
+    longs = _sellable_long_puts(_by_id([PUT_WING])["T-PUT"])
+    assert [l.strike for l in longs] == [200]
