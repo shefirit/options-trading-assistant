@@ -1295,13 +1295,17 @@ def _add_wing_form(p) -> None:
                      f"keeps the risk the same on both sides." if width else "")))
 
         c3, c4 = st.columns(2)
-        credit = c3.number_input(
-            "Credit collected on this wing ($)", min_value=0.0, step=5.0,
-            value=0.0, format="%.2f", key=f"wing_cr_{p.trade_id}",
-            help="What the new spread alone paid you, for all your contracts - "
-                 "straight off the TOS fill. It is ADDED to what the first "
-                 "wing collected, and the 50% target then measures against "
-                 "both.")
+        # A per-share price, like the close form, rather than a dollar total.
+        # The total box let her type the 6.90 off her NDX fill as $6.90 - a
+        # wing that collected $1,380 went into the log as seven dollars.
+        with c3:
+            credit = _fill_price_input(
+                "Credit price on your wing fill", f"wing_cr_{p.trade_id}",
+                int(p.contracts or 1),
+                help="The price on your TOS fill for the new spread alone, per "
+                     "share - the app does the x100 and the contracts. It is "
+                     "ADDED to what the first wing collected, and the 50% "
+                     "target then measures against both.")
         delta = c4.number_input(
             f"Short {word} delta (optional)", min_value=0.0, max_value=1.0,
             step=0.01, value=0.0, format="%.2f", key=f"wing_dl_{p.trade_id}",

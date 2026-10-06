@@ -248,3 +248,33 @@ def test_the_form_is_offered_on_a_one_sided_credit_spread():
 def test_the_form_is_not_offered_once_it_is_already_a_condor():
     from ui.trades.actions import _can_add_wing
     assert not _can_add_wing(_condor())
+
+
+# ------------------------------------------------------------ the form
+def test_the_form_takes_the_wing_price_per_share(app_with_rows, monkeypatch):
+    """The credit box takes the price thinkorswim prints, like the close form.
+
+    It used to want a dollar total, and on her NDX condor she typed the 6.90
+    off the fill - a $1,380 wing went into the log as $6.90. On this 2-contract
+    spread, 1.20 a share has to be recorded as $240.
+    """
+    from src.logging_tools import trade_logger
+
+    sent = {}
+    monkeypatch.setattr(trade_logger, "add_wing",
+                        lambda *a, **kw: sent.update(kw))
+    at = app_with_rows(_spread_rows()).run()
+    assert not at.exception
+
+    def box(prefix):
+        return next(n for n in at.number_input
+                    if (n.key or "").startswith(prefix))
+
+    box("wing_ss_").set_value(78.0).run()
+    box("wing_ls_").set_value(83.0).run()
+    box("wing_cr_").set_value(1.20).run()
+    assert not at.exception
+    next(b for b in at.button
+         if (b.key or "").startswith("wingbtn_")).click().run()
+    assert not at.exception
+    assert sent.get("credit") == 240.0
