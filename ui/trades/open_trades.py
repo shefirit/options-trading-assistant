@@ -14,6 +14,7 @@ from ui.trades.actions import (
     _assign_form,
     _merge_wing_form,
     _assignment_plan_panel,
+    _pmcc_roi_strip,
     _close_form,
     _roll_form,
     _sell_long_leg_form,
@@ -187,6 +188,10 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
             # The spread's numbers stopped applying the day she sold the long
             # put. This is the position she is actually holding now.
             _assignment_plan_panel(p, px)
+        elif p.effective_strategy_key == "poor_mans_covered_call":
+            # Includes a LEAPS call she has started writing calls against -
+            # it is run as a PMCC from that day.
+            _pmcc_roi_strip(p)
 
         # Keyed, so it survives a rerun. Without a key, recording anything on
         # this card snapped every expander shut and she lost her place.

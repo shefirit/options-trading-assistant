@@ -169,6 +169,88 @@ def covered_call_roi(position, state,
     return CoveredCallRoi(**out)
 
 
+def _strike_floor(position) -> Optional[float]:
+    """What a PMCC is worth AT LEAST, in dollars, if the stock sits at or above
+    the short strike when that call expires: the gap between the two strikes.
+
+    Above the short strike every dollar the LEAPS gains the short call loses,
+    and the LEAPS is always worth at least its intrinsic value - so the pair is
+    worth (short - long) x 100 or more. More, because the LEAPS still has
+    months of time value left; this deliberately leaves that out rather than
+    guess at it.
+
+    None where that floor does not hold: more calls sold than LEAPS owned (the
+    extra call is naked and its loss has no ceiling), or puts sold against the
+    LEAPS (their loss is not in the sum).
+    """
+    from src.engine.models import Action, OptionType
+
+    longs = [l for l in position.legs
+             if l.action == Action.BUY and l.option_type == OptionType.CALL]
+    shorts = [l for l in position.legs
+              if l.action == Action.SELL and l.option_type == OptionType.CALL]
+    if not longs or not shorts or position.short_puts:
+        return None
+    long_qty = sum(max(int(l.quantity or 1), 1) for l in longs)
+    short_qty = sum(max(int(l.quantity or 1), 1) for l in shorts)
+    if short_qty > long_qty:
+        return None
+    long_k = max(l.strike for l in longs)       # the worst one, if several
+    short_k = min(l.strike for l in shorts)
+    contracts = max(int(position.contracts or 1), 1)
+    return (short_k - long_k) * 100 * short_qty * contracts
+
+
+def pmcc_roi(position, today: Optional[date] = None) -> Optional[CoveredCallRoi]:
+    """The PMCC's version of the covered-call cards: this call, the premium so
+    far, and - in place of being called away, which a PMCC cannot be - what the
+    trade makes at LEAST if the stock finishes at or above the short strike.
+
+    Same base as everything else here: the cash in the trade (the LEAPS less
+    the call sold with it). premium_collected is every call's premium net of
+    buy-backs, the first one included.
+    """
+    base = money_at_risk(position)
+    held = days_held(position, today)
+    if base is None or held is None:
+        return None
+    premium = float(position.premium_collected)
+    if position.is_leaps_call_trade:
+        # A LEAPS call she has started writing calls against. What its puts
+        # paid at the open is a discount on the call, not income - her ruling
+        # (2026-08-13), and why the log records that trade with zero credit.
+        # premium_collected counts it (it answers a different question), so
+        # here only the CALL side's cash is premium.
+        from src.engine.models import OptionType
+        premium = sum(r.cash for r in position.rolls if r.kind == OptionType.CALL)
+    prem_pct = premium / base * 100.0
+    out = dict(base=base, premium=round(premium, 2), premium_days=held,
+               premium_pct=round(prem_pct, 2),
+               premium_annual_pct=round(annualize(prem_pct, held), 1))
+
+    exp = position.expiration
+    if position.has_short_call and exp is not None:
+        credit = float(position.credit or 0.0)
+        sold = _call_sold_on(position)
+        if credit > 0 and sold is not None:
+            days = max((exp - sold).days, 1)
+            pct = credit / base * 100.0
+            out.update(call_credit=round(credit, 2), call_days=days,
+                       call_pct=round(pct, 2),
+                       call_annual_pct=round(annualize(pct, days), 1))
+        floor = _strike_floor(position)
+        if floor is not None and position.opened is not None:
+            # The whole trade if closed then: the pair's value, plus the cash
+            # that moved at the open and on every roll since.
+            result = floor + float(position.open_cash or 0.0) + position.banked_income
+            days = max((exp - position.opened).days, 1)
+            pct = result / base * 100.0
+            out.update(away_result=round(result, 2), away_days=days,
+                       away_pct=round(pct, 2),
+                       away_annual_pct=round(annualize(pct, days), 1))
+    return CoveredCallRoi(**out)
+
+
 @dataclass(frozen=True)
 class BookRoi:
     """Several closed trades taken together."""
