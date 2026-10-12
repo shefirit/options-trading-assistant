@@ -838,19 +838,9 @@ def _covered_call_roi_strip(p, state) -> None:
                   "you, and the days count from when you sold it."))
 
 
-def _pmcc_roi_strip(p) -> None:
-    """The same three cards on a PMCC (her ask, 2026-10-12).
-
-    The third one changes meaning: a PMCC owns no shares, so it cannot be
-    called away. In its place is the least the trade makes if the stock
-    finishes at or above the short strike - a floor, because the LEAPS keeps
-    time value the app does not guess at.
-    """
-    from src.engine import roi
-
-    r = roi.pmcc_roi(p)
-    if r is None:
-        return
+def _roi_cards(r, third_label: str) -> None:
+    """This call, premium so far, and the third card - drawn the same way on
+    the PMCC and the covered call models."""
     cards = []
     if r.call_pct is not None:
         cards.append(theme.stat(
@@ -864,21 +854,65 @@ def _pmcc_roi_strip(p) -> None:
         f"{r.premium_annual_pct:+.0f}% a year",
         "up" if r.premium_pct >= 0 else "down"))
     if r.away_pct is not None:
+        on = (f" on {theme.money(r.away_base)} of shares"
+              if r.away_base is not None else "")
         cards.append(theme.stat(
-            "AT THE STRIKE, AT LEAST", f"{r.away_pct:+.1f}%",
-            f"{theme.signed(r.away_result)} over {r.away_days} days · "
+            third_label, f"{r.away_pct:+.1f}%",
+            f"{theme.signed(r.away_result)}{on} over {r.away_days} days · "
             f"{r.away_annual_pct:+.0f}% a year",
             "up" if r.away_pct >= 0 else "down"))
     theme.stat_row(cards)
+
+
+def _pmcc_roi_strip(p) -> None:
+    """The same three cards on a PMCC (her ask, 2026-10-12).
+
+    The third one changes meaning: a PMCC owns no shares, so it cannot be
+    called away. In its place is the least the trade makes if the stock
+    finishes at or above the short strike - a floor, because the LEAPS keeps
+    time value the app does not guess at.
+    """
+    from src.engine import roi
+
+    r = roi.pmcc_roi(p)
+    if r is None:
+        return
+    _roi_cards(r, "AT THE STRIKE, AT LEAST")
     theme.note(f"All three are on the \\${r.base:,.0f} you have in this trade - "
                "the LEAPS less the call sold with it, the same base the "
-               "Journal uses. **Premium** leaves out what the LEAPS itself is "
-               "doing."
+               "Journal uses. **Premium** is the calls only, and leaves out "
+               "what the LEAPS itself is doing."
                + (" **At the strike, at least** is the whole trade if the stock "
                   "is at or above your short strike when this call expires: the "
                   "gap between your two strikes is the floor, and the LEAPS "
                   "keeps some time value on top of it." if r.away_pct is not None
                   else ""))
+
+
+def _covered_model_roi_strip(p) -> None:
+    """The three cards on Covered Call Models 1-3 (her ask, 2026-10-12).
+
+    Premium is the calls only: what moves on the put side is the protection
+    being paid for, not income. "If called away" is the shares sold at the
+    strike plus the calls, on what the shares cost, with the put side left out
+    - she still owns it after the shares go. See roi.covered_model_roi.
+    """
+    from src.engine import roi
+
+    r = roi.covered_model_roi(p)
+    if r is None:
+        return
+    _roi_cards(r, "IF CALLED AWAY")
+    theme.note(f"**This call** and **Premium so far** are on the "
+               f"\\${r.base:,.0f} you have in this trade - the shares and the "
+               "put side, less the call sold with them, the same base the "
+               "Journal uses. Premium is the calls only; the put side is your "
+               "protection, not income."
+               + (" **If called away** is your shares sold at this call's "
+                  "strike plus the call premium, on what the shares cost. Your "
+                  "put side is left out: you still own it after the shares go, "
+                  "and what you sell it for then adds to (or takes from) this."
+                  if r.away_pct is not None else ""))
 
 
 def _wheel_panel(p, price: Optional[float]) -> None:

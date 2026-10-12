@@ -329,3 +329,73 @@ def test_a_financed_leaps_counts_only_its_calls_as_premium(open_financed_leaps_r
     assert r.premium == 46.0
     assert r.call_credit == 46.0
     assert r.away_pct is None          # the sold puts are not in the floor
+
+
+# ------------------------------------------------------------------ covered call models
+def _model_row(key="covered_call_model_2", ratio=False):
+    """$10,000 of shares at 100, a put side costing $1,200 (bought 100 put,
+    sold 80 - twice on Model 3), and a 105 call sold for $200. Opened 10 days
+    ago; the call expires in 30."""
+    import json
+    opened = date.today() - timedelta(days=10)
+    legs = [
+        {"role": "long_put_protection", "action": "buy", "type": "put",
+         "strike": 100.0, "delta": -0.45, "premium": 15.0, "qty": 1, "dte": 730},
+        {"role": "short_put_ratio" if ratio else "short_put_offset",
+         "action": "sell", "type": "put", "strike": 80.0, "delta": -0.15,
+         "premium": 3.0, "qty": 2 if ratio else 1, "dte": 730},
+        {"role": "short_call", "action": "sell", "type": "call", "strike": 105.0,
+         "delta": 0.30, "premium": 2.0, "qty": 1, "dte": 40},
+    ]
+    details = {"key": key, "underlying_price": 100.0, "legs": legs,
+               "open_cash": 200.0 - 10_000.0 - 1_200.0, "shares_cost": 10_000.0}
+    return [opened.isoformat(), "SPY", key, "100 / 80 / 105", 0.30, 40, 1,
+            200.0, 11_000.0, 11_000.0, "yes", "", "20261002-100000-SPY", "open",
+            (opened + timedelta(days=40)).isoformat(), "", "",
+            json.dumps(details), "real"]
+
+
+def _model(*rows):
+    from src.engine import positions
+    from src.logging_tools.row import COLUMNS
+    return positions.parse_rows(COLUMNS, list(rows))[0]
+
+
+def test_a_covered_call_model_gets_the_three_numbers():
+    r = roi.covered_model_roi(_model(_model_row()))
+    assert r.base == 11_000.0                       # shares + put side - call
+    assert r.call_credit == 200.0 and r.call_days == 40
+    assert r.premium == 200.0 and r.premium_days == 10
+    # Called away at 105: $500 on the shares + the $200 call = $700, on the
+    # $10,000 the shares cost. The put side is left out - she still owns it.
+    assert r.away_result == 700.0 and r.away_base == 10_000.0
+    assert r.away_pct == 7.0 and r.away_days == 40
+
+
+def test_put_side_rolls_are_protection_not_premium():
+    from src.logging_tools.row import build_roll_row
+    row = _model_row()
+    put_roll = build_roll_row(row[12], "SPY", row[2], -300.0, new_strike=100.0,
+                              new_expiration=date.today() + timedelta(days=900),
+                              new_credit=0.0, option_type="put")
+    call_roll = build_roll_row(row[12], "SPY", row[2], 150.0, new_strike=106.0,
+                               new_expiration=date.today() + timedelta(days=60),
+                               new_credit=350.0)
+    r = roi.covered_model_roi(_model(row, put_roll, call_roll))
+    assert r.premium == 350.0            # the opening call + the call roll only
+
+
+def test_model_3_gets_the_called_away_card_too():
+    """The puts are left out of it, so the ratio's extra sold put does not
+    break it."""
+    r = roi.covered_model_roi(_model(_model_row("covered_call_model_3", ratio=True)))
+    assert r.away_pct == 7.0
+
+
+def test_the_model_card_shows_the_roi_cards(app_with_rows):
+    at = app_with_rows([_model_row()]).run()
+    assert not at.exception
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "THIS CALL" in page and "PREMIUM SO FAR" in page
+    assert "IF CALLED AWAY" in page and "of shares" in page
+    assert "put side is left out" in page

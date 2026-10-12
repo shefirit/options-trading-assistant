@@ -122,6 +122,9 @@ class CoveredCallRoi:
     away_days: Optional[int] = None        # from buying the shares to that date
     away_pct: Optional[float] = None
     away_annual_pct: Optional[float] = None
+    # Where the third card is measured on something other than `base` - the
+    # covered call models' "if called away", which leaves the put side out.
+    away_base: Optional[float] = None
 
 
 def _call_sold_on(position) -> Optional[date]:
@@ -201,53 +204,111 @@ def _strike_floor(position) -> Optional[float]:
     return (short_k - long_k) * 100 * short_qty * contracts
 
 
+def _call_premium(position) -> float:
+    """Premium from the CALLS alone: the one sold at the open plus every call
+    roll's net cash since.
+
+    The income side of every call-writing trade that is not a share-assigned
+    wheel. What moves on the put side is something else: a covered call
+    model's protection being bought, rolled or sold off, or a LEAPS call's
+    financing puts - a discount on the call, not income (her ruling,
+    2026-08-13, which is why that trade logs a zero credit at the open).
+    """
+    from src.engine.models import OptionType
+    opened_with = float(position.open_credit or 0.0)
+    rolls = sum(r.cash for r in position.rolls if r.kind == OptionType.CALL)
+    return round(opened_with + rolls, 2)
+
+
+def _call_cards(position, base: float, premium: float, held: int) -> dict:
+    """The first two cards - this call, and the premium so far - which every
+    call-writing trade shares."""
+    prem_pct = premium / base * 100.0
+    out = dict(base=base, premium=round(premium, 2), premium_days=held,
+               premium_pct=round(prem_pct, 2),
+               premium_annual_pct=round(annualize(prem_pct, held), 1))
+    exp = position.expiration
+    credit = float(position.credit or 0.0)
+    sold = _call_sold_on(position)
+    if position.has_short_call and exp is not None and credit > 0 and sold:
+        days = max((exp - sold).days, 1)
+        pct = credit / base * 100.0
+        out.update(call_credit=round(credit, 2), call_days=days,
+                   call_pct=round(pct, 2),
+                   call_annual_pct=round(annualize(pct, days), 1))
+    return out
+
+
+def _with_floor(out: dict, position, base: float, value_floor) -> dict:
+    """Add the third card: the whole trade if closed at this call's
+    expiration, given the least the remaining legs are worth then."""
+    exp = position.expiration
+    if value_floor is None or exp is None or position.opened is None:
+        return out
+    result = value_floor + float(position.open_cash or 0.0) + position.banked_income
+    days = max((exp - position.opened).days, 1)
+    pct = result / base * 100.0
+    out.update(away_result=round(result, 2), away_days=days,
+               away_pct=round(pct, 2),
+               away_annual_pct=round(annualize(pct, days), 1))
+    return out
+
+
+def covered_model_roi(position,
+                      today: Optional[date] = None) -> Optional[CoveredCallRoi]:
+    """The three cards on a covered call model (1, 2 or 3): shares, a put
+    side for protection, and a monthly call.
+
+    Premium is the calls only - see _call_premium.
+
+    "If called away" is the classic covered-call figure: the shares sold at
+    the strike plus the call premium, over what the SHARES cost, with the put
+    side left out. Counting the puts at zero instead (a true floor) read -$500
+    on an ordinary Model 2 a month in, while its two-year put spread was still
+    worth most of the $1,200 paid - accurate, and no use to her. The puts are
+    still hers after the shares go; what they sell for then is the rest of it.
+    """
+    from src.engine.models import Action, OptionType
+
+    base = money_at_risk(position)
+    held = days_held(position, today)
+    if base is None or held is None:
+        return None
+    premium = _call_premium(position)
+    out = _call_cards(position, base, premium, held)
+
+    shorts = [l for l in position.legs
+              if l.action == Action.SELL and l.option_type == OptionType.CALL]
+    shares_cost = float(position.shares_cost or 0.0)
+    contracts = max(int(position.contracts or 1), 1)
+    exp = position.expiration
+    one_per_100 = sum(max(int(l.quantity or 1), 1) for l in shorts) <= 1
+    if shorts and one_per_100 and shares_cost > 0 and exp and position.opened:
+        strike = min(l.strike for l in shorts)
+        result = strike * 100 * contracts - shares_cost + premium
+        days = max((exp - position.opened).days, 1)
+        pct = result / shares_cost * 100.0
+        out.update(away_result=round(result, 2), away_days=days,
+                   away_pct=round(pct, 2), away_base=round(shares_cost, 2),
+                   away_annual_pct=round(annualize(pct, days), 1))
+    return CoveredCallRoi(**out)
+
+
 def pmcc_roi(position, today: Optional[date] = None) -> Optional[CoveredCallRoi]:
     """The PMCC's version of the covered-call cards: this call, the premium so
     far, and - in place of being called away, which a PMCC cannot be - what the
     trade makes at LEAST if the stock finishes at or above the short strike.
 
     Same base as everything else here: the cash in the trade (the LEAPS less
-    the call sold with it). premium_collected is every call's premium net of
-    buy-backs, the first one included.
+    the call sold with it). Premium is the calls only, so a LEAPS call she has
+    started writing calls against does not count its financing puts.
     """
     base = money_at_risk(position)
     held = days_held(position, today)
     if base is None or held is None:
         return None
-    premium = float(position.premium_collected)
-    if position.is_leaps_call_trade:
-        # A LEAPS call she has started writing calls against. What its puts
-        # paid at the open is a discount on the call, not income - her ruling
-        # (2026-08-13), and why the log records that trade with zero credit.
-        # premium_collected counts it (it answers a different question), so
-        # here only the CALL side's cash is premium.
-        from src.engine.models import OptionType
-        premium = sum(r.cash for r in position.rolls if r.kind == OptionType.CALL)
-    prem_pct = premium / base * 100.0
-    out = dict(base=base, premium=round(premium, 2), premium_days=held,
-               premium_pct=round(prem_pct, 2),
-               premium_annual_pct=round(annualize(prem_pct, held), 1))
-
-    exp = position.expiration
-    if position.has_short_call and exp is not None:
-        credit = float(position.credit or 0.0)
-        sold = _call_sold_on(position)
-        if credit > 0 and sold is not None:
-            days = max((exp - sold).days, 1)
-            pct = credit / base * 100.0
-            out.update(call_credit=round(credit, 2), call_days=days,
-                       call_pct=round(pct, 2),
-                       call_annual_pct=round(annualize(pct, days), 1))
-        floor = _strike_floor(position)
-        if floor is not None and position.opened is not None:
-            # The whole trade if closed then: the pair's value, plus the cash
-            # that moved at the open and on every roll since.
-            result = floor + float(position.open_cash or 0.0) + position.banked_income
-            days = max((exp - position.opened).days, 1)
-            pct = result / base * 100.0
-            out.update(away_result=round(result, 2), away_days=days,
-                       away_pct=round(pct, 2),
-                       away_annual_pct=round(annualize(pct, days), 1))
+    out = _call_cards(position, base, _call_premium(position), held)
+    out = _with_floor(out, position, base, _strike_floor(position))
     return CoveredCallRoi(**out)
 
 
