@@ -162,3 +162,61 @@ def test_the_open_trades_table_and_card_show_roi_so_far(app_with_one_csp,
     assert table["ROI / year"].iloc[0] == pytest.approx(1.02 * 365 / 5, abs=0.5)
     page = " ".join(str(m.value) for m in at.markdown)
     assert "ROI so far: **+1.0%**" in page
+
+
+# ------------------------------------------------------------------ the monthly report
+def test_the_monthly_report_gives_each_strategy_its_own_roi():
+    from src.engine import month_report
+
+    spread = _closed(75.0, 30, strategy_name="Put Credit Spread", open_cash=150.0,
+                     max_loss=350.0, account="real")
+    spread2 = _closed(-25.0, 10, strategy_name="Put Credit Spread", open_cash=150.0,
+                      max_loss=350.0, account="real")
+    csp = _closed(200.0, 30, strategy_name="Cash Secured Put", open_cash=200.0,
+                  max_loss=9_800.0, account="real")
+    rows = month_report.roi_by_strategy([spread, spread2, csp])
+    assert [r["name"] for r in rows] == ["Put Credit Spread", "Cash Secured Put"]
+    pcs = rows[0]
+    assert pcs["trades"] == 2 and pcs["result"] == 50.0 and pcs["base"] == 700.0
+    assert pcs["pct"] == pytest.approx(7.14, abs=0.01)
+    assert rows[1]["pct"] == pytest.approx(2.04, abs=0.01)
+
+    report = month_report.build([spread, spread2, csp], month=month_report.ALL_TIME,
+                                live_from=date(2026, 1, 1), mode="real")
+    assert len(report["roi_by_strategy"]) == 2
+    assert report["roi_total"]["trades"] == 3
+    assert report["roi_total"]["result"] == 250.0
+
+
+def test_the_report_draws_the_roi_table_with_a_bottom_line(monkeypatch):
+    from ui import income_report
+
+    shown: list[str] = []
+    monkeypatch.setattr(income_report.st, "markdown",
+                        lambda body, **kw: shown.append(str(body)))
+    monkeypatch.setattr(income_report.theme, "note", lambda text: None)
+    report = {"month": "2026-09", "label": "September 2026",
+              "roi_by_strategy": [
+                  {"name": "Put Credit Spread", "trades": 2, "result": 50.0,
+                   "base": 700.0, "pct": 7.14, "annual_pct": 130.4, "avg_days": 20},
+                  {"name": "Cash <Secured> Put", "trades": 1, "result": -20.0,
+                   "base": 9_800.0, "pct": -0.2, "annual_pct": -2.5, "avg_days": 30}],
+              "roi_total": {"trades": 3, "result": 30.0, "base": 10_500.0,
+                            "pct": 0.29, "annual_pct": 4.1, "avg_days": 23}}
+    income_report.render_roi_by_strategy(report)
+    html = "".join(shown)
+    assert "TRADES CLOSED IN SEPTEMBER 2026" in html
+    assert "+7.1%" in html and "+130%" in html
+    assert "-&#36;20" in html                 # minus before the sign, entity-safe
+    assert "Cash &lt;Secured&gt; Put" in html  # names are escaped
+    assert "All strategies" in html
+
+
+def test_no_closed_trades_means_no_roi_table(monkeypatch):
+    from ui import income_report
+
+    shown: list[str] = []
+    monkeypatch.setattr(income_report.st, "markdown",
+                        lambda body, **kw: shown.append(str(body)))
+    income_report.render_roi_by_strategy({"roi_by_strategy": [], "roi_total": None})
+    assert shown == []

@@ -511,6 +511,77 @@ def render_money_math(report: dict) -> None:
            if report.get("roll_income") else ""))
 
 
+def render_roi_by_strategy(report: dict) -> None:
+    """Which strategy earned the most on the money it put at risk.
+
+    The ring above answers "where did the premium come from"; this answers the
+    question Rita asked for (2026-10-12) - which strategy earns its capital.
+    A strategy can sell the most premium and still return the least, because
+    a cash secured put ties up the whole strike to collect it.
+
+    An HTML table rather than st.dataframe, like the legend beside the ring:
+    every number at full ink, signs coloured, and a bottom line under the rows.
+    """
+    rows = report.get("roi_by_strategy") or []
+    total = report.get("roi_total")
+    if not rows:
+        return
+
+    def tone(x: float) -> str:
+        return theme.GREEN if x >= 0 else theme.RED
+
+    head_cells = ["Strategy", "Closed", "Made", "Money at risk", "ROI",
+                  "ROI / year", "Avg days"]
+    head = "".join(
+        f"<th style='padding:6px 10px;text-align:{'left' if i == 0 else 'right'};"
+        f"font-size:.76rem;font-weight:800;color:{theme.SECONDARY};"
+        f"letter-spacing:.05em;border-bottom:2px solid {theme.BORDER_STRONG};'>"
+        f"{_esc(h.upper())}</th>" for i, h in enumerate(head_cells))
+
+    def line(r: dict, name: str, strong: bool = False) -> str:
+        border = (f"border-top:2px solid {theme.BORDER_STRONG};" if strong
+                  else f"border-bottom:1px solid {theme.BORDER};")
+        weight = 800 if strong else 700
+        cells = [
+            (_esc(name), theme.INK, "left"),
+            (f"{r['trades']}", theme.INK, "right"),
+            (_signed(r["result"]), tone(r["result"]), "right"),
+            (_d(r["base"]), theme.INK, "right"),
+            (f"{r['pct']:+.1f}%", tone(r["pct"]), "right"),
+            (f"{r['annual_pct']:+.0f}%", tone(r["annual_pct"]), "right"),
+            (f"{r['avg_days']:.0f}", theme.INK, "right"),
+        ]
+        return "<tr>" + "".join(
+            f"<td style='padding:8px 10px;{border}text-align:{align};"
+            f"font-size:1rem;font-weight:{weight};color:{color};'>{text}</td>"
+            for text, color, align in cells) + "</tr>"
+
+    body = "".join(line(r, r["name"]) for r in rows)
+    if total and len(rows) > 1:
+        body += line(total, "All strategies", strong=True)
+
+    period = ("all time" if report.get("month") == "all"
+              else f"in {report.get('label', 'this month')}")
+    st.markdown(
+        f"<div style='background:{theme.TILE};border:1px solid "
+        f"{theme.BORDER_STRONG};border-radius:14px;padding:14px 16px;"
+        f"margin-bottom:10px;overflow-x:auto;'>"
+        f"<div style='font-size:.78rem;font-weight:800;color:{theme.SECONDARY};"
+        f"letter-spacing:.05em;margin-bottom:6px;'>RETURN ON THE MONEY AT RISK "
+        f"&middot; TRADES CLOSED {_esc(period.upper())}</div>"
+        f"<table style='width:100%;border-collapse:collapse;'>"
+        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>",
+        unsafe_allow_html=True)
+    theme.note(
+        "**ROI** is what the trades made ÷ the money they had at risk - a "
+        "spread's max loss, a cash secured put's strike less the premium, the "
+        "cash laid out for shares or a LEAPS - the same measure as the Journal. "
+        "**ROI / year** weights each dollar by how long it was tied up, so a "
+        "two-day trade cannot outvote a two-month one. Counted on trades that "
+        "**closed** in this period, like Banked. A strategy with one or two "
+        "trades is a sample, not a verdict.")
+
+
 def render_strategy(report: dict) -> None:
     rows = report["by_strategy"]
     if not rows:
@@ -527,6 +598,7 @@ def render_strategy(report: dict) -> None:
     with right:
         _legend_rows(rows, "Strategy")
     st.write("")
+    render_roi_by_strategy(report)
     render_money_math(report)
     top = rows[0]
     if top["premium"] > 0:

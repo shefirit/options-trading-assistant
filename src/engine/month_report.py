@@ -225,6 +225,44 @@ def _group(premium: list[dict], banked: list[dict],
     return sorted(out, key=lambda r: r["premium"], reverse=True)
 
 
+def roi_by_strategy(closed: list[Position]) -> list[dict[str, Any]]:
+    """ROI for each strategy, on the trades that CLOSED in the period.
+
+    Closed rather than opened, because ROI needs a finished result - and it
+    matches "banked", which also counts the month a trade settles. Same money
+    at risk and the same simple annualizing as the Journal (src/engine/roi.py),
+    so a strategy's figure here can be checked against its trades there.
+    Grouped on the name the trade was logged under, like the ring above it.
+    Best ROI first.
+    """
+    from src.engine import roi
+
+    groups: dict[str, list[Position]] = {}
+    for p in closed:
+        groups.setdefault(p.strategy_name or "(unknown)", []).append(p)
+    out = []
+    for name, trades in groups.items():
+        book = roi.book_roi(trades)
+        if book is not None:
+            out.append({"name": name, "trades": book.trades,
+                        "result": book.result, "base": book.base,
+                        "pct": book.pct, "annual_pct": book.annual_pct,
+                        "avg_days": book.avg_days})
+    return sorted(out, key=lambda r: r["pct"], reverse=True)
+
+
+def _roi_total(closed: list[Position]) -> Optional[dict[str, Any]]:
+    """Every closed trade in the period together - the bottom line."""
+    from src.engine import roi
+
+    book = roi.book_roi(closed)
+    if book is None:
+        return None
+    return {"trades": book.trades, "result": book.result, "base": book.base,
+            "pct": book.pct, "annual_pct": book.annual_pct,
+            "avg_days": book.avg_days}
+
+
 def build(positions: list[Position], month: str = ALL_TIME,
           live_from: Optional[date] = None,
           today: Optional[date] = None,
@@ -334,6 +372,8 @@ def build(positions: list[Position], month: str = ALL_TIME,
         "weeks": weeks,
         "best_week": best_week,
         "by_strategy": _group(premium, banked_ev, lambda p: p.strategy_name),
+        "roi_by_strategy": roi_by_strategy(closed),
+        "roi_total": _roi_total(closed),
         "by_underlying": _group(premium, banked_ev, lambda p: p.underlying),
         "has_activity": bool(premium or banked_ev or opened),
     }
