@@ -268,9 +268,12 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                             "your 50% target is measured on that. Your stop is "
                             "measured on this.")
     else:
+        has_target = bool(_exit_cfg_for(p, strategies).get("profit_target_pct"))
         cols[1].metric("Credit received", money(p.credit),
-                       help="What the short call paid you - the basis for your "
-                            "50% target." if p.is_debit else None)
+                       help=("What the short call paid you - the basis for your "
+                             "50% target." if has_target else
+                             "What the call you hold now paid you.")
+                            if p.is_debit else None)
 
     # Closing a position you only ever bought PAYS her, and the chain math
     # returns that as a negative cost. Printed raw it read "$-243", which is
@@ -320,7 +323,13 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
     if cushion:
         side = "call" if cushion["option_type"] == "call" else "put"
         direction = "rise" if side == "call" else "fall"
-        if cushion["breached"]:
+        if cushion["breached"] and side == "call" and p.strategy_key == "weekly_covered_call":
+            theme.note(
+                f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
+                f"call you sold.** If it stays there to expiration your shares are "
+                f"sold at {cushion['strike']:g}. Fine if you are happy to sell "
+                f"there; if you want to keep them, roll the call up and out.")
+        elif cushion["breached"]:
             theme.note(
                 f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
                 f"{side} you sold.** That strike is breached - your SOP says roll "
@@ -330,15 +339,22 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                 f"**{p.underlying} is at \\${px:,.2f}.** The closest option you sold "
                 f"is the **{cushion['strike']:g} {side}** - price would have to "
                 f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
-                f"Your SOP says think about rolling once that room drops under 1.5%.")
+                + ("" if p.strategy_key == "weekly_covered_call" else
+                   "Your SOP says think about rolling once that room drops "
+                   "under 1.5%."))
         for lk in cushion.get("locked") or []:
             lside = "call" if lk["option_type"] == "call" else "put"
             theme.note(f"The **{lk['strike']:g} {lside}** side is past both of its "
                        f"strikes, so its loss is already the full width - there is "
                        f"nothing left to defend on it.")
 
-    target_pct = float(_exit_cfg_for(p, strategies).get("profit_target_pct", 50) or 50)
-    if sig.profit_pct is not None and p.credit > 0:
+    exit_cfg = _exit_cfg_for(p, strategies)
+    target_pct = float(exit_cfg.get("profit_target_pct", 50) or 50)
+    # A strategy with no profit target and no stop (the weekly covered call,
+    # by her choice) has nothing for this progress bar to measure against.
+    measured = bool(exit_cfg.get("profit_target_pct")
+                    or exit_cfg.get("stop_loss_multiple"))
+    if sig.profit_pct is not None and p.credit > 0 and measured:
         stop_mult = float(_exit_cfg_for(p, strategies).get("stop_loss_multiple", 2) or 2)
         whole = (sig.stop_base is not None and sig.stop_pl is not None
                  and abs(sig.stop_base - p.credit) > 0.005)

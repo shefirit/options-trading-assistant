@@ -205,6 +205,18 @@ def validate_trade(
                     f"{trade.underlying} for each contract before selling the call.",
         ))
 
+    # 7b. Her one condition on the weekly covered call: bullish setups only.
+    # The checklist has no price history to judge the trend with, so it says
+    # what to check; Find a trade reads the actual trend for each name.
+    if strategy.get("bullish_only"):
+        results.append(CheckResult(
+            name="Bullish setups only",
+            status=CheckStatus.INFO,
+            message=f"Your condition for this trade: only when {trade.underlying} "
+                    "is in a bullish setup. Find a trade shows the trend for each "
+                    "name you scan.",
+        ))
+
     # 8. Any strategy-level warning (e.g. Model 3 is advanced).
     if strategy.get("warning"):
         results.append(CheckResult(

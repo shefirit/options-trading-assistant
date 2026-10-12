@@ -49,6 +49,9 @@ _EXIT_BUCKETS: list[tuple[str, str, str, bool]] = [
     ("profit target", "Took the win at 50%", "green", True),
     ("21 dte", "Closed or rolled at 21 days", "green", True),
     ("expired", "Expired worthless", "green", True),
+    # The planned ending of a covered call or a wheel: the call finished in the
+    # money and the shares were sold at its strike.
+    ("shares called away", "Shares called away", "green", True),
     ("stop loss", "Stopped out at 2x", "amber", True),
     ("rolled", "Rolled to a new position", "neutral", False),
 ]

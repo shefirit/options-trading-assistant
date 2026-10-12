@@ -208,6 +208,18 @@ _PROFILES: dict[str, _Profile] = {
         reason="The covered-call idea for a fraction of the money - a long-dated call "
                "stands in for the 100 shares and you sell monthly calls against it.",
         handicap=0.3),
+    "weekly_covered_call": _Profile(
+        lean=1.2, range_pref=0.0, vol_pref=0.3,
+        name="Weekly Covered Call", instrument="us_style", traded_on=_US_ON,
+        requires="cash for 100 shares, with no put underneath",
+        reason="Own the shares and sell a call against them every week. You keep "
+               "the stock's rise up to the strike plus the premium, so it wants "
+               "a market going up.",
+        # Her one condition is "only in bullish market setups", so this leans
+        # harder than any covered call model and earns nothing from a range.
+        # Still below the LEAPS call (1.4): owning the shares with premium
+        # coming in is the steadier way to be bullish, not the more aggressive.
+        ),
     "covered_call_model_1": _Profile(
         lean=-0.4, range_pref=0.2, vol_pref=0.9,
         name="Covered Call - Model 1 (Collar)", instrument="us_style", traded_on=_US_ON,

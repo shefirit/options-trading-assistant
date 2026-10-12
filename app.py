@@ -2142,7 +2142,11 @@ def _strategy_about(strat) -> None:
         c[0].markdown(f"**Market outlook:** {strat.get('market_outlook', '-')}")
         c[1].markdown(f"**Difficulty:** {strat.get('difficulty', '-')}")
         theme.note(f"👀 In thinkorswim: {strat.get('tos_hint', '')}")
-        st.markdown(f"[📖 Read the full SOP in Notion]({strat['notion_url']})")
+        if strat.get("notion_url"):
+            st.markdown(f"[📖 Read the full SOP in Notion]({strat['notion_url']})")
+        else:
+            # The weekly covered call lives in the app only, by her choice.
+            theme.note("No Notion page for this one - you set no rules for it.")
         if strat.get("warning"):
             st.warning(f"⚠️ {strat['warning']}")
 
@@ -2308,6 +2312,41 @@ def _spread_width(cand) -> float:
     return min(gaps) if gaps else 0.0
 
 
+def _bullish_check(underlyings, provider) -> None:
+    """Her one condition on the weekly covered call: bullish setups only.
+
+    Read off the same trend the rest of the app uses (20- vs 50-day average,
+    with the 200-day as a veto) so "bullish" means one thing everywhere. Warns
+    on anything that is not an uptrend and never blocks the scan - it is her
+    condition to apply, not the app's.
+    """
+    from src.data.market_context import trend_detail
+
+    if not provider.is_real:
+        theme.note("Trend check needs real market data - check the chart yourself "
+                   "before buying the shares.")
+        return
+    words = {"up": "in an uptrend", "down": "in a DOWNTREND",
+             "sideways": "moving sideways", "unknown": "showing no clear trend"}
+    for u in underlyings:
+        try:
+            detail = trend_detail(provider.get_history_closes(u))
+        except Exception:
+            theme.note(f"Could not read the trend on **{u}** just now - check the "
+                       "chart yourself before buying the shares.")
+            continue
+        trend = detail["trend"]
+        if trend == "up":
+            theme.note(f"✅ **{u}** is {words[trend]} - fits your bullish-only "
+                       "condition.")
+        else:
+            why = (" It is more than 3% under its 200-day average."
+                   if detail.get("below_200") else "")
+            st.warning(f"**{u}** is {words.get(trend, trend)}, not in a bullish "
+                       f"setup.{why} You said you only run this trade in bullish "
+                       "setups - the setups below still show so you can see them.")
+
+
 def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -> None:
     if not scanner.can_scan(key):
         # Unreachable today - every one of the 8 strategies is in a scannable
@@ -2388,6 +2427,14 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
             f"band a starting reference, not a rule, so the app **reports** where the delta "
             "lands and never fails a setup on it. Paper trade it and tighten the numbers "
             "yourself before this goes live.")
+    elif strat.get("bullish_only"):
+        lo, hi = scanner.strategy_dte_window(strat, underlyings[0])
+        aim = strat["entry"].get("short_leg_delta_target", 0.30)
+        theme.note(f"Shows the weekly calls you could sell against 100 shares - one per "
+                   f"expiration {lo}-{hi} days out, each aimed near **{aim:.2f} delta** "
+                   "(about a 30% chance the shares get called away). That delta is only "
+                   "where the scan looks, not a rule: you set none for this trade.")
+        _bullish_check(underlyings, provider)
     else:
         theme.note(f"Shows up to 10 {strat['name']} setups - one per expiration across 21-44 days, "
                    "each at the delta your SOP calls for."
@@ -2489,8 +2536,10 @@ def _build_scan(key, strat, underlyings, provider, contracts, width, settings) -
     if target and best.dte is not None:
         theme.note(f"Sorted by **how close each expiration is to your {target}-day target**, "
                    f"not by date - so **trade #1** ({best.dte} days on "
-                   f"{best.trade.underlying}) is the best-timed one. Anything near the bottom "
-                   f"of your window leaves almost no room before the 21-day time exit.")
+                   f"{best.trade.underlying}) is the best-timed one."
+                   + (" Anything near the bottom of your window leaves almost no room "
+                      "before the 21-day time exit."
+                      if strat.get("exit", {}).get("time_exit_dte") else ""))
 
     labels = components.candidate_labels(candidates)
     pick = st.selectbox("Look at one setup", range(len(candidates)),

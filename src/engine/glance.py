@@ -179,7 +179,8 @@ def priority(signal, position) -> tuple:
     Same order the exit rules rank urgency in, so the list she scrolls matches
     the list she should act on. Within a band, whatever expires soonest.
     """
-    order = {"stop": 0, "time": 1, "profit": 2, "watch": 3, "uncovered": 4,
+    order = {"stop": 0, "time": 1, "profit": 2, "expired": 3, "watch": 3,
+             "uncovered": 4,
              # Below the trades needing a decision, above a plain hold: she has
              # already decided what happens here, she just has to be ready for it.
              "awaiting": 5, "unpriced": 6, "hold": 7}

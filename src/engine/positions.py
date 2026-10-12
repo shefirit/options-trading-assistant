@@ -2684,7 +2684,8 @@ def quality(positions: list[Position],
 # rule change either one is compliant; what breaks the rule is drifting past 21
 # DTE with no decision. A bare "Rolled" (a roll at any other moment) and "Other"
 # deliberately do not count.
-_SOP_EXIT_PREFIXES = ("profit target", "21 dte", "stop loss", "expired")
+_SOP_EXIT_PREFIXES = ("profit target", "21 dte", "stop loss", "expired",
+                      "shares called away")
 
 
 def _split_exit_reason(exit_reason: str) -> tuple[str, str]:

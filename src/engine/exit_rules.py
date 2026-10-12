@@ -107,16 +107,58 @@ def _strike_notes(position: Position, underlying_price: float,
                     f"Price ({underlying_price:,.0f}) is within 1.5% of your short put "
                     f"strike ({k:g}). Your SOP says consider rolling before it crosses.")
         else:
-            if underlying_price >= k:
+            # A call written against shares she owns, on a strategy where being
+            # called away is a fine ending. Nothing is "in trouble": the shares
+            # get sold at the strike and she keeps the premium and the rise.
+            called_away_ok = accepts_assignment and position.shares_cost > 0
+            if underlying_price >= k and called_away_ok:
+                notes.append(
+                    f"Price ({underlying_price:,.2f}) is ABOVE your {k:g} call. If "
+                    f"it stays there to expiration your shares are sold at {k:g} "
+                    "(called away) - you keep the premium and the rise up to the "
+                    "strike. If you would rather keep the shares, roll the call "
+                    "up and out for a credit before it expires.")
+            elif underlying_price >= k:
                 notes.append(
                     f"Price ({underlying_price:,.0f}) is ABOVE your short call strike "
                     f"({k:g}). The trade is in trouble - your SOP says roll up and "
                     "out for a credit, or close.")
+            elif (k - underlying_price) / k <= STRIKE_PROXIMITY and called_away_ok:
+                notes.append(
+                    f"Price ({underlying_price:,.2f}) is within 1.5% of your {k:g} "
+                    "call. Your shares may be called away at expiration - fine if "
+                    "you are happy to sell there.")
             elif (k - underlying_price) / k <= STRIKE_PROXIMITY:
                 notes.append(
                     f"Price ({underlying_price:,.0f}) is within 1.5% of your short call "
                     f"strike ({k:g}). Your SOP says consider rolling before it crosses.")
     return notes
+
+
+def share_drop_note(position: Position, exit_cfg: dict[str, Any],
+                    underlying_price: Optional[float]) -> Optional[str]:
+    """A warning - never an instruction - when shares she bought sit well under
+    what they really cost her.
+
+    Rita's ruling for the weekly covered call (2026-10-12): "warn only". There
+    is no stop on this strategy, so this says how far down she is and leaves the
+    decision with her. Measured against the cost basis AFTER premium, because
+    that is the number she is actually down from.
+    """
+    pct = exit_cfg.get("share_drop_warn_pct")
+    if not pct or not underlying_price:
+        return None
+    from src.engine import wheel
+    state = wheel.state_from(position, underlying_price)
+    if state is None or state.drop_pct is None or state.drop_pct < float(pct):
+        return None
+    return (f"{position.underlying} is at ${underlying_price:,.2f}, "
+            f"{state.drop_pct:.1f}% under the ${state.cost_basis:,.2f} your shares "
+            f"really cost you after premium - about "
+            f"${abs(state.unrealised or 0):,.0f} down on the shares. This trade has "
+            "no stop, so nothing here says sell. Worth weighing: is the bullish "
+            "setup you bought it for still there, and would a call at or above "
+            "your cost still pay enough to be worth writing?")
 
 
 def _awaiting_assignment_signal(position: Position,
@@ -388,7 +430,32 @@ def evaluate(
         return _awaiting_assignment_signal(position, underlying_price, dte_left,
                                            current_cost)
 
+    drop = share_drop_note(position, exit_cfg, underlying_price)
+
+    # ---- 0-i. A weekly call whose date has passed. Every Friday on this
+    # strategy, so it gets a plain instruction rather than "could not price"
+    # (the chain no longer lists a contract that has expired).
+    if (position.strategy_key == "weekly_covered_call" and position.has_short_call
+            and dte_left is not None and dte_left < 0):
+        return ExitSignal(
+            action="expired", tone="amber",
+            headline="The call's date has passed - record what happened",
+            reason=("Your weekly call has expired. If it ended below the strike, "
+                    "open 🔄 Roll it and pick 'It expired worthless' - then sell "
+                    "next week's. If your shares were called away, record it with "
+                    "✔️ Close this trade."),
+            notes=[drop] if drop else [])
+
     # ---- 0. Nothing sold: none of the exit rules have anything to measure.
+    if position.is_uncovered and position.strategy_key == "weekly_covered_call":
+        return ExitSignal(
+            action="uncovered", tone="amber",
+            headline="No call sold - nothing is earning",
+            reason=("There is no call written against your shares right now, so "
+                    "they are not collecting premium. Sell the next weekly call "
+                    "when you like the level, then record it with ➕ Sell a call "
+                    "against it."),
+            notes=[drop] if drop else [])
     if position.is_uncovered:
         return ExitSignal(
             action="uncovered", tone="amber",
@@ -425,9 +492,14 @@ def evaluate(
     # ---- collect watch-level warnings first (they ride along on any signal)
     notes: list[str] = []
     accepts_assignment = bool(exit_cfg.get("accepts_assignment"))
+    if drop:
+        notes.append(drop)
     if underlying_price is not None and underlying_price > 0:
         notes.extend(_strike_notes(position, underlying_price, accepts_assignment))
-    if short_delta is not None and short_delta >= DELTA_RED_FLAG:
+    # Not on the weekly covered call: it has no rules by her choice, and its
+    # calls are written right AT this delta, so the flag would fire every week.
+    if (short_delta is not None and short_delta >= DELTA_RED_FLAG
+            and position.strategy_key != "weekly_covered_call"):
         notes.append(
             f"The short leg's delta is now {short_delta:.2f} - past your ~0.30 red "
             "flag, so assignment is getting more likely. On a Wheel that is an "

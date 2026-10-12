@@ -1193,6 +1193,7 @@ _SIGNAL_WORD = {
     "profit": "✅ Take the win",
     "watch": "⚠️ Watch closely",
     "uncovered": "➕ No call sold",
+    "expired": "📅 Call expired",
     # She sold the long put off a spread and is letting the short one assign
     # her. Not "hold" - there is something to do, and it is have the cash.
     "awaiting": "🎯 Let it assign",
@@ -1278,6 +1279,7 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             # rule she has already, deliberately, stepped outside.
             "Decide by": ("at expiry"
                           if getattr(pos, "awaiting_assignment", False)
+                          or ("time_exit_dte" in it and it["time_exit_dte"] is None)
                           else _decide_by(pos, it.get("time_exit_dte", 21))),
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),

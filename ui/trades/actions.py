@@ -123,10 +123,14 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
              if p.is_long_premium else
              "➕ Sell a call against it (records the credit)")
 
+    weekly = p.strategy_key == "weekly_covered_call"
     with st.expander(title, key=f"writewrap_{kp}_{p.trade_id}", expanded=True):
         theme.note("Sell it in thinkorswim first, then write the fill down "
-                   "here. Your SOP's PMCC sells about 30 days out at delta "
-                   "0.30. The credit is banked in this month's profit and the "
+                   "here. "
+                   + ("This is your weekly call - the date below opens a week "
+                      "out. " if weekly else
+                      "Your SOP's PMCC sells about 30 days out at delta 0.30. ")
+                   + "The credit is banked in this month's profit and the "
                    "app starts watching the new call.")
         if p.is_long_premium and cover is not None:
             # This is not the strategy she logged, and pretending otherwise
@@ -151,7 +155,7 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
         # Capped at the long call's own expiration: a call sold past that date
         # is not covered by anything, and the cap says so before she can pick it
         # rather than after she has recorded the fill.
-        default_exp = dt.date.today() + dt.timedelta(days=30)
+        default_exp = dt.date.today() + dt.timedelta(days=7 if weekly else 30)
         max_exp = None
         if cover_exp is not None and cover_exp > dt.date.today():
             max_exp = cover_exp
@@ -174,8 +178,9 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
             f"write_credit_{kp}_{p.trade_id}_{strike:g}_{exp}",
             int(p.contracts or 1), default_total=suggested,
             help="The price you sold it at, per share - the app does the x100. "
-                 "This is what your 50% profit target measures against from "
-                 "now on.")
+                 + ("It comes off what your shares really cost you." if weekly
+                    else "This is what your 50% profit target measures "
+                         "against from now on."))
         if suggested:
             theme.note("**Prefilled from today's chain** for that contract. "
                        "Change it if your fill said otherwise.")
@@ -457,13 +462,45 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
         # secured put leaves nothing behind, so there it is simply a close, and
         # offering it here would record a live trade that no longer exists.
         rolling = True
+        expired = False
         if p.is_debit and kind == OptionType.CALL:
             mode = st.radio(
                 "What did you do?",
                 ["Rolled it for a credit (one order)",
-                 "Closed the call (I'll sell a new one)"],
+                 "Closed the call (I'll sell a new one)",
+                 # The weekly covered call's normal Friday: nothing to pay and
+                 # nothing on the fill, but the call still has to come off the
+                 # trade before the next one can be written.
+                 "It expired worthless (I keep the shares)"],
                 key=f"roll_mode_{kp}_{p.trade_id}")
             rolling = mode.startswith("Rolled")
+            expired = mode.startswith("It expired")
+
+        if expired:
+            theme.note(f"The {old_short} ran out with nothing to pay, so you keep "
+                       f"all ${old_credit:,.0f} it sold for. That money is "
+                       "already counted - this just takes the call off the trade "
+                       "so you can record the next one with **➕ Sell a call "
+                       "against it**.")
+            today = dt.date.today()
+            on = st.date_input("Expired on",
+                               value=min(p.expiration or today, today),
+                               max_value=today,
+                               key=f"exp_when_{kp}_{p.trade_id}",
+                               format=components.DATE_FMT)
+            if st.button("Record it", type="primary",
+                         key=f"expbtn_{kp}_{p.trade_id}"):
+                from src.logging_tools.trade_logger import roll_trade
+                roll_trade(p.trade_id, p.underlying, p.strategy_name,
+                           cash=0.0, note=f"The {old_short} expired worthless",
+                           rolled_on=on, account=p.account, option_type=word)
+                st.session_state.pop("trades_rows", None)
+                st.session_state.pop("_priced_positions", None)
+                st.session_state["ql_flash"] = (
+                    f"Recorded: the {old_short} expired worthless. Sell the next "
+                    "one with ➕ Sell a call against it.")
+                st.rerun()
+            return
 
         if not rolling:
             theme.note("This records only the call you bought back. Nothing is "
@@ -770,11 +807,14 @@ def _wheel_panel(p, price: Optional[float]) -> None:
     rows = [
         _money_line(
             f"{state.shares} shares, bought at {state.paid_per_share:g}",
-            f"assigned on {components.fmt_date(p.assigned_on)}",
+            (f"bought on {components.fmt_date(p.opened)}" if state.bought
+             else f"assigned on {components.fmt_date(p.assigned_on)}"),
             f"-${state.paid_per_share * state.shares:,.0f}", theme.INK),
         _money_line(
             "Premium collected on this trade",
-            "the put that assigned you, plus every call written since",
+            ("every call written against them, less any you bought back"
+             if state.bought else
+             "the put that assigned you, plus every call written since"),
             f"+${state.premium_collected:,.0f}", theme.GREEN),
         _money_line(
             "So the shares really cost you",
@@ -787,11 +827,20 @@ def _wheel_panel(p, price: Optional[float]) -> None:
         f"<div style='background:{theme.TILE};border:1px solid {theme.BORDER};"
         f"border-radius:12px;padding:12px 16px;margin:6px 0 10px;'>"
         f"<div style='font-weight:800;color:{theme.INK};font-size:1.02rem;"
-        f"margin-bottom:4px;'>🎡 Your wheel on {_h_esc(p.underlying)}</div>"
-        + "".join(rows) + "</div>", unsafe_allow_html=True)
+        f"margin-bottom:4px;'>"
+        + (f"📈 Your shares in {_h_esc(p.underlying)}" if state.bought
+           else f"🎡 Your wheel on {_h_esc(p.underlying)}")
+        + "</div>" + "".join(rows) + "</div>", unsafe_allow_html=True)
 
     if state.market_price is not None:
-        if state.below_basis:
+        if state.below_basis and state.bought:
+            # No wheel language, and no rule: she has none for this trade. The
+            # warning past her threshold rides on the card's signal above.
+            theme.note(
+                f"**{p.underlying} is at \\${state.market_price:,.2f}, under "
+                f"your \\${state.cost_basis:,.2f} cost.** Not a loss until you "
+                "sell. Each call you write pulls that cost down a little more.")
+        elif state.below_basis:
             theme.note(
                 f"**{p.underlying} is at \\${state.market_price:,.2f}, under "
                 f"your \\${state.cost_basis:,.2f} basis.** That is not a loss "
@@ -806,7 +855,20 @@ def _wheel_panel(p, price: Optional[float]) -> None:
                 f"bank \\${state.unrealised:,.0f} on the shares on top of the "
                 "premium you have already kept.")
 
-    if state.call_strike:
+    if state.call_strike and state.bought:
+        won = (state.called_away_profit or 0) >= 0
+        theme.note(
+            f"**If the {state.call_strike:g} call finishes in the money**, your "
+            f"shares are sold at \\${state.call_strike:g} (called away) and the "
+            f"whole trade ends {'up' if won else 'DOWN'} "
+            f"**\\${abs(state.called_away_profit or 0):,.0f}** - the "
+            f"\\${state.call_strike:g} against your \\${state.cost_basis:,.2f} "
+            f"cost, on {state.shares} shares. "
+            + ("Record it with ✔️ Close this trade, reason **Shares called away**."
+               if won else
+               "That strike is BELOW what the shares cost you, so being called "
+               "away there would lock in a loss."))
+    elif state.call_strike:
         won = (state.called_away_profit or 0) >= 0
         theme.note(
             f"**If the {state.call_strike:g} call finishes in the money**, your "
@@ -820,6 +882,12 @@ def _wheel_panel(p, price: Optional[float]) -> None:
                "That strike is BELOW your basis, so being called away locks in "
                "a loss. Your SOP says never write a call below your cost "
                "basis - roll it up and out instead."))
+    elif state.bought:
+        theme.note(
+            f"**No call sold against these shares yet.** When you sell one, "
+            f"record it with **➕ Sell a call against it** below. A strike at "
+            f"\\${state.cost_basis:,.2f} or higher means being called away "
+            "still makes money.")
     else:
         theme.note(
             f"**Nothing is earning on these shares right now.** Sell a call "
@@ -1133,6 +1201,11 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
         default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
             is not None else 0.0
         if p.is_debit:
+            if p.shares_cost > 0:
+                theme.note("**Shares called away?** Type the call's strike as the "
+                           "price received - your shares were sold at exactly "
+                           "that, and the call is used up. **Sold them "
+                           "yourself?** Type the net price on your fill.")
             # Closing a PMCC or covered call PAYS her - she sells the
             # long side back. The old "what you paid" box could not go
             # below zero, so a close that paid had nowhere to be typed.
@@ -1169,7 +1242,7 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             ["Profit target (50%) hit", "21 DTE time exit",
              "21 DTE credit roll (opened a new spread)", "Stop loss hit",
              "Rolled to a new position", "Expired worthless",
-             "Closed early", "Other"],
+             "Shares called away", "Closed early", "Other"],
             index=None, placeholder="Pick the reason - this scores your rules",
             key=f"exit_reason_{kp}_{p.trade_id}")
         note = st.text_input("Lesson learned (optional - future you says thanks)",

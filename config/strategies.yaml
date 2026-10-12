@@ -384,6 +384,58 @@ strategies:
     sizing:
       max_loss_basis: debit       # cost of LEAPS minus credit collected
 
+  # ---------------- WEEKLY COVERED CALL (buy the shares, sell weekly calls) ----
+  # Rita's addition, 2026-10-12: "i plan to buy stock and then sell weekly
+  # covered calls. only in bullish market setups."
+  #
+  # Deliberately the LOOSEST block in this file. Her words were "no need rules",
+  # so there is NO delta limit, NO profit target, NO stop and NO time exit, and
+  # there is no Notion SOP page behind it (she chose "app only"). Do not borrow
+  # the Models 1-3 block (0.30 / 30-45 days / 50% / 21 DTE) to make it look
+  # complete - those are rules she did not set for this trade.
+  #
+  # What it does have:
+  #   - bullish_only: her one condition. The app TELLS her when a name is not in
+  #     an uptrend; it never blocks the trade.
+  #   - a weekly window, so the scan and the log form open near 7 days.
+  #   - a scan TARGET delta, only because the scanner has to aim at some strike.
+  #     It is never checked against anything.
+  #   - share_drop_warn_pct: her ruling for a falling stock is "warn only". The
+  #     card says so once the shares sit this far under what they really cost
+  #     her (after premium); nothing ever tells her to sell.
+  #
+  # Unlike Models 1-3 there is no protective put. The shares carry the full
+  # downside, less whatever the calls have paid.
+  weekly_covered_call:
+    name: "Weekly Covered Call (Own the Shares)"
+    family: covered_call
+    market_outlook: "Bullish"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "You BUY 100 shares of a stock you are bullish on, then SELL a call against them every week. Each call pays you cash up front. If the stock finishes above the strike, your shares are sold at that price (called away) and you keep the premium plus the rise up to the strike. If not, the call expires and you sell next week's."
+    tos_hint: "You own 100 shares (+100), short call -1 expiring this Friday or next. No put underneath - the shares carry the full downside."
+    requires_shares: true
+    bullish_only: true
+    legs:
+      - role: short_call
+        action: sell
+        option_type: call
+    entry:
+      # A weekly. The window catches this Friday's and next Friday's
+      # expirations from any weekday - on a Monday those sit at 4 and 11 days,
+      # on a Wednesday at 2 and 9. The target is where the scan and the log
+      # form open.
+      short_call_dte_target: 7
+      short_call_dte_min: 2
+      short_call_dte_max: 12
+      # Where the scan aims the call - NOT a rule (see above).
+      short_leg_delta_target: 0.30
+    exit:
+      accepts_assignment: true    # called away is a fine ending, not a failure
+      share_drop_warn_pct: 10     # warn once the shares are 10% under her real cost
+    sizing:
+      max_loss_basis: shares      # 100 shares per contract, no protection
+
   # ---------------- COVERED CALLS (own 100 real shares) ----------------
   covered_call_model_1:
     name: "Covered Call - Model 1: Absolute Protection (Collar)"
