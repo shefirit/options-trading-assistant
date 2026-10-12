@@ -238,3 +238,33 @@ def test_an_assigned_wheel_offers_the_sell_a_call_form(app_with_rows):
     labels = [e.label for e in at.expander]
     assert any("Sell a call against it" in l for l in labels), \
         f"expanders were {labels}"
+
+
+# ------------------------------------------------------------------ ROI on the card
+def test_wheel_roi_counts_the_put_and_starts_the_clock_at_the_put():
+    """Put sold 40 days ago for $150, assigned at 50 ($5,000 of shares), a 53
+    call written today for $80 expiring in 30 days. Base: the $4,850 in it."""
+    from src.engine import roi
+
+    p = _parse(_put_row(), build_assign_row(TRADE, "XYZ", WHEEL, 50.0, 1),
+               _call(53.0, credit=80.0))
+    r = roi.covered_call_roi(p, wheel.state_from(p, 51.0))
+    assert r.base == 4_850.0
+    assert r.premium == 230.0 and r.premium_days == 40      # put + call
+    assert r.premium_pct == round(230 / 4_850 * 100, 2)
+    assert r.call_credit == 80.0 and r.call_days == 30
+    assert r.away_result == 530.0 and r.away_days == 70
+    assert r.away_pct == round(530 / 4_850 * 100, 2)
+
+
+def test_the_wheel_card_shows_the_three_roi_cards(app_with_rows):
+    at = app_with_rows([
+        _put_row(), build_assign_row(TRADE, "XYZ", WHEEL, 50.0, 1),
+        _call(53.0, credit=80.0),
+    ]).run()
+    assert not at.exception
+    body = _text(at)
+    assert "THIS CALL" in body and "WEEK" not in body.split("THIS CALL")[0][-40:]
+    assert "PREMIUM SO FAR" in body and "IF CALLED AWAY" in body
+    assert "if every call paid this" in body
+    assert "includes the put that assigned you" in body

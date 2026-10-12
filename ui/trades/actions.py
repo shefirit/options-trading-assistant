@@ -790,24 +790,32 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
 
 
 def _covered_call_roi_strip(p, state) -> None:
-    """The weekly covered call's three returns, as cards under the shares.
+    """Three returns, as cards under the shares - on the weekly covered call
+    and on a wheel once it has been assigned.
 
-    Her ask (2026-10-12): ROI on this card. The card's general "ROI so far"
-    line mixes the premium with the shares moving; these split out what the
-    strategy is run for - what this week's call pays, what the calls have paid
-    in all, and what being called away would make.
+    Her ask (2026-10-12): ROI on these cards. The card's general "ROI so far"
+    line mixes the premium with the shares moving; these split out what both
+    strategies are run for - what the current call pays, what the premium has
+    paid in all, and what being called away would make.
+
+    On a wheel the premium includes the put that assigned her, and the clock
+    starts the day that put was sold - the wheel is one trade from there, the
+    same way the panel above counts it. Its calls run about a month, so the
+    first card does not say "week".
     """
     from src.engine import roi
 
     r = roi.covered_call_roi(p, state)
     if r is None:
         return
+    weekly = state.bought
     cards = []
     if r.call_pct is not None:
         cards.append(theme.stat(
-            "THIS WEEK'S CALL", f"{r.call_pct:+.2f}%",
+            "THIS WEEK'S CALL" if weekly else "THIS CALL", f"{r.call_pct:+.2f}%",
             f"{theme.money(r.call_credit)} over {r.call_days} days · "
-            f"{r.call_annual_pct:+.0f}% a year if every week paid this",
+            f"{r.call_annual_pct:+.0f}% a year if every "
+            f"{'week' if weekly else 'call'} paid this",
             "up" if r.call_pct >= 0 else "down"))
     cards.append(theme.stat(
         "PREMIUM SO FAR", f"{r.premium_pct:+.2f}%",
@@ -824,7 +832,10 @@ def _covered_call_roi_strip(p, state) -> None:
     theme.note(f"All three are on the \\${r.base:,.0f} you have in this trade - "
                "the same base the Journal uses once it closes. **Premium** "
                "leaves out the share price; the ROI-so-far line above "
-               "includes it.")
+               "includes it."
+               + ("" if weekly else
+                  " On a wheel the premium includes the put that assigned "
+                  "you, and the days count from when you sold it."))
 
 
 def _wheel_panel(p, price: Optional[float]) -> None:
@@ -870,8 +881,7 @@ def _wheel_panel(p, price: Optional[float]) -> None:
            else f"🎡 Your wheel on {_h_esc(p.underlying)}")
         + "</div>" + "".join(rows) + "</div>", unsafe_allow_html=True)
 
-    if state.bought:
-        _covered_call_roi_strip(p, state)
+    _covered_call_roi_strip(p, state)
 
     if state.market_price is not None:
         if state.below_basis and state.bought:
