@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html as _htmllib
 from datetime import date
+from typing import Optional
 
 import altair as alt
 import pandas as pd
@@ -1253,19 +1254,8 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
         if cushion:
             side = "C" if cushion["option_type"] == "call" else "P"
             strike_label = f"{cushion['strike']:g} {side}"
-        # P&L means the same thing in every row: what the whole trade is worth
-        # if closed right now. On a credit spread that is credit minus cost to
-        # close, which is what the exit signal already computed. On a PMCC it
-        # has to include the LEAPS, or the column reports the small short-call
-        # number on a trade whose real result is ten times that.
-        pl = sig.pl_dollars
-        if pos.is_debit and live.get("open_pl") is not None:
-            pl = live["open_pl"]
-        elif getattr(sig, "stop_pl", None) is not None and pos.has_history:
-            # Rolled, or a wing added: credit minus cost to close leaves out
-            # every roll credit already banked. Whole trade, as the comment
-            # above promises - the same figure the card's headline uses.
-            pl = sig.stop_pl
+        pl = open_pl(pos, live, sig)
+        so_far = open_roi(pos, pl)
         rows.append({
             "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
             "Symbol": pos.underlying,
@@ -1284,9 +1274,36 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             "Credit $": pos.credit,
             "Close now $": live.get("cost_to_close"),
             "P&L $": pl,
+            "ROI so far": so_far.pct if so_far else None,
+            "ROI / year": so_far.annual_pct if so_far else None,
             "% kept": sig.profit_pct,
         })
     return pd.DataFrame(rows)
+
+
+def open_pl(pos, live: dict, sig) -> Optional[float]:
+    """What the whole trade is worth if closed right now - the P&L column.
+
+    On a credit spread that is credit minus cost to close, which is what the
+    exit signal already computed. On a PMCC it has to include the LEAPS, or the
+    column reports the small short-call number on a trade whose real result is
+    ten times that. One place, so the P&L and the ROI built on it never disagree.
+    """
+    pl = sig.pl_dollars
+    if pos.is_debit and live.get("open_pl") is not None:
+        pl = live["open_pl"]
+    elif getattr(sig, "stop_pl", None) is not None and pos.has_history:
+        # Rolled, or a wing added: credit minus cost to close leaves out
+        # every roll credit already banked. Whole trade, as above - the same
+        # figure the card's headline uses.
+        pl = sig.stop_pl
+    return pl
+
+
+def open_roi(pos, pl: Optional[float]):
+    """ROI so far on an open trade, or None when it could not be priced."""
+    from src.engine import roi
+    return roi.open_roi(pos, pl)
 
 
 def positions_column_config():
@@ -1330,6 +1347,13 @@ def positions_column_config():
             help="What the whole trade is worth if you closed it today - your "
                  "banked roll credits are counted in, and on a PMCC or covered "
                  "call the long leg too."),
+        "ROI so far": st.column_config.NumberColumn(format="%+.1f%%", width=82,
+            help="The P&L ÷ the money this trade has at risk - a spread's max "
+                 "loss, a cash secured put's strike less the premium, the cash "
+                 "laid out for shares or a LEAPS. Same measure as the Journal."),
+        "ROI / year": st.column_config.NumberColumn(format="%+.0f%%", width=86,
+            help="ROI so far x 365 ÷ days held so far. Early in a trade this "
+                 "swings wildly - a good first two days reads as a huge number."),
         "% kept": st.column_config.NumberColumn(format="%.0f%%", width=76,
             help="How much of the SHORT CALL's credit is yours so far. Your SOP "
                  "takes the win at 50%. On a PMCC this is about the call only - "

@@ -81,6 +81,26 @@ def trade_roi(position) -> Optional[Roi]:
                pct=round(pct, 2), annual_pct=round(annualize(pct, days), 1))
 
 
+def open_roi(position, pl_now: Optional[float],
+             today: Optional[date] = None) -> Optional[Roi]:
+    """ROI SO FAR on an open trade: what it would make if closed right now,
+    over the same money at risk the Journal uses once it closes.
+
+    pl_now is the open-trades P&L - the whole trade, banked rolls included and,
+    on a debit trade, the shares or LEAPS at today's price. None when the
+    trade could not be priced, and then there is no ROI to show either.
+    """
+    if position.status != "open" or pl_now is None:
+        return None
+    base = money_at_risk(position)
+    days = days_held(position, today)
+    if base is None or days is None:
+        return None
+    pct = pl_now / base * 100.0
+    return Roi(result=round(pl_now, 2), base=base, days=days,
+               pct=round(pct, 2), annual_pct=round(annualize(pct, days), 1))
+
+
 @dataclass(frozen=True)
 class BookRoi:
     """Several closed trades taken together."""

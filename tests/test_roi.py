@@ -116,3 +116,49 @@ def test_the_journal_shows_roi_on_closed_trades(app_with_rows):
     page = " ".join(str(m.value) for m in at.markdown)
     assert "ROI PER YEAR" in page          # the strip above the table
     assert "at risk" in page               # the card on the trade's page
+
+
+# ------------------------------------------------------------------ open trades
+def test_roi_so_far_uses_todays_pl_and_days_held_so_far():
+    p = Position(trade_id="T", status="open", opened=OPEN, max_loss=350.0,
+                 open_cash=150.0)
+    r = roi.open_roi(p, 70.0, today=OPEN + timedelta(days=10))
+    assert r.pct == 20.0
+    assert r.days == 10
+    assert r.annual_pct == pytest.approx(730.0)
+
+
+def test_roi_so_far_on_shares_uses_the_cash_laid_out():
+    p = Position(trade_id="T", status="open", opened=OPEN, open_cash=-5_000.0,
+                 shares_cost=5_000.0, max_loss=4_920.0)
+    assert roi.open_roi(p, -250.0, today=OPEN + timedelta(days=5)).pct == -5.0
+
+
+def test_no_price_means_no_roi_so_far():
+    p = Position(trade_id="T", status="open", opened=OPEN, max_loss=350.0)
+    assert roi.open_roi(p, None) is None
+
+
+def test_a_closed_trade_has_no_roi_so_far():
+    assert roi.open_roi(_closed(75.0, 30, max_loss=350.0), 75.0) is None
+
+
+def test_the_open_trades_table_and_card_show_roi_so_far(app_with_one_csp,
+                                                       monkeypatch):
+    """The demo CSP: $200 collected on a 100 strike, $9,800 at risk. Priced at
+    $100 to close, the trade is $100 up - 1.0% so far, five days in."""
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(DataProvider, "price_position", lambda self, p: {
+        "priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+        "short_delta": 0.2, "position_value": None, "open_pl": None,
+        "options_pl": None, "shares_pl": None})
+    at = app_with_one_csp.run()
+    assert not at.exception
+    table = next(d.value for d in at.dataframe
+                 if "ROI so far" in list(d.value.columns))
+    assert table["P&L $"].iloc[0] == 100.0
+    assert table["ROI so far"].iloc[0] == pytest.approx(1.02, abs=0.01)
+    assert table["ROI / year"].iloc[0] == pytest.approx(1.02 * 365 / 5, abs=0.5)
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "ROI so far: **+1.0%**" in page

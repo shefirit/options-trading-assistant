@@ -169,6 +169,14 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
         whole = glance.whole_trade_line(p, live)
         if whole:
             st.markdown(components._esc(whole))
+        so_far = components.open_roi(p, components.open_pl(p, live, sig))
+        if so_far is not None:
+            # Same measure the Journal shows once the trade closes, so the two
+            # can be compared straight across.
+            st.markdown(components._esc(
+                f"ROI so far: **{so_far.pct:+.1f}%** on ${so_far.base:,.0f} at "
+                f"risk, {so_far.days} day{'' if so_far.days == 1 else 's'} in - "
+                f"**{so_far.annual_pct:+.0f}% a year** at this pace."))
         theme.note(_first_sentence(sig.reason))
         for n in sig.notes:
             st.warning(components._esc(n))
