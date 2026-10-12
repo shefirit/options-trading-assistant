@@ -110,3 +110,11 @@ def test_called_away_is_a_close_reason(app_with_rows):
     reasons = next(s for s in at.selectbox
                    if (s.key or "").startswith("exit_reason_"))
     assert "Shares called away" in reasons.options
+
+
+def test_the_card_shows_the_covered_call_roi(app_with_rows):
+    at = app_with_rows([_shares_row(), _call_row()]).run()
+    _no_snags(at)
+    page = _page(at)
+    for label in ("THIS WEEK&#x27;S CALL", "PREMIUM SO FAR", "IF CALLED AWAY"):
+        assert label in page or label.replace("&#x27;", "'") in page, label

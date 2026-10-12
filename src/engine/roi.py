@@ -102,6 +102,74 @@ def open_roi(position, pl_now: Optional[float],
 
 
 @dataclass(frozen=True)
+class CoveredCallRoi:
+    """The three returns a covered call is judged on, each with its own clock.
+
+    All on the Journal's base - the cash she has in the trade - so they line
+    up with the ROI it gets once it closes.
+    """
+
+    base: float
+    premium: float                     # every call's premium, net of buy-backs
+    premium_days: int                  # since the shares were bought
+    premium_pct: float
+    premium_annual_pct: float
+    call_credit: Optional[float] = None    # the call written right now
+    call_days: Optional[int] = None        # from its sale to its expiration
+    call_pct: Optional[float] = None
+    call_annual_pct: Optional[float] = None
+    away_result: Optional[float] = None    # whole trade, if called at the strike
+    away_days: Optional[int] = None        # from buying the shares to that date
+    away_pct: Optional[float] = None
+    away_annual_pct: Optional[float] = None
+
+
+def _call_sold_on(position) -> Optional[date]:
+    """When the call she is short now was written: the last roll that wrote
+    one, or the open itself if the first call went on with the shares."""
+    for r in reversed(position.rolls):
+        if r.new_strike is not None and r.kind.value == "call":
+            return r.rolled_on
+    return position.opened
+
+
+def covered_call_roi(position, state,
+                     today: Optional[date] = None) -> Optional[CoveredCallRoi]:
+    """This week's call, the premium so far, and being called away - as ROI.
+
+    `state` is the wheel.WheelState for the position: it already holds the
+    premium collected and what being called away would pay, so the dollars
+    here are the same ones the card prints above them.
+    """
+    base = money_at_risk(position)
+    held = days_held(position, today)
+    if state is None or base is None or held is None:
+        return None
+    prem_pct = state.premium_collected / base * 100.0
+    out = dict(base=base, premium=state.premium_collected, premium_days=held,
+               premium_pct=round(prem_pct, 2),
+               premium_annual_pct=round(annualize(prem_pct, held), 1))
+
+    exp = position.expiration
+    if state.call_strike and exp is not None:
+        credit = float(position.credit or 0.0)
+        sold = _call_sold_on(position)
+        if credit > 0 and sold is not None:
+            days = max((exp - sold).days, 1)
+            pct = credit / base * 100.0
+            out.update(call_credit=round(credit, 2), call_days=days,
+                       call_pct=round(pct, 2),
+                       call_annual_pct=round(annualize(pct, days), 1))
+        if state.called_away_profit is not None and position.opened is not None:
+            days = max((exp - position.opened).days, 1)
+            pct = state.called_away_profit / base * 100.0
+            out.update(away_result=state.called_away_profit, away_days=days,
+                       away_pct=round(pct, 2),
+                       away_annual_pct=round(annualize(pct, days), 1))
+    return CoveredCallRoi(**out)
+
+
+@dataclass(frozen=True)
 class BookRoi:
     """Several closed trades taken together."""
 

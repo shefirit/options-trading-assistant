@@ -789,6 +789,44 @@ def _roll_form(p, live: dict, provider, kp: str = "detail") -> None:
                 st.rerun()
 
 
+def _covered_call_roi_strip(p, state) -> None:
+    """The weekly covered call's three returns, as cards under the shares.
+
+    Her ask (2026-10-12): ROI on this card. The card's general "ROI so far"
+    line mixes the premium with the shares moving; these split out what the
+    strategy is run for - what this week's call pays, what the calls have paid
+    in all, and what being called away would make.
+    """
+    from src.engine import roi
+
+    r = roi.covered_call_roi(p, state)
+    if r is None:
+        return
+    cards = []
+    if r.call_pct is not None:
+        cards.append(theme.stat(
+            "THIS WEEK'S CALL", f"{r.call_pct:+.2f}%",
+            f"{theme.money(r.call_credit)} over {r.call_days} days · "
+            f"{r.call_annual_pct:+.0f}% a year if every week paid this",
+            "up" if r.call_pct >= 0 else "down"))
+    cards.append(theme.stat(
+        "PREMIUM SO FAR", f"{r.premium_pct:+.2f}%",
+        f"{theme.signed(r.premium)} in {r.premium_days} days · "
+        f"{r.premium_annual_pct:+.0f}% a year",
+        "up" if r.premium_pct >= 0 else "down"))
+    if r.away_pct is not None:
+        cards.append(theme.stat(
+            "IF CALLED AWAY", f"{r.away_pct:+.1f}%",
+            f"{theme.signed(r.away_result)} over {r.away_days} days · "
+            f"{r.away_annual_pct:+.0f}% a year",
+            "up" if r.away_pct >= 0 else "down"))
+    theme.stat_row(cards)
+    theme.note(f"All three are on the \\${r.base:,.0f} you have in this trade - "
+               "the same base the Journal uses once it closes. **Premium** "
+               "leaves out the share price; the ROI-so-far line above "
+               "includes it.")
+
+
 def _wheel_panel(p, price: Optional[float]) -> None:
     """What the shares she was assigned actually cost her.
 
@@ -831,6 +869,9 @@ def _wheel_panel(p, price: Optional[float]) -> None:
         + (f"📈 Your shares in {_h_esc(p.underlying)}" if state.bought
            else f"🎡 Your wheel on {_h_esc(p.underlying)}")
         + "</div>" + "".join(rows) + "</div>", unsafe_allow_html=True)
+
+    if state.bought:
+        _covered_call_roi_strip(p, state)
 
     if state.market_price is not None:
         if state.below_basis and state.bought:
