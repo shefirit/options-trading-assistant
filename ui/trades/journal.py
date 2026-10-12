@@ -63,6 +63,8 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
                    "above - the trades are all still there.")
         return
 
+    _roi_strip(shown)
+
     st.dataframe(
         _dataframe(shown), width="stretch", hide_index=True,
         column_config=_column_config(), key="journal_table",
@@ -97,9 +99,12 @@ def _rows(trades: list) -> list[dict[str, Any]]:
     everything. A trade opened in June and closed last week is recent news, and
     sorting it under June buries it.
     """
+    from src.engine import roi as roi_mod
+
     out = []
     for p in trades:
         pl = p.realized_total
+        r = roi_mod.trade_roi(p)
         if p.status == "legacy":
             word = STATUS_WORD["legacy"]
         elif p.status == "open":
@@ -128,6 +133,8 @@ def _rows(trades: list) -> list[dict[str, Any]]:
             "result_amount": pl,
             "exit": p.exit_reason or "",
             "rolls": len(p.rolls),
+            "days": roi_mod.days_held(p),
+            "roi": r,
         })
     return sorted(out, key=lambda r: r["sort"], reverse=True)
 
@@ -212,12 +219,62 @@ def _dataframe(rows: list[dict]) -> pd.DataFrame:
         "Credit $": r["credit"],
         "Settled $": (r["result_amount"] if r["result_amount"] is not None
                       else r["banked"] or 0.0),
+        "Days": r["days"] or 0,
+        "ROI": _roi_cell(r, "pct"),
+        "ROI / year": _roi_cell(r, "annual_pct"),
         "Why closed": r["exit"],
     } for r in rows])
 
-    for col in ("Credit $", "Settled $", "Qty"):
+    for col in ("Credit $", "Settled $", "Qty", "Days"):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     return df
+
+
+def _roi_cell(row: dict, field: str) -> str:
+    """ROI as words, never a blank number.
+
+    Text rather than a number column for the same reason Settled is never
+    empty: Streamlit paints a missing number as a faint grey "None", and an
+    open trade has no ROI yet. "open" says why, in ink she can read.
+    """
+    r = row["roi"]
+    if r is not None:
+        return f"{getattr(r, field):+.1f}%"
+    return "open" if row["status"] == "open" else "-"
+
+
+def _roi_strip(rows: list[dict]) -> None:
+    """The return on every CLOSED trade the filters are showing, as one figure.
+
+    Follows the filters on purpose: pick a strategy and this becomes that
+    strategy's ROI, pick "This month" and it is the month's. That is the
+    comparison she is after - which of her strategies earns its capital.
+    """
+    from src.engine import roi as roi_mod
+
+    book = roi_mod.book_roi(r["position"] for r in rows)
+    if book is None:
+        return
+    theme.stat_row([
+        theme.stat("ROI", f"{book.pct:+.1f}%",
+                   f"on {book.trades} closed trade{'' if book.trades == 1 else 's'} "
+                   "shown", "up" if book.pct >= 0 else "down"),
+        theme.stat("ROI PER YEAR", f"{book.annual_pct:+.0f}%",
+                   f"held {book.avg_days:.0f} days on average",
+                   "up" if book.annual_pct >= 0 else "down"),
+        theme.stat("MADE", theme.signed(book.result),
+                   "closed trades, rolls included",
+                   "up" if book.result >= 0 else "down"),
+        theme.stat("MONEY AT RISK", theme.money(book.base),
+                   "what those trades could have lost"),
+    ])
+    theme.note("**ROI** is what a trade made ÷ the money it had at risk - a "
+               "spread's max loss, a cash secured put's strike less the premium, "
+               "the cash you laid out for shares or a LEAPS. **Per year** is that "
+               "ROI x 365 ÷ the days you held it. Across several trades each "
+               "dollar counts for as long as it was tied up, so a two-day trade "
+               "cannot outvote a two-month one. Open trades join in once they "
+               "close. The strip follows the filters above.")
 
 
 def _column_config() -> dict:
@@ -240,6 +297,18 @@ def _column_config() -> dict:
                  "trade that is its whole life - the close plus every roll. On "
                  "an open one it is what rolls and sold legs have banked "
                  "already, which is $0 until something settles."),
+        "Days": st.column_config.NumberColumn(
+            "Days", format="%d",
+            help="Days held - open to close, or open to today if still running"),
+        "ROI": st.column_config.TextColumn(
+            "ROI",
+            help="What the trade made ÷ the money it had at risk. A spread's "
+                 "max loss, a cash secured put's strike less the premium, the "
+                 "cash laid out for shares or a LEAPS. Shown once it closes."),
+        "ROI / year": st.column_config.TextColumn(
+            "ROI / year",
+            help="The ROI stretched to a year: ROI x 365 ÷ days held. Short "
+                 "trades swing this a lot - a small win in two days reads huge."),
         "Why closed": st.column_config.TextColumn(
             "Why closed", help="Which of your exit rules ended it"),
     }
@@ -342,6 +411,13 @@ def _summary_stats(p) -> None:
         cards.append(theme.stat(
             "CLOSED", components.fmt_date(p.closed_on),
             f"held {held} days" if held else "same day"))
+        from src.engine import roi as roi_mod
+        r = roi_mod.trade_roi(p)
+        if r is not None:
+            cards.append(theme.stat(
+                "ROI", f"{r.pct:+.1f}%",
+                f"on {theme.money(r.base)} at risk · {r.annual_pct:+.0f}% a year",
+                "up" if r.pct >= 0 else "down"))
     else:
         cards.append(theme.stat(
             "STILL OPEN", f"{left} days left" if left is not None else "-",
