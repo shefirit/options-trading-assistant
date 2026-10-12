@@ -15,6 +15,7 @@ from ui.trades.actions import (
     _merge_wing_form,
     _assignment_plan_panel,
     _pmcc_roi_strip,
+    _covered_model_roi_strip,
     _close_form,
     _roll_form,
     _sell_long_leg_form,
@@ -192,6 +193,8 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
             # Includes a LEAPS call she has started writing calls against -
             # it is run as a PMCC from that day.
             _pmcc_roi_strip(p)
+        elif p.strategy_key.startswith("covered_call_model") and p.shares_cost > 0:
+            _covered_model_roi_strip(p)
 
         # Keyed, so it survives a rerun. Without a key, recording anything on
         # this card snapped every expander shut and she lost her place.
