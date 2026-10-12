@@ -261,3 +261,71 @@ def test_the_symbol_table_shows_under_top_producers(monkeypatch):
     assert ">SYMBOL<" in html and "SOFI" in html and "+2.7%" in html
     assert "TRADES CLOSED ALL TIME" in html
     assert "All symbols" not in html      # one row needs no bottom line
+
+
+# ------------------------------------------------------------------ the PMCC card
+def _pmcc(row):
+    from src.engine import positions
+    from src.logging_tools.row import COLUMNS
+    return positions.parse_rows(COLUMNS, [row])[0]
+
+
+def test_pmcc_roi_this_call_premium_and_the_strike_floor(open_pmcc_row):
+    """$10,000 LEAPS at 400, a 500 call sold for $500: $9,500 in the trade.
+    Opened 7 days ago; the call expires in 32."""
+    p = _pmcc(open_pmcc_row())
+    r = roi.pmcc_roi(p)
+    assert r.base == 9_500.0
+    assert r.call_credit == 500.0 and r.call_days == 39
+    assert r.premium == 500.0 and r.premium_days == 7
+    # At 500 or above at expiry the pair is worth at least (500 - 400) x 100
+    # = $10,000, against the $9,500 that went in: at least $500 up.
+    assert r.away_result == 500.0
+    assert r.away_pct == pytest.approx(5.26, abs=0.01)
+
+
+def test_no_floor_when_more_calls_are_sold_than_leaps_owned(open_pmcc_row):
+    """Her SMH: two calls against one LEAPS. The second call is naked, so
+    "at least" would be a promise the trade cannot keep."""
+    import json
+    row = open_pmcc_row()
+    details = json.loads(row[17])
+    details["legs"][1]["qty"] = 2
+    row[17] = json.dumps(details)
+    r = roi.pmcc_roi(_pmcc(row))
+    assert r.call_pct is not None
+    assert r.away_pct is None
+
+
+def test_an_uncovered_pmcc_shows_only_the_premium_so_far(open_pmcc_row):
+    r = roi.pmcc_roi(_pmcc(open_pmcc_row(covered=False)))
+    assert r.call_pct is None and r.away_pct is None
+    assert r.premium_pct is not None
+
+
+def test_the_pmcc_card_shows_the_roi_cards(app_with_one_pmcc):
+    at = app_with_one_pmcc.run()
+    assert not at.exception
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "THIS CALL" in page and "PREMIUM SO FAR" in page
+    assert "AT THE STRIKE, AT LEAST" in page
+    assert "CALLED AWAY" not in page          # a PMCC owns no shares
+
+
+def test_a_financed_leaps_counts_only_its_calls_as_premium(open_financed_leaps_row):
+    """Her BAC shape: a LEAPS call with puts sold to part-pay for it, then a
+    call written against it. The puts' $1,875 is a discount on the LEAPS, not
+    income (her ruling, 2026-08-13) - only the call's $46 is premium."""
+    from src.engine import positions
+    from src.logging_tools.row import COLUMNS, build_roll_row
+
+    row = open_financed_leaps_row()
+    call = build_roll_row(row[12], "WFC", row[2], 46.0, new_strike=90.0,
+                          new_expiration=date.today() + timedelta(days=11),
+                          new_credit=46.0, account="real")
+    p = positions.parse_rows(COLUMNS, [row, call])[0]
+    assert p.effective_strategy_key == "poor_mans_covered_call"
+    r = roi.pmcc_roi(p)
+    assert r.premium == 46.0
+    assert r.call_credit == 46.0
+    assert r.away_pct is None          # the sold puts are not in the floor

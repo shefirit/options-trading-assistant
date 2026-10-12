@@ -838,6 +838,49 @@ def _covered_call_roi_strip(p, state) -> None:
                   "you, and the days count from when you sold it."))
 
 
+def _pmcc_roi_strip(p) -> None:
+    """The same three cards on a PMCC (her ask, 2026-10-12).
+
+    The third one changes meaning: a PMCC owns no shares, so it cannot be
+    called away. In its place is the least the trade makes if the stock
+    finishes at or above the short strike - a floor, because the LEAPS keeps
+    time value the app does not guess at.
+    """
+    from src.engine import roi
+
+    r = roi.pmcc_roi(p)
+    if r is None:
+        return
+    cards = []
+    if r.call_pct is not None:
+        cards.append(theme.stat(
+            "THIS CALL", f"{r.call_pct:+.2f}%",
+            f"{theme.money(r.call_credit)} over {r.call_days} days · "
+            f"{r.call_annual_pct:+.0f}% a year if every call paid this",
+            "up" if r.call_pct >= 0 else "down"))
+    cards.append(theme.stat(
+        "PREMIUM SO FAR", f"{r.premium_pct:+.2f}%",
+        f"{theme.signed(r.premium)} in {r.premium_days} days · "
+        f"{r.premium_annual_pct:+.0f}% a year",
+        "up" if r.premium_pct >= 0 else "down"))
+    if r.away_pct is not None:
+        cards.append(theme.stat(
+            "AT THE STRIKE, AT LEAST", f"{r.away_pct:+.1f}%",
+            f"{theme.signed(r.away_result)} over {r.away_days} days · "
+            f"{r.away_annual_pct:+.0f}% a year",
+            "up" if r.away_pct >= 0 else "down"))
+    theme.stat_row(cards)
+    theme.note(f"All three are on the \\${r.base:,.0f} you have in this trade - "
+               "the LEAPS less the call sold with it, the same base the "
+               "Journal uses. **Premium** leaves out what the LEAPS itself is "
+               "doing."
+               + (" **At the strike, at least** is the whole trade if the stock "
+                  "is at or above your short strike when this call expires: the "
+                  "gap between your two strikes is the floor, and the LEAPS "
+                  "keeps some time value on top of it." if r.away_pct is not None
+                  else ""))
+
+
 def _wheel_panel(p, price: Optional[float]) -> None:
     """What the shares she was assigned actually cost her.
 
