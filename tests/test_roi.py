@@ -1,0 +1,118 @@
+"""ROI and annualized ROI - her rulings (2026-10-12): measured on money at risk,
+annualized simply (ROI x 365 / days held). Invented numbers."""
+
+from datetime import date, timedelta
+
+import pytest
+
+from src.engine import roi
+from src.engine.positions import Position, RollEvent
+
+OPEN = date(2026, 9, 1)
+
+
+def _closed(result: float, days: int, **kw) -> Position:
+    base = dict(trade_id="T", underlying="XYZ", status="closed", opened=OPEN,
+                closed_on=OPEN + timedelta(days=days), realized_pl=result)
+    base.update(kw)
+    return Position(**base)
+
+
+# ------------------------------------------------------------------ one trade
+def test_a_credit_spread_is_measured_on_its_max_loss():
+    """$5 wide, $150 collected: $350 at risk. $75 kept = 21.4%."""
+    p = _closed(75.0, 30, open_cash=150.0, credit=150.0, max_loss=350.0,
+                buying_power=350.0)
+    r = roi.trade_roi(p)
+    assert r.base == 350.0
+    assert r.pct == pytest.approx(21.43, abs=0.01)
+    assert r.annual_pct == pytest.approx(21.43 * 365 / 30, abs=0.1)
+
+
+def test_a_loss_is_a_negative_roi():
+    p = _closed(-300.0, 20, open_cash=150.0, max_loss=350.0)
+    assert roi.trade_roi(p).pct == pytest.approx(-85.71, abs=0.01)
+
+
+def test_rolls_count_in_the_result():
+    """realized_total: the close plus every roll's cash."""
+    p = _closed(-50.0, 40, open_cash=150.0, max_loss=350.0,
+                rolls=[RollEvent(cash=120.0)])
+    assert roi.trade_roi(p).result == 70.0
+
+
+def test_a_debit_trade_is_measured_on_the_cash_laid_out_not_its_capped_loss():
+    """A collar's max_loss is the small capped figure. Dividing by it would
+    turn an ordinary month into a four-digit percentage."""
+    p = _closed(250.0, 35, open_cash=-5_000.0, shares_cost=5_000.0,
+                max_loss=300.0)
+    r = roi.trade_roi(p)
+    assert r.base == 5_000.0
+    assert r.pct == 5.0
+
+
+def test_a_weekly_call_annualizes_simply():
+    """2% in a week is ~104% a year simple - not the ~181% compounding gives."""
+    p = _closed(100.0, 7, open_cash=-5_000.0, shares_cost=5_000.0)
+    assert roi.trade_roi(p).annual_pct == pytest.approx(104.3, abs=0.1)
+
+
+def test_same_day_counts_as_one_day():
+    p = _closed(30.0, 0, open_cash=100.0, max_loss=400.0)
+    r = roi.trade_roi(p)
+    assert r.days == 1
+    assert r.annual_pct == pytest.approx(7.5 * 365, abs=0.1)
+
+
+def test_open_trades_have_no_roi_yet():
+    p = Position(trade_id="T", status="open", opened=OPEN, max_loss=350.0,
+                 open_cash=150.0)
+    assert roi.trade_roi(p) is None
+    assert roi.days_held(p, today=OPEN + timedelta(days=9)) == 9
+
+
+def test_no_recorded_risk_means_no_roi_rather_than_a_guess():
+    p = _closed(75.0, 30, open_cash=150.0, max_loss=0.0)
+    assert roi.trade_roi(p) is None
+
+
+# ------------------------------------------------------------------ the book
+def test_the_book_is_weighted_by_dollar_days_not_averaged():
+    """A tiny two-day win must not outvote a big two-month trade."""
+    small = _closed(40.0, 2, open_cash=60.0, max_loss=440.0)       # 9.1%, 2 d
+    big = _closed(900.0, 60, open_cash=-10_000.0, shares_cost=10_000.0)  # 9%, 60 d
+    book = roi.book_roi([small, big])
+    assert book.trades == 2
+    assert book.result == 940.0 and book.base == 10_440.0
+    assert book.pct == pytest.approx(9.0, abs=0.01)
+    dollar_days = 440 * 2 + 10_000 * 60
+    assert book.annual_pct == pytest.approx(940 / dollar_days * 365 * 100, abs=0.1)
+    naive = (roi.trade_roi(small).annual_pct + roi.trade_roi(big).annual_pct) / 2
+    assert book.annual_pct < naive / 5
+
+
+def test_the_book_skips_open_trades_and_returns_none_when_empty():
+    open_one = Position(trade_id="T", status="open", opened=OPEN, max_loss=350.0)
+    assert roi.book_roi([open_one]) is None
+    assert roi.book_roi([]) is None
+
+
+# ------------------------------------------------------------------ the Journal
+def test_the_journal_shows_roi_on_closed_trades(app_with_rows):
+    """A cash secured put: $200 collected on a 100 strike, $9,800 at risk,
+    closed five days later for $150 kept - 1.5%, about 112% a year."""
+    from conftest import csp_row
+    from src.logging_tools.row import build_close_row
+
+    row = csp_row()
+    close = build_close_row(row[12], "SOFI", row[2], 50.0, 150.0,
+                            "Profit target (50%) hit", account="real")
+    at = app_with_rows([row, close]).run()
+    assert not at.exception
+    table = next(d.value for d in at.dataframe
+                 if "ROI / year" in list(d.value.columns))
+    assert table["ROI"].iloc[0] == "+1.5%"
+    assert table["ROI / year"].iloc[0] == "+111.7%"
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "ROI PER YEAR" in page          # the strip above the table
+    assert "at risk" in page               # the card on the trade's page
