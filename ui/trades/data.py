@@ -66,8 +66,11 @@ def _price_positions(open_pos, provider, strategies) -> tuple[list, str]:
             short_delta=live.get("short_delta"))
         # Carried so the table can date the time exit from THIS strategy's rule
         # rather than assuming 21 for everything.
+        # None where the strategy has no time exit at all (the Wheel, the LEAPS
+        # put, the weekly covered call): there is no date to decide by.
+        te = cfg.get("time_exit_dte")
         items.append({"position": p, "live": live, "signal": s,
-                      "time_exit_dte": int(cfg.get("time_exit_dte", 21) or 21)})
+                      "time_exit_dte": int(te) if te else None})
         bar.progress((i + 1) / len(open_pos),
                      text=f"Priced {p.underlying} ({i + 1}/{len(open_pos)})")
     bar.empty()
@@ -83,4 +86,4 @@ def _price_positions(open_pos, provider, strategies) -> tuple[list, str]:
 # capital - the whole income of that strategy is the call she has not sold. Her
 # SOP allows sitting uncovered for a while after taking a win at 50%, so it is a
 # nudge rather than an alarm, but it is still something to do today.
-ACTION_SIGNALS = ("stop", "time", "profit", "uncovered")
+ACTION_SIGNALS = ("stop", "time", "profit", "uncovered", "expired")

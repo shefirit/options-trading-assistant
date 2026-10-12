@@ -126,8 +126,9 @@ def estimate(trade: Trade, strategy: dict[str, Any],
         # so this is the conservative read until she supplies the real one.
         max_loss = cash_secured_put_risk(trade)
         capital = buying_power = max_loss
-    elif basis in ("shares_plus_protection", "ratio_risk"):
+    elif basis in ("shares_plus_protection", "ratio_risk", "shares"):
         # Covered call: income is the short call; capital is the 100 shares.
+        # "shares" is the weekly covered call - the same, with no put at all.
         credit = _short_call_income(trade)
         capital = shares_capital(trade)
         max_loss = capital                          # worst case, shares fall to zero

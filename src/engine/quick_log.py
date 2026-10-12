@@ -279,10 +279,12 @@ def sizing_from_fill(trade: Trade, strat: dict[str, Any], credit_total: float,
             # a bought option uses cash rather than buying power.
             max_loss = cost
             buying_power = 0.0
-    elif basis in ("shares_plus_protection", "ratio_risk"):
+    elif basis in ("shares_plus_protection", "ratio_risk", "shares"):
         # Covered calls: 100 real shares per contract, plus whatever the put
         # side cost (Model 1's long put, Model 2's put spread; Model 3's ratio
-        # is built to cost ~nothing and can even come in at a credit).
+        # is built to cost ~nothing and can even come in at a credit). The
+        # weekly covered call ("shares") has no put side, so protection is 0
+        # and the worst case below works out to the shares less the call.
         px = float(share_price or trade.underlying_price or 0.0)
         shares_cost = px * 100 * contracts
         protection = float(protection_cost_total or 0.0)

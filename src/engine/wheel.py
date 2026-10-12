@@ -19,19 +19,39 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+# Strategies that start by BUYING the shares outright rather than being assigned
+# them. From the first call onwards they are the same trade as a wheel after
+# assignment - shares, calls written against them, a basis the premium keeps
+# pulling down - so they get the same numbers. Models 1-3 own shares too but
+# are deliberately left out: their protective puts change what the shares can
+# lose, and they have their own protection read on the card.
+BOUGHT_SHARE_STRATEGIES = ("weekly_covered_call",)
+
 
 @dataclass(frozen=True)
 class WheelState:
     """What the shares cost, what they are worth, and what gets her out."""
 
     shares: int                      # 100 per contract
-    paid_per_share: float            # the put strike she was assigned at
+    paid_per_share: float            # the put strike she was assigned at, or
+                                     # the price she bought the shares at
     premium_collected: float         # every credit on this trade, put and calls
     cost_basis: float                # per share, after the premium is taken off
     market_price: Optional[float]    # today, when the app could price it
     unrealised: Optional[float]      # shares only, against the basis
     call_strike: Optional[float]     # the call written against them right now
     called_away_profit: Optional[float]   # what that call finishing ITM pays her
+    bought: bool = False             # bought outright, not assigned from a put
+
+    @property
+    def drop_pct(self) -> Optional[float]:
+        """How far the shares sit UNDER what they really cost her, as a
+        percentage of that cost. None when they are at or above it, or when
+        there is no price to judge by."""
+        if self.market_price is None or self.cost_basis <= 0:
+            return None
+        gap = (self.cost_basis - self.market_price) / self.cost_basis * 100
+        return round(gap, 1) if gap > 0 else None
 
     @property
     def break_even(self) -> float:
@@ -53,8 +73,27 @@ class WheelState:
         return round(self.paid_per_share - self.cost_basis, 2)
 
 
+def bought_share_price(position) -> Optional[float]:
+    """What she paid a share, on a strategy that bought them outright.
+
+    Worked back from shares_cost, which the log stores as the dollar total.
+    None on everything else - including a wheel, whose price is the strike.
+    """
+    if getattr(position, "strategy_key", "") not in BOUGHT_SHARE_STRATEGIES:
+        return None
+    cost = float(getattr(position, "shares_cost", 0.0) or 0.0)
+    if cost <= 0:
+        return None
+    shares = 100 * max(int(position.contracts or 1), 1)
+    return round(cost / shares, 4)
+
+
 def state_from(position, market_price: Optional[float] = None) -> Optional[WheelState]:
     """The wheel's numbers for an assigned position, or None if not assigned.
+
+    Also for shares bought outright to write calls against (the weekly covered
+    call): the price she paid stands in for the strike she was assigned at,
+    and everything after that is the same arithmetic.
 
     premium_collected deliberately counts EVERY side of the story: the put that
     got her assigned (open_credit), every call written since including the
@@ -65,6 +104,10 @@ def state_from(position, market_price: Optional[float] = None) -> Optional[Wheel
     worth running.
     """
     strike = getattr(position, "assigned_strike", None)
+    bought = False
+    if not strike:
+        strike = bought_share_price(position)
+        bought = strike is not None
     if not strike:
         return None
 
@@ -100,6 +143,7 @@ def state_from(position, market_price: Optional[float] = None) -> Optional[Wheel
         unrealised=unrealised,
         call_strike=float(call_strike) if call_strike else None,
         called_away_profit=called_away,
+        bought=bought,
     )
 
 

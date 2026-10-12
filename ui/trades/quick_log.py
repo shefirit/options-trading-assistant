@@ -118,12 +118,18 @@ def _quick_log_body(settings, strategies, provider) -> None:
     # this the only box on offer was "credit price on your fill", and a
     # trade that cost her money could only be logged as one that paid her.
     is_bought = basis == "long_premium"
+    # The weekly covered call: shares bought outright and a call sold against
+    # them, with no put side at all - so it needs the share price, and none of
+    # the protective-put boxes Models 1-3 ask for.
+    owns_shares = basis == "shares"
     # How far out this strategy's expiration normally sits, so the date box
     # opens near the right place. A LEAPS put is a year or more out like the
     # bought call is, and defaulting it to 45 days just means retyping.
     far_dated = int(strat.get("entry", {}).get("dte_min", 0)) >= 300
     default_dte = (int(strat["entry"].get("dte_target", 400)) if far_dated
-                   else 400 if is_bought else 45)
+                   else 400 if is_bought
+                   else int(strat["entry"].get("short_call_dte_target", 7))
+                   if owns_shares else 45)
     today = dt.date.today()
 
     with st.form("ql_form"):
@@ -132,7 +138,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
         # dollars once the app knows how many contracts it applies to.
         d1, d2, d3 = st.columns([2, 2, 1])
         expiration = d1.date_input(
-            "Expiration date (from your TOS fill)"
+            "Expiration of the call you SOLD" if owns_shares
+            else "Expiration date (from your TOS fill)"
             if not has_far_leg else "Short call expiration (the near one)",
             # A LEAPS is a year or more out by definition, so opening its
             # form on a 45-day default just means retyping the date.
@@ -185,6 +192,20 @@ def _quick_log_body(settings, strategies, provider) -> None:
                      "debit of the put spread. Model 3: often near zero - "
                      "and if the ratio paid you a credit, type a minus in "
                      "front. Leave at 0 only if it really was free.")
+        elif owns_shares:
+            s1, s2 = st.columns(2)
+            share_price = s1.number_input(
+                "Price you paid per share ($)",
+                min_value=0.0, step=0.01, format="%.2f",
+                key=f"ql_sharepx_{strategy_key}",
+                help="What one share cost you, as thinkorswim shows it. 100 "
+                     "shares per contract - the app does the x100. If you "
+                     "already owned the shares, use what you paid for them.")
+            with s2:
+                theme.note("No put underneath on this one: the shares carry the "
+                           "whole downside, less what the calls pay you. The "
+                           "app warns you if they fall well below what they "
+                           "really cost you - it never tells you to sell.")
 
         strikes: dict[str, float] = {}
         credit_total = 0.0
@@ -240,6 +261,16 @@ def _quick_log_body(settings, strategies, provider) -> None:
             else:
                 put_credit = 0.0
         else:
+            if owns_shares:
+                # Rita, 2026-10-12: "sometimes i will buy 100 shares and just
+                # 1-2 days after will sell a call". So the call is optional
+                # here: log the shares now, and record the call later with
+                # ➕ Sell a call against it on the trade's card.
+                theme.note("**Sold the call already?** Fill in its strike and "
+                           "price below. **Not yet?** Leave them at 0 and save "
+                           "just the shares - when you sell the call, record it "
+                           "with **➕ Sell a call against it** on this trade's "
+                           "card. It stays one trade either way.")
             leg_defs = strat.get("legs", [])
             cols = st.columns(min(len(leg_defs), 4) or 1)
             for i, leg_def in enumerate(leg_defs):
@@ -253,7 +284,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
 
             credit_label = ("Credit price on your fill"
                             if basis not in ("debit", "shares_plus_protection",
-                                             "ratio_risk")
+                                             "ratio_risk", "shares")
                             else "Credit price for the call you SOLD")
             credit_total = _fill_price_input(
                 credit_label, f"ql_credit_{strategy_key}", contracts,
@@ -267,8 +298,17 @@ def _quick_log_body(settings, strategies, provider) -> None:
     # Everything below renders after the form, so the result of "Check it" -
     # a warning, or the preview card she reads back before saving - sits in the
     # same dialog underneath the fields that produced it.
+    # Shares bought with no call written yet - nothing in the call boxes at all.
+    shares_only = (owns_shares and all(v <= 0 for v in strikes.values())
+                   and credit_total <= 0)
     if submitted:
-        if any(v <= 0 for v in strikes.values()):
+        if owns_shares and not shares_only and (
+                any(v <= 0 for v in strikes.values()) or credit_total <= 0):
+            st.warning("Almost - the call is half filled in. Type both its strike "
+                       "and the price you sold it for, or set both back to 0 to "
+                       "save just the shares for now.")
+            st.session_state.pop("ql_draft", None)
+        elif not shares_only and any(v <= 0 for v in strikes.values()):
             st.warning("Almost - type every strike first, one of them is still 0. "
                        "Fill it in above.")
             st.session_state.pop("ql_draft", None)
@@ -283,7 +323,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
                        "they paid you. Set the count back to 0 if you did not sell "
                        "any. Fill it in above.")
             st.session_state.pop("ql_draft", None)
-        elif not is_bought and credit_total <= 0:
+        elif not is_bought and not shares_only and credit_total <= 0:
             st.warning("Almost - type the credit you collected (it is on your TOS "
                        "fill). Fill it in above.")
             st.session_state.pop("ql_draft", None)
@@ -295,7 +335,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
                        "cannot tell you what the trade made. Fill it in "
                        "above.")
             st.session_state.pop("ql_draft", None)
-        elif has_far_leg and basis != "debit" and not share_price:
+        elif ((has_far_leg and basis != "debit") or owns_shares) and not share_price:
             st.warning("Almost - type the share price you paid. That is most of "
                        "the money in a covered call, and the app needs it to "
                        "track the trade's result. Fill it in above to "
@@ -305,12 +345,17 @@ def _quick_log_body(settings, strategies, provider) -> None:
             dte = max((expiration - opened_on).days, 0)
             leaps_dte = (max((far_exp - opened_on).days, 0)
                          if far_exp is not None else None)
-            legs = quick_log.legs_from_strategy(strat, strikes, dte,
-                                                leaps_dte=leaps_dte,
-                                                financing_puts=n_puts)
+            legs = ([] if shares_only else
+                    quick_log.legs_from_strategy(strat, strikes, dte,
+                                                 leaps_dte=leaps_dte,
+                                                 financing_puts=n_puts))
             notes: list[str] = []
             underlying_price = None
             try:
+                if shares_only:
+                    # No option to price, and the price she paid is the one
+                    # that matters - not today's.
+                    raise LookupError
                 chain = provider.get_chain(underlying,
                                            dte_min=max(dte - 4, 0),
                                            dte_max=dte + 4)
@@ -320,6 +365,10 @@ def _quick_log_body(settings, strategies, provider) -> None:
                     leaps_expiration_iso=(far_exp.isoformat()
                                           if far_exp else None))
                 notes.extend(fill_notes)
+            except LookupError:
+                notes.append("Just the shares for now. When you sell the call, "
+                             "record it with ➕ Sell a call against it on this "
+                             "trade's card in My trades.")
             except Exception:
                 notes.append("Live option prices were not available just now - "
                              "saved without deltas. Tracking still works from "
@@ -346,6 +395,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
             passed = True
             broke: list[str] = []
             try:
+                if shares_only:
+                    raise LookupError   # no call yet, so nothing to check
                 report = validate_trade(
                     trade,
                     existing_month_bp=st.session_state.get("month_bp_used", 0.0))
@@ -356,6 +407,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 # which rule is the entire point of logging it here.
                 broke = [f"{r.name} - {r.message}" for r in report.results
                          if r.status in (CheckStatus.FAIL, CheckStatus.WARN)]
+            except LookupError:
+                pass
             except Exception:
                 notes.append("The SOP check could not run just now - the trade "
                              "still gets logged and tracked.")
@@ -376,7 +429,11 @@ def _quick_log_body(settings, strategies, provider) -> None:
                     typed.append((f"{n_puts} put(s)", float(put_credit),
                                   n_con * n_puts))
             else:
-                typed = [("Credit", float(credit_total), n_con)]
+                typed = ([] if shares_only
+                         else [("Credit", float(credit_total), n_con)])
+                if owns_shares:
+                    typed.append(("Shares", -float(share_price) * 100 * n_con,
+                                  n_con))
                 if leaps_cost:
                     typed.append(("LEAPS", -float(leaps_cost), n_con))
                 if protection_cost:
@@ -384,11 +441,14 @@ def _quick_log_body(settings, strategies, provider) -> None:
             st.session_state["ql_draft"] = {
                 "trade": trade, "strat_name": strat["name"], "sizing": sizing,
                 "passed": passed, "broke": broke, "notes": notes, "note": note,
-                "opened_on": opened_on, "expiration": expiration, "dte": dte,
+                "opened_on": opened_on,
+                "expiration": None if shares_only else expiration,
+                "dte": None if shares_only else dte,
                 "typed": typed, "contracts": n_con, "bought": is_bought,
                 "call_cost": float(call_cost), "put_credit": float(put_credit),
                 "collateral": round(put_strike_total * 100 * n_con, 2),
                 "put_shares": 100 * n_puts * n_con,
+                "has_target": bool(strat.get("exit", {}).get("profit_target_pct")),
             }
 
     draft = st.session_state.get("ql_draft")
@@ -398,8 +458,9 @@ def _quick_log_body(settings, strategies, provider) -> None:
             theme.note(f"**Ready to save: {p_trade.underlying} · "
                        f"{draft['strat_name']}** · {p_trade.contracts} "
                        f"contract(s) · opened {components.fmt_date(draft['opened_on'])} · "
-                       f"expires {components.fmt_date(draft['expiration'])} "
-                       f"({draft['dte']} days)")
+                       + (f"expires {components.fmt_date(draft['expiration'])} "
+                          f"({draft['dte']} days)" if draft["expiration"] else
+                          "shares only - no call sold yet"))
             open_cash = float(p_size.get("open_cash", p_size["credit"]))
             collateral = float(draft.get("collateral") or 0.0)
             if draft.get("bought"):
@@ -441,9 +502,11 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 # position look like a trade worth a couple hundred.
                 m = st.columns(4)
                 m[0].metric("Call credit", money(p_size["credit"]),
-                            help="What the short call paid you. Your 50% profit "
-                                 "target measures against this - not against the "
-                                 "whole position.")
+                            help=("What the short call paid you. Your 50% profit "
+                                  "target measures against this - not against the "
+                                  "whole position." if draft.get("has_target", True)
+                                  else "What the call paid you. It comes off what "
+                                       "the shares really cost you."))
                 m[1].metric("Cash out today", money(-open_cash),
                             help="What actually left your account: the long side "
                                  "you bought, minus the call credit. Closing the "
