@@ -13,6 +13,8 @@ Invented numbers throughout (this repo is public).
 
 from datetime import date, timedelta
 
+import pytest
+
 from src.engine import exit_rules, positions, quick_log, wheel
 from src.engine.config_loader import entry_dte_window, get_strategy
 from src.engine.models import Action, CheckStatus, Leg, OptionType, Trade
@@ -230,3 +232,44 @@ def test_called_away_counts_as_a_planned_ending():
     assert any(prefix == "shares called away" and by_rules
                for prefix, _, _, by_rules in month_report._EXIT_BUCKETS)
     assert "shares called away" in positions._SOP_EXIT_PREFIXES
+
+
+# ------------------------------------------------------------------ ROI on the card
+def test_the_card_roi_splits_this_call_the_premium_and_called_away():
+    """$5,000 of shares bought 3 days ago; a 52 call sold today for $80,
+    expiring in 7 days."""
+    from src.engine import roi
+
+    p = _parse(_shares_row(), _call(52.0, 80.0))
+    r = roi.covered_call_roi(p, wheel.state_from(p, 51.0))
+    assert r.base == 5_000.0
+    # This week's call: $80 on $5,000 over its own 7 days.
+    assert r.call_pct == 1.6 and r.call_days == 7
+    assert r.call_annual_pct == pytest.approx(1.6 * 365 / 7, abs=0.1)
+    # Premium so far: the same $80, but over the 3 days since the shares.
+    assert r.premium_pct == 1.6 and r.premium_days == 3
+    # Called away at 52: (52 - 49.20) x 100 = $280, over 10 days in all.
+    assert r.away_result == 280.0 and r.away_pct == 5.6 and r.away_days == 10
+
+
+def test_premium_so_far_keeps_counting_after_a_call_expires():
+    from src.engine import roi
+
+    p = _parse(_shares_row(opened=date.today() - timedelta(days=9)),
+               _call(52.0, 80.0, days=-1, on=date.today() - timedelta(days=8)),
+               _expired(on=date.today() - timedelta(days=1)))
+    r = roi.covered_call_roi(p, wheel.state_from(p, 51.0))
+    assert r.premium == 80.0 and r.premium_pct == 1.6
+    assert r.call_pct is None and r.away_pct is None      # no call on now
+
+
+def test_the_call_roi_uses_the_day_the_current_call_was_sold():
+    from src.engine import roi
+
+    sold = date.today() - timedelta(days=2)
+    p = _parse(_shares_row(opened=date.today() - timedelta(days=12)),
+               _call(52.0, 80.0, days=-3, on=date.today() - timedelta(days=10)),
+               _expired(on=date.today() - timedelta(days=3)),
+               _call(53.0, 60.0, days=5, on=sold))
+    r = roi.covered_call_roi(p, wheel.state_from(p, 51.0))
+    assert r.call_credit == 60.0 and r.call_days == 7
