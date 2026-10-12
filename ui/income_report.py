@@ -512,7 +512,21 @@ def render_money_math(report: dict) -> None:
 
 
 def render_roi_by_strategy(report: dict) -> None:
-    """Which strategy earned the most on the money it put at risk.
+    """Which strategy earned the most on the money it put at risk."""
+    _roi_table(report.get("roi_by_strategy") or [], report.get("roi_total"),
+               report, "Strategy", "All strategies")
+
+
+def render_roi_by_underlying(report: dict) -> None:
+    """Which symbol earned the most on the money it put at risk - every
+    strategy run on that name, together."""
+    _roi_table(report.get("roi_by_underlying") or [], report.get("roi_total"),
+               report, "Symbol", "All symbols")
+
+
+def _roi_table(rows: list[dict], total: Optional[dict], report: dict,
+               name_col: str, total_label: str) -> None:
+    """The ROI table, by strategy or by symbol.
 
     The ring above answers "where did the premium come from"; this answers the
     question Rita asked for (2026-10-12) - which strategy earns its capital.
@@ -522,15 +536,13 @@ def render_roi_by_strategy(report: dict) -> None:
     An HTML table rather than st.dataframe, like the legend beside the ring:
     every number at full ink, signs coloured, and a bottom line under the rows.
     """
-    rows = report.get("roi_by_strategy") or []
-    total = report.get("roi_total")
     if not rows:
         return
 
     def tone(x: float) -> str:
         return theme.GREEN if x >= 0 else theme.RED
 
-    head_cells = ["Strategy", "Closed", "Made", "Money at risk", "ROI",
+    head_cells = [name_col, "Closed", "Made", "Money at risk", "ROI",
                   "ROI / year", "Avg days"]
     head = "".join(
         f"<th style='padding:6px 10px;text-align:{'left' if i == 0 else 'right'};"
@@ -558,7 +570,7 @@ def render_roi_by_strategy(report: dict) -> None:
 
     body = "".join(line(r, r["name"]) for r in rows)
     if total and len(rows) > 1:
-        body += line(total, "All strategies", strong=True)
+        body += line(total, total_label, strong=True)
 
     period = ("all time" if report.get("month") == "all"
               else f"in {report.get('label', 'this month')}")
@@ -579,7 +591,8 @@ def render_roi_by_strategy(report: dict) -> None:
         "**ROI / year** weights each dollar by how long it was tied up, so a "
         "two-day trade cannot outvote a two-month one. Counted on trades that "
         "**closed** in this period, like Banked. A strategy with one or two "
-        "trades is a sample, not a verdict.")
+        "trades is a sample, not a verdict."
+        .replace("A strategy", f"A {name_col.lower()}"))
 
 
 def render_strategy(report: dict) -> None:
@@ -612,11 +625,15 @@ def render_strategy(report: dict) -> None:
 
 def render_underlyings(report: dict) -> None:
     rows = [r for r in report["by_underlying"] if r["premium"] > 0][:10]
-    if not rows:
+    # The ROI table can have rows when the chart has none: a month that only
+    # CLOSED trades sold no premium in it, but still has results to measure.
+    if not rows and not report.get("roi_by_underlying"):
         return
     theme.section("Which names did the earning?", "Top producers")
-    _render(producers_chart(rows), height=max(140, 46 * len(rows)),
-            labels=[r["name"] for r in rows])
+    if rows:
+        _render(producers_chart(rows), height=max(140, 46 * len(rows)),
+                labels=[r["name"] for r in rows])
+    render_roi_by_underlying(report)
 
 
 # ---------------------------------------------------------- trade management
