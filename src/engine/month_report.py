@@ -225,21 +225,19 @@ def _group(premium: list[dict], banked: list[dict],
     return sorted(out, key=lambda r: r["premium"], reverse=True)
 
 
-def roi_by_strategy(closed: list[Position]) -> list[dict[str, Any]]:
-    """ROI for each strategy, on the trades that CLOSED in the period.
+def roi_by(closed: list[Position], key) -> list[dict[str, Any]]:
+    """ROI for each group of trades that CLOSED in the period, best first.
 
     Closed rather than opened, because ROI needs a finished result - and it
     matches "banked", which also counts the month a trade settles. Same money
     at risk and the same simple annualizing as the Journal (src/engine/roi.py),
-    so a strategy's figure here can be checked against its trades there.
-    Grouped on the name the trade was logged under, like the ring above it.
-    Best ROI first.
+    so a group's figure here can be checked against its trades there.
     """
     from src.engine import roi
 
     groups: dict[str, list[Position]] = {}
     for p in closed:
-        groups.setdefault(p.strategy_name or "(unknown)", []).append(p)
+        groups.setdefault(key(p) or "(unknown)", []).append(p)
     out = []
     for name, trades in groups.items():
         book = roi.book_roi(trades)
@@ -249,6 +247,17 @@ def roi_by_strategy(closed: list[Position]) -> list[dict[str, Any]]:
                         "pct": book.pct, "annual_pct": book.annual_pct,
                         "avg_days": book.avg_days})
     return sorted(out, key=lambda r: r["pct"], reverse=True)
+
+
+def roi_by_strategy(closed: list[Position]) -> list[dict[str, Any]]:
+    """Per strategy, on the name the trade was logged under - like the ring
+    beside it in the report."""
+    return roi_by(closed, lambda p: p.strategy_name)
+
+
+def roi_by_underlying(closed: list[Position]) -> list[dict[str, Any]]:
+    """Per symbol - every strategy run on that name, together."""
+    return roi_by(closed, lambda p: (p.underlying or "").upper())
 
 
 def _roi_total(closed: list[Position]) -> Optional[dict[str, Any]]:
@@ -373,6 +382,7 @@ def build(positions: list[Position], month: str = ALL_TIME,
         "best_week": best_week,
         "by_strategy": _group(premium, banked_ev, lambda p: p.strategy_name),
         "roi_by_strategy": roi_by_strategy(closed),
+        "roi_by_underlying": roi_by_underlying(closed),
         "roi_total": _roi_total(closed),
         "by_underlying": _group(premium, banked_ev, lambda p: p.underlying),
         "has_activity": bool(premium or banked_ev or opened),

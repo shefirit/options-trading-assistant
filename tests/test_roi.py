@@ -220,3 +220,44 @@ def test_no_closed_trades_means_no_roi_table(monkeypatch):
                         lambda body, **kw: shown.append(str(body)))
     income_report.render_roi_by_strategy({"roi_by_strategy": [], "roi_total": None})
     assert shown == []
+
+
+def test_the_monthly_report_gives_each_symbol_its_own_roi():
+    """Every strategy on one name counts together under that name."""
+    from src.engine import month_report
+
+    spread = _closed(75.0, 30, underlying="SOFI", open_cash=150.0,
+                     max_loss=350.0, strategy_name="Put Credit Spread")
+    csp = _closed(200.0, 30, underlying="sofi", open_cash=200.0,
+                  max_loss=9_800.0, strategy_name="Cash Secured Put")
+    other = _closed(-50.0, 10, underlying="BE", open_cash=100.0, max_loss=400.0)
+    rows = month_report.roi_by_underlying([spread, csp, other])
+    assert [r["name"] for r in rows] == ["SOFI", "BE"]
+    assert rows[0]["trades"] == 2
+    assert rows[0]["result"] == 275.0 and rows[0]["base"] == 10_150.0
+    assert rows[1]["pct"] == -12.5
+
+
+def test_the_symbol_table_shows_under_top_producers(monkeypatch):
+    from ui import income_report
+
+    shown: list[str] = []
+    sections: list[str] = []
+    monkeypatch.setattr(income_report.st, "markdown",
+                        lambda body, **kw: shown.append(str(body)))
+    monkeypatch.setattr(income_report.theme, "note", lambda text: None)
+    monkeypatch.setattr(income_report.theme, "section",
+                        lambda title, eyebrow="": sections.append(title))
+    # A month that sold nothing new still has closed trades to measure.
+    report = {"month": "all", "label": "All time", "by_underlying": [],
+              "roi_by_underlying": [
+                  {"name": "SOFI", "trades": 2, "result": 275.0, "base": 10_150.0,
+                   "pct": 2.71, "annual_pct": 33.0, "avg_days": 30}],
+              "roi_total": {"trades": 2, "result": 275.0, "base": 10_150.0,
+                            "pct": 2.71, "annual_pct": 33.0, "avg_days": 30}}
+    income_report.render_underlyings(report)
+    html = "".join(shown)
+    assert sections == ["Which names did the earning?"]
+    assert ">SYMBOL<" in html and "SOFI" in html and "+2.7%" in html
+    assert "TRADES CLOSED ALL TIME" in html
+    assert "All symbols" not in html      # one row needs no bottom line
