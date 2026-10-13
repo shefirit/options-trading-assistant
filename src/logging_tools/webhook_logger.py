@@ -121,7 +121,9 @@ def send_tracker(trades: list[dict[str, Any]]) -> dict[str, Any]:
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    # A full copy (Settings button) takes ~90s for two months of trades:
+    # every row also gets its price formulas checked and copied.
+    with urllib.request.urlopen(req, timeout=360) as resp:
         body = resp.read().decode("utf-8", errors="replace")
     try:
         data = json.loads(body)
