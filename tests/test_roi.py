@@ -478,3 +478,49 @@ def test_the_profit_tab_report_shows_the_open_table(app_with_one_csp, monkeypatc
     page = " ".join(str(m.value) for m in at.markdown)
     assert "STILL OPEN &middot; ROI SO FAR AT LIVE PRICES" in page
     assert "ROI SO FAR" in page and "+1.0%" in page
+
+
+# ------------------------------------------------------------------ the dashboard band
+def _band_html(monkeypatch, **kw) -> str:
+    from ui.trades import dashboard
+
+    shown: list[str] = []
+    monkeypatch.setattr(dashboard.st, "markdown",
+                        lambda body, **k: shown.append(str(body)))
+    report = {"banked": 1_000.0, "label": "October 2026"}
+    dashboard.band(report, None, 4_500.0, 1_038.0, 200.0, 0, 2, "14:30",
+                   "real", **kw)
+    return "".join(shown)
+
+
+def test_the_band_shows_open_trades_roi_so_far(monkeypatch):
+    pairs = [_open_pair("SOFI", "Put Credit Spread", 70.0, 350.0, 10),
+             _open_pair("BE", "Put Credit Spread", -35.0, 350.0, 10)]
+    book = roi.book_of([r for _, r in pairs])
+    html = _band_html(monkeypatch, open_book=book)
+    assert "ROI so far" in html and "+5.0%" in html
+    assert "&#36;35 on &#36;700 at risk" in html.replace("$", "&#36;")
+    assert "ota-band-zones-4" in html          # four columns, not a wrapped row
+
+
+def test_the_band_says_when_not_every_open_trade_was_priced(monkeypatch):
+    book = roi.book_of([_open_pair("SOFI", "Put Credit Spread", 70.0, 350.0, 10)[1]])
+    assert "1 of 2 priced" in _band_html(monkeypatch, open_book=book)
+
+
+def test_no_priced_trades_means_no_roi_zone(monkeypatch):
+    html = _band_html(monkeypatch, open_book=None)
+    assert "ROI so far" not in html and "ota-band-zones-4" not in html
+
+
+def test_the_now_tab_band_shows_roi_so_far(app_with_one_csp, monkeypatch):
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(DataProvider, "price_position", lambda self, p: {
+        "priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+        "short_delta": 0.2, "position_value": None, "open_pl": None,
+        "options_pl": None, "shares_pl": None})
+    at = app_with_one_csp.run()
+    assert not at.exception
+    band = next(str(m.value) for m in at.markdown if "<div class=\"ota-band\">" in str(m.value))
+    assert "Open trades &middot; ROI so far" in band and "+1.0%" in band

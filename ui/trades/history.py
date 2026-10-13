@@ -76,16 +76,8 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real",
 
 
 def _open_now(priced: list) -> list:
-    """[(Position, ROI so far)] for every open trade the Now tab could price -
-    the same figures its table and the Journal show. Unpriced ones are left
-    out rather than given a made-up number."""
-    out = []
-    for it in priced:
-        p = it["position"]
-        r = components.open_roi(p, components.open_pl(p, it["live"], it["signal"]))
-        if r is not None:
-            out.append((p, r))
-    return out
+    """[(Position, ROI so far)] - see components.priced_open_rois."""
+    return components.priced_open_rois(priced)
 
 
 def _span_view(all_pos, settings, live_from, mode: str, today,

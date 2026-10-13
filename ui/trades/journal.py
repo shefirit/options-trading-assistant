@@ -100,19 +100,10 @@ def journal_trades(all_pos) -> list:
 
 
 def open_rois(priced: list) -> dict:
-    """ROI so far for each priced open trade, by Trade ID.
-
-    The same numbers the open-trades table shows: its P&L (components.open_pl)
-    over the trade's money at risk. A trade that could not be priced is left
-    out, and reads "open" in the table rather than a made-up figure.
-    """
-    out = {}
-    for it in priced:
-        p = it["position"]
-        r = components.open_roi(p, components.open_pl(p, it["live"], it["signal"]))
-        if r is not None and p.trade_id:
-            out[p.trade_id] = r
-    return out
+    """ROI so far for each priced open trade, by Trade ID - the same figures
+    as the open-trades table (components.priced_open_rois)."""
+    return {p.trade_id: r for p, r in components.priced_open_rois(priced)
+            if p.trade_id}
 
 
 def _rows(trades: list, so_far: Optional[dict] = None) -> list[dict[str, Any]]:

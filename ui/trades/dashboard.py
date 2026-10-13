@@ -73,7 +73,7 @@ def _esc(text: Any) -> str:
 # ------------------------------------------------------------------ the band
 def band(report: dict, pace: Optional[dict], goal: float, weekly_goal: float,
          week_banked: float, needs: int, open_count: int,
-         priced_at: Optional[str], mode: str) -> None:
+         priced_at: Optional[str], mode: str, open_book=None) -> None:
     """Banked this month, banked this week, and whether anything needs doing.
 
     The two most urgent facts on the tab used to live in two separate objects -
@@ -112,6 +112,23 @@ def band(report: dict, pace: Optional[dict], goal: float, weekly_goal: float,
 
     week_sub = f"of your {_d(weekly_goal)} weekly goal" if weekly_goal else "banked"
 
+    # ROI so far on everything open, at live prices - her ask (2026-10-13).
+    # Only drawn when something was priced: an empty zone saying "n/a" would
+    # take a quarter of the band to say nothing.
+    roi_zone = ""
+    if open_book is not None:
+        roi_colour = theme.BAND_HERO if open_book.pct >= 0 else "#FFC9C0"
+        priced_note = ("" if open_book.trades >= open_count else
+                       f" &middot; {open_book.trades} of {open_count} priced")
+        roi_zone = (
+            f'<div class="ota-band-zone">'
+            f'<div class="ota-band-label">Open trades &middot; ROI so far</div>'
+            f'<div class="ota-band-value" style="color:{roi_colour};">'
+            f'{open_book.pct:+.1f}%</div>'
+            f'<div class="ota-band-sub">{_signed(open_book.result)} on '
+            f'{_d(open_book.base)} at risk &middot; '
+            f'{open_book.annual_pct:+.0f}% a year{priced_note}</div></div>')
+
     st.markdown(
         f'<div class="ota-band">'
         f'<div style="display:flex;justify-content:space-between;'
@@ -120,7 +137,7 @@ def band(report: dict, pace: Optional[dict], goal: float, weekly_goal: float,
         f'<span style="background:{tag_bg};color:#FFFFFF;font-size:.78rem;'
         f'font-weight:800;letter-spacing:.06em;padding:5px 12px;'
         f'border-radius:999px;">{tag}</span></div>'
-        f'<div class="ota-band-zones">'
+        f'<div class="ota-band-zones{" ota-band-zones-4" if roi_zone else ""}">'
         f'<div class="ota-band-zone" style="min-width:230px;">'
         f'<div class="ota-band-label">Banked this month</div>'
         f'<div class="ota-band-hero">{_d(banked)}</div>'
@@ -129,6 +146,7 @@ def band(report: dict, pace: Optional[dict], goal: float, weekly_goal: float,
         f'<div class="ota-band-label">This week</div>'
         f'<div class="ota-band-value">{_d(week_banked)}</div>'
         f'<div class="ota-band-sub">{week_sub}</div></div>'
+        f'{roi_zone}'
         f'<div class="ota-band-zone" style="min-width:250px;">'
         f'<div class="ota-band-label">{todo_label}</div>'
         f'<div class="ota-band-value" style="color:{todo_colour};">{todo_value}</div>'

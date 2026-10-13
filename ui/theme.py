@@ -464,6 +464,9 @@ a {{ color: {ACCENT_DARK}; }}
 @media (min-width: 980px) {{
     .ota-band-zones {{ display: grid; grid-template-columns: 1.2fr 1fr 1.3fr;
                        gap: 28px; }}
+    /* With open trades priced, a fourth zone carries their ROI so far. */
+    .ota-band-zones.ota-band-zones-4 {{
+        grid-template-columns: 1.15fr 0.85fr 1fr 1.25fr; }}
     .ota-band-zone {{ min-width: 0; }}
 }}
 .ota-band-label {{ font-size: 0.8rem; font-weight: 800; color: {BAND_SUB};
