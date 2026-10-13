@@ -210,4 +210,4 @@ google_sheet:
   twa_tracker:
     enabled: true
     url: "https://docs.google.com/spreadsheets/d/1Gmk_dE6nXo_lHzqF8WlRKc9Qu050EQq68sRtsQ8CEUQ/edit#gid=2074716553"
-    start: "2026-10-01"
+    start: "2026-09-01"
