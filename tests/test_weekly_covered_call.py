@@ -273,3 +273,23 @@ def test_the_call_roi_uses_the_day_the_current_call_was_sold():
                _call(53.0, 60.0, days=5, on=sold))
     r = roi.covered_call_roi(p, wheel.state_from(p, 51.0))
     assert r.call_credit == 60.0 and r.call_days == 7
+
+
+# ------------------------------------------------------------------ the name
+def test_it_is_called_buy_write():
+    assert NAME == "Buy / Write"
+
+
+def test_trades_logged_under_the_old_name_show_the_new_one():
+    """TQQQ and NVDL were logged as "Weekly Covered Call (Own the Shares)"
+    the day before the rename. The key in the row decides the name now."""
+    row = _shares_row()
+    row[2] = "Weekly Covered Call (Own the Shares)"
+    p = _parse(row)
+    assert p.strategy_name == "Buy / Write"
+
+
+def test_a_row_with_no_key_keeps_the_name_it_was_logged_with():
+    from src.engine.positions import _current_name
+    assert _current_name("", "Some Old Strategy") == "Some Old Strategy"
+    assert _current_name("not_a_strategy", "Kept") == "Kept"

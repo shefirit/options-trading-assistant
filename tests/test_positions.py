@@ -728,7 +728,10 @@ def test_an_edit_cannot_change_the_strategy_or_the_ticker():
                           {"strategy": "iron_condor", "underlying": "NDX",
                            "contracts": 2})
     p = parse_rows(COLUMNS, [_opened(), edit])[0]
-    assert p.strategy_name == "Put Credit Spread"
+    # The name is the strategy's CURRENT one, looked up by key (since the
+    # Buy / Write rename) - so assert the strategy itself did not move.
+    assert p.strategy_key != "iron_condor"
+    assert p.strategy_name.startswith("Put Credit Spread")
     assert p.underlying == "SPX"
     assert p.contracts == 2
 
