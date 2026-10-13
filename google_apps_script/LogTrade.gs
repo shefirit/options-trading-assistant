@@ -390,11 +390,33 @@ function _syncTracker(trades) {
     function cell(i, at) { return at >= 0 && at < grid[i].length ? String(grid[i][at]).trim() : ""; }
     function isSample(i) { return notesAt >= 0 && cell(i, notesAt).indexOf(SAMPLE_TEXT) === 0; }
 
+    // Your dropdowns. A few rows of the template allow fewer types than the
+    // rest (row 23's Strategy has no LEAP), and Google refuses a value its
+    // dropdown does not list - so a new row only goes where it is allowed.
+    var rules = {};
+    ["Type", "Strategy"].forEach(function (name) {
+      rules[name] = sheet.getRange(first, cols[name], n, 1).getDataValidations();
+    });
+    function allowed(i, name, value) {
+      var rule = (rules[name] && i < rules[name].length) ? rules[name][i][0] : null;
+      if (!rule || rule.getAllowInvalid() || value === "" || value === undefined) { return true; }
+      if (rule.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) { return true; }
+      var list = rule.getCriteriaValues()[0] || [];
+      var want = String(value).toLowerCase();
+      for (var x = 0; x < list.length; x++) {
+        if (String(list[x]).trim().toLowerCase() === want) { return true; }
+      }
+      return false;
+    }
+    function fits(i, row) {
+      return allowed(i, "Type", row.cells["Type"]) && allowed(i, "Strategy", row.cells["Strategy"]);
+    }
+
     // Every name the app writes, so a cleared row is cleared completely.
     var names = ["Type", "Strategy", "Open Date", "Exp Date", "Closed Date", "Ticker",
                  "Strike $", "Quantity", "Premium $", "Close $",
                  "Covered Call Collateral", "Collateral", "Notes"];
-    var written = 0, cleared = 0;
+    var written = 0, cleared = 0, errors = [];
 
     for (var t = 0; t < trades.length; t++) {
       var tradeId = String(trades[t].trade_id || "");
@@ -434,7 +456,7 @@ function _syncTracker(trades) {
         if (isNew) {
           at = -1;
           for (var i2 = 0; i2 < grid.length; i2++) {
-            if (cell(i2, keyAt)) { continue; }
+            if (cell(i2, keyAt) || !fits(i2, row)) { continue; }
             if (isSample(i2) || (!cell(i2, typeAt) && !cell(i2, tickerAt))) {
               at = i2; overSample = isSample(i2); break;
             }
@@ -455,16 +477,23 @@ function _syncTracker(trades) {
           if (TRACKER_DATES[name] && v) { v = _isoToDate(v); }
           writes[col2] = v;
         }
-        writes[cols[TRACKER_KEY]] = row.key;
-        _writeCells(sheet, first + at, writes);
+        // The App ID goes in first, on its own: if Google then refuses a cell,
+        // the row is still claimed and the next copy finishes it, instead of
+        // leaving half a row nobody owns.
         grid[at][keyAt] = row.key;
         grid[at][typeAt] = row.cells["Type"] || "x";
         grid[at][tickerAt] = row.cells["Ticker"] || "x";
         if (notesAt >= 0 && overSample) { grid[at][notesAt] = row.cells["Notes"] || ""; }
-        written++;
+        try {
+          sheet.getRange(first + at, cols[TRACKER_KEY]).setValue(row.key);
+          _writeCells(sheet, first + at, writes);
+          written++;
+        } catch (err) {
+          errors.push(row.key + " (row " + (first + at) + "): " + String(err));
+        }
       }
     }
-    return { written: written, cleared: cleared, tab: sheet.getName() };
+    return { written: written, cleared: cleared, errors: errors, tab: sheet.getName() };
   } finally {
     lock.releaseLock();
   }

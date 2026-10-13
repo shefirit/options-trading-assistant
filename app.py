@@ -2960,6 +2960,11 @@ def _twa_tracker_panel() -> None:
     st.success(f"Done - {result.get('written', 0)} row(s) written to "
                f"**{result.get('tab', 'the tracker')}** from "
                f"{result.get('trades', 0)} trade(s).")
+    errors = result.get("errors") or []
+    if errors:
+        st.warning(components._esc(
+            f"{len(errors)} row(s) could not be written:\n\n"
+            + "\n".join(f"- {e}" for e in errors[:10])))
     skipped = result.get("skipped") or []
     if skipped:
         theme.note("Not copied - the tracker has no row type for these:  \n" + "  \n".join(

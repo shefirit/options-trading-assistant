@@ -39,8 +39,11 @@ def copy_to_tracker(trade_ids: list[str], account: Any = "") -> None:
         return
     try:
         result = twa_tracker.sync(trade_ids)
-        last_tracker_copy = {"ok": True, "at": datetime.now(),
-                             "message": f"{result.get('written', 0)} row(s) written"}
+        errors = result.get("errors") or []
+        last_tracker_copy = {
+            "ok": not errors, "at": datetime.now(),
+            "message": errors[0] if errors
+            else f"{result.get('written', 0)} row(s) written"}
     except Exception as e:
         last_tracker_copy = {"ok": False, "at": datetime.now(), "message": str(e)}
 
