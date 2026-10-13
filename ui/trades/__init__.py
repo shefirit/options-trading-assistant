@@ -169,7 +169,10 @@ def render(settings, strategies, provider) -> None:
                               _median_bp(all_pos))
 
     with t_journal:
-        journal.render(all_pos, settings, strategies, provider, mode)
+        # The open trades' live prices, so the Journal can show ROI so far
+        # without pricing everything a second time.
+        journal.render(all_pos, settings, strategies, provider, mode,
+                       priced=items)
 
 
 def _empty(settings, every_pos, mode: str, source: str, rows) -> None:

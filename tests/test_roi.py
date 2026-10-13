@@ -399,3 +399,35 @@ def test_the_model_card_shows_the_roi_cards(app_with_rows):
     assert "THIS CALL" in page and "PREMIUM SO FAR" in page
     assert "IF CALLED AWAY" in page and "of shares" in page
     assert "put side is left out" in page
+
+
+# ------------------------------------------------------------------ open trades in the Journal
+def _journal_table(at):
+    return next(d.value for d in at.dataframe
+                if "ROI / year" in list(d.value.columns)
+                and "Why closed" in list(d.value.columns))
+
+
+def test_the_journal_shows_roi_so_far_on_open_trades(app_with_one_csp, monkeypatch):
+    """The same demo CSP, priced at $100 to close: $100 up on $9,800 at
+    risk, five days in. Marked "so far" - it is live, not a result."""
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(DataProvider, "price_position", lambda self, p: {
+        "priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+        "short_delta": 0.2, "position_value": None, "open_pl": None,
+        "options_pl": None, "shares_pl": None})
+    at = app_with_one_csp.run()
+    assert not at.exception
+    table = _journal_table(at)
+    assert table["ROI"].iloc[0] == "+1.0% so far"
+    assert table["ROI / year"].iloc[0] == "+74.5% so far"
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "ROI SO FAR" in page              # the card on the trade's page
+
+
+def test_an_open_trade_that_cannot_be_priced_still_reads_open(app_with_one_csp):
+    """Demo data cannot price SOFI - no number is better than a made-up one."""
+    at = app_with_one_csp.run()
+    assert not at.exception
+    assert _journal_table(at)["ROI"].iloc[0] == "open"
