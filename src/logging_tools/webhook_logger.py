@@ -110,6 +110,33 @@ def delete_trade(trade_id: str) -> int:
     return int(data.get("deleted", 0))
 
 
+def send_tracker(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Send trades' rows to the TWA tracker spreadsheet (v9 script). Returns
+    the script's counts. Raises on an older script, which answers an unknown
+    action as an empty append and so has no "tracker" key in its reply."""
+    url = get_url()
+    if not url:
+        raise RuntimeError("No Google Sheet link saved yet.")
+    payload = json.dumps({"action": "tracker", "trades": trades}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        data = {}
+    if data.get("ok") is False:
+        raise RuntimeError(str(data.get("error", "Sheet web app returned an error.")))
+    if "tracker" not in data:
+        raise RuntimeError(
+            "The sheet script is an older version that cannot write the TWA "
+            "tracker. Paste the updated LogTrade.gs into Apps Script and deploy "
+            "a new version.")
+    return dict(data["tracker"] or {})
+
+
 def fetch_rows() -> tuple[list[str], list[list[Any]]]:
     """Read the whole trade log back from the sheet: (header, data rows).
 

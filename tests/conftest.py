@@ -19,6 +19,15 @@ from src.logging_tools.row import COLUMNS
 PMCC = "Poor Man's Covered Call (PMCC)"
 
 
+@pytest.fixture(autouse=True)
+def _no_twa_tracker_copy(monkeypatch):
+    """Logging a real trade also copies it to her TWA tracker, which reads her
+    live log and writes her live spreadsheet. No test may do either; the
+    tracker's own tests switch it back on with fakes in its place."""
+    from src.logging_tools import twa_tracker
+    monkeypatch.setattr(twa_tracker, "is_enabled", lambda: False)
+
+
 def pmcc_row(short_strike: float = 500.0, credit: float = 500.0,
              covered: bool = True):
     """One open PMCC row in the log's own format.

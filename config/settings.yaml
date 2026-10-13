@@ -203,3 +203,11 @@ google_sheet:
   spreadsheet_id: "1soKk5HrlYQqNJi98fBVWYDGSPhCIGUMrK8RyI8yW5RA"
   worksheet_gid: 2063471337
   credentials_file: "google_credentials.json"   # you place this file in the project folder
+  # A second copy of every REAL trade, in the TWA tracker format (one strike
+  # per row). Which spreadsheet and tab is set in google_apps_script/LogTrade.gs
+  # (TRACKER_ID / TRACKER_GID), not here. Rows closed before `start` are not
+  # sent. Set enabled: false to stop copying; nothing already written changes.
+  twa_tracker:
+    enabled: true
+    url: "https://docs.google.com/spreadsheets/d/1Gmk_dE6nXo_lHzqF8WlRKc9Qu050EQq68sRtsQ8CEUQ/edit#gid=2074716553"
+    start: "2026-10-01"

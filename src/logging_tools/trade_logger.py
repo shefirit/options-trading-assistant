@@ -5,17 +5,44 @@ local Excel backup so you never lose a record.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
 
 from src.engine.models import Trade
-from src.logging_tools import excel_logger, sheets_logger, webhook_logger
+from src.logging_tools import (excel_logger, sheets_logger, twa_tracker,
+                               webhook_logger)
 from src.logging_tools.row import (COLUMNS, build_add_wing_row,
                                    build_merge_row,
                                    build_assign_row, build_close_row,
                                    build_edit_row, build_leg_close_row,
                                    build_reopen_row, build_roll_row, build_row,
                                    new_trade_id)
+
+
+# The last TWA tracker copy, for the Settings panel: {"ok", "at", "message"}.
+# None until something has been copied since the app started.
+last_tracker_copy: Optional[dict[str, Any]] = None
+
+
+def copy_to_tracker(trade_ids: list[str], account: Any = "") -> None:
+    """Bring these trades' rows in the TWA tracker up to date.
+
+    Never raises: the trade is already safely in the log, and a tracker that
+    could not be reached must not turn a logged trade into an error on screen.
+    The outcome is kept in last_tracker_copy, and "Copy to the TWA tracker now"
+    in Settings repairs anything missed. Practice rows are not sent at all -
+    the tracker is real money only - which also spares them the extra
+    round trip.
+    """
+    global last_tracker_copy
+    if not trade_ids or str(account) == "paper" or not twa_tracker.is_enabled():
+        return
+    try:
+        result = twa_tracker.sync(trade_ids)
+        last_tracker_copy = {"ok": True, "at": datetime.now(),
+                             "message": f"{result.get('written', 0)} row(s) written"}
+    except Exception as e:
+        last_tracker_copy = {"ok": False, "at": datetime.now(), "message": str(e)}
 
 
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
@@ -28,9 +55,14 @@ def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
     # 1. Apps Script web app (Rita's chosen method).
     if webhook_logger.is_configured():
         try:
-            return webhook_logger.append(row, COLUMNS, mirror=mirror), True
+            dest = webhook_logger.append(row, COLUMNS, mirror=mirror)
         except Exception:
             pass
+        else:
+            at = COLUMNS.index("Account")
+            copy_to_tracker(twa_tracker.trade_ids_in_row(row, COLUMNS),
+                            account=row[at] if at < len(row) else "")
+            return dest, True
     # 2. Service-account connection (if a JSON key is ever added instead).
     if sheets_logger.is_configured():
         try:
@@ -293,7 +325,12 @@ def delete_trade(trade_id: str) -> tuple[int, str]:
     if not trade_id:
         return 0, "local"
     if webhook_logger.is_configured():
-        return webhook_logger.delete_trade(trade_id), "sheet"
+        removed = webhook_logger.delete_trade(trade_id)
+        # The trade is gone from the log, so the replay finds nothing and its
+        # tracker rows are cleared. Account is unknown here; a practice trade
+        # simply has no tracker rows to clear.
+        copy_to_tracker([trade_id])
+        return removed, "sheet"
     return excel_logger.delete_trade(trade_id), "local"
 
 
