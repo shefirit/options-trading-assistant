@@ -908,6 +908,15 @@ class DataProvider:
             except Exception:
                 pass
 
+        # Shares and no option at all: nothing for the chain to price, but the
+        # share price is the whole position. See positions.shares_only_value.
+        from src.engine.positions import shares_only_value
+        held = shares_only_value(position, out["underlying_price"])
+        if held is not None:
+            out["position_value"] = held["value"]
+            out.update({k: v for k, v in held.items() if k != "value"})
+            return out
+
         dte_left = position.dte_left()
         if not position.can_track or dte_left is None or dte_left < 0:
             return out
