@@ -44,8 +44,14 @@ STATUS_WORD = {
 ALL = "All"
 
 
-def render(all_pos, settings, strategies, provider, mode: str) -> None:
-    """The ledger, the filters above it, and the trade page below it."""
+def render(all_pos, settings, strategies, provider, mode: str,
+           priced: Optional[list] = None) -> None:
+    """The ledger, the filters above it, and the trade page below it.
+
+    priced: the open trades as the Now tab priced them ({"position", "live",
+    "signal"} each) - what ROI so far is worked out from. Optional: without it
+    open trades simply read "open", as they did before.
+    """
     theme.section("Every trade you have logged, and the story of any one",
                   "Journal")
 
@@ -56,7 +62,8 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
                    "trade** in 🎯 Find a trade.")
         return
 
-    rows = _rows(trades)
+    so_far = open_rois(priced or [])
+    rows = _rows(trades, so_far)
     shown = _filters(rows)
     if not shown:
         theme.note("**No trade matches those filters.** Widen one of them "
@@ -74,7 +81,8 @@ def render(all_pos, settings, strategies, provider, mode: str) -> None:
     picked = _picked(shown)
     if picked is not None:
         st.divider()
-        _trade_page(picked, settings, strategies, provider)
+        _trade_page(picked, settings, strategies, provider,
+                    so_far.get(picked.trade_id))
 
 
 # ---------------------------------------------------------------- the rows
@@ -91,7 +99,23 @@ def journal_trades(all_pos) -> list:
     return [p for p in all_pos if p.status != "merged"]
 
 
-def _rows(trades: list) -> list[dict[str, Any]]:
+def open_rois(priced: list) -> dict:
+    """ROI so far for each priced open trade, by Trade ID.
+
+    The same numbers the open-trades table shows: its P&L (components.open_pl)
+    over the trade's money at risk. A trade that could not be priced is left
+    out, and reads "open" in the table rather than a made-up figure.
+    """
+    out = {}
+    for it in priced:
+        p = it["position"]
+        r = components.open_roi(p, components.open_pl(p, it["live"], it["signal"]))
+        if r is not None and p.trade_id:
+            out[p.trade_id] = r
+    return out
+
+
+def _rows(trades: list, so_far: Optional[dict] = None) -> list[dict[str, Any]]:
     """One dict per trade, newest activity first.
 
     Sorted on the date something last HAPPENED - the close for a closed trade,
@@ -135,6 +159,8 @@ def _rows(trades: list) -> list[dict[str, Any]]:
             "rolls": len(p.rolls),
             "days": roi_mod.days_held(p),
             "roi": r,
+            # Live, not settled - only ever set on an open trade.
+            "roi_so_far": (so_far or {}).get(p.trade_id) if r is None else None,
         })
     return sorted(out, key=lambda r: r["sort"], reverse=True)
 
@@ -240,6 +266,11 @@ def _roi_cell(row: dict, field: str) -> str:
     r = row["roi"]
     if r is not None:
         return f"{getattr(r, field):+.1f}%"
+    # An open trade's ROI is live and will move, so it says so - a settled
+    # result and a running one must not read the same in one column.
+    live = row.get("roi_so_far")
+    if live is not None:
+        return f"{getattr(live, field):+.1f}% so far"
     return "open" if row["status"] == "open" else "-"
 
 
@@ -304,11 +335,14 @@ def _column_config() -> dict:
             "ROI",
             help="What the trade made ÷ the money it had at risk. A spread's "
                  "max loss, a cash secured put's strike less the premium, the "
-                 "cash laid out for shares or a LEAPS. Shown once it closes."),
+                 "cash laid out for shares or a LEAPS. On an open trade it says "
+                 "\"so far\": what it would make closed right now, at live "
+                 "prices - it will move. \"open\" means it could not be priced."),
         "ROI / year": st.column_config.TextColumn(
             "ROI / year",
             help="The ROI stretched to a year: ROI x 365 ÷ days held. Short "
-                 "trades swing this a lot - a small win in two days reads huge."),
+                 "trades swing this a lot - a small win in two days reads huge. "
+                 "On an open trade it is the pace so far, not a result."),
         "Why closed": st.column_config.TextColumn(
             "Why closed", help="Which of your exit rules ended it"),
     }
@@ -335,7 +369,7 @@ def _picked(rows: list[dict]):
 
 
 # --------------------------------------------------------- one trade, whole
-def _trade_page(position, settings, strategies, provider) -> None:
+def _trade_page(position, settings, strategies, provider, so_far=None) -> None:
     """Everything about one trade, on one page instead of behind three clicks.
 
     Order is the order the questions come: what is this, how did it go, what
@@ -345,7 +379,7 @@ def _trade_page(position, settings, strategies, provider) -> None:
 
     p = position
     theme.section(_headline(p), "This trade")
-    _summary_stats(p)
+    _summary_stats(p, so_far)
 
     steps = pos_mod.story(p)
     if steps:
@@ -381,7 +415,7 @@ def _credit_card(p) -> tuple[str, str, str]:
             "what the legs you hold sold for - your 50% target is half of this")
 
 
-def _summary_stats(p) -> None:
+def _summary_stats(p, so_far=None) -> None:
     """The five numbers that answer "how did this go" without scrolling."""
     # dte_left and days_held are METHODS on Position, not properties. Read as
     # attributes they are truthy bound methods, so the card printed
@@ -427,6 +461,12 @@ def _summary_stats(p) -> None:
                 "BANKED SO FAR", theme.signed(p.banked_income),
                 "from rolls and legs already sold",
                 "up" if p.banked_income >= 0 else "down"))
+        if so_far is not None:
+            cards.append(theme.stat(
+                "ROI SO FAR", f"{so_far.pct:+.1f}%",
+                f"on {theme.money(so_far.base)} at risk · "
+                f"{so_far.annual_pct:+.0f}% a year at this pace",
+                "up" if so_far.pct >= 0 else "down"))
     theme.stat_row(cards)
 
     if p.note:
