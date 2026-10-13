@@ -1695,6 +1695,11 @@ def _analyze_overview(sym, settings, provider, strategies) -> None:
     kind = _classify(sym, settings)
     with st.container(border=True):
         _symbol_research(sym, provider, settings, key_prefix="analyze")
+        # Her own record on this name - ROI so far on what is open, ROI on what
+        # closed. Draws nothing for a name she has never traded. Guarded, so a
+        # trade-log hiccup can never take the research above it down too.
+        from ui.trades import symbol as symbol_trades
+        _guard(symbol_trades.render, sym, settings, strategies, provider)
         advice = _compute_advice(sym, kind, provider, settings)
         st.divider()
         components.render_advice(advice)

@@ -571,3 +571,57 @@ def test_the_plan_tab_shows_the_roi_row(app_with_one_csp, monkeypatch):
     row = next(str(m.value) for m in at.markdown
                if "ROI all time" in str(m.value))
     assert "ROI so far" in row and "+1.0%" in row
+
+
+# ------------------------------------------------------------------ the Analyze tab
+class _FixedPrices:
+    """A stand-in provider: every open trade costs $100 to close."""
+    is_real = True
+
+    def price_position(self, p):
+        return {"priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+                "short_delta": 0.2, "position_value": None, "open_pl": None,
+                "options_pl": None, "shares_pl": None}
+
+
+def _symbol_strip(monkeypatch, rows, sym="SOFI"):
+    from src.engine.config_loader import load_settings, load_strategies
+    from src.logging_tools.row import COLUMNS
+    from ui import theme
+    from ui.trades import data, symbol
+
+    shown: list[str] = []
+    monkeypatch.setattr(data, "_load_trade_log", lambda: (COLUMNS, rows, "test"))
+    monkeypatch.setattr(symbol.st, "markdown",
+                        lambda body, **k: shown.append(str(body)))
+    monkeypatch.setattr(theme.st, "markdown",
+                        lambda body, **k: shown.append(str(body)))
+    monkeypatch.setattr(theme, "note", lambda text: shown.append(str(text)))
+    symbol.render(sym, load_settings(), load_strategies(), _FixedPrices())
+    return " ".join(shown)
+
+
+def test_the_analyze_tab_shows_your_roi_on_that_symbol(monkeypatch):
+    """One open CSP on SOFI ($100 up on $9,800, 5 days in) and one closed
+    ($150 kept on the same $9,800)."""
+    from conftest import csp_row
+    from src.logging_tools.row import build_close_row
+
+    still_open = csp_row()
+    done = csp_row()
+    done[12] = "20260101-101500-SOFI"
+    done[0] = (date.today() - timedelta(days=30)).isoformat()
+    close = build_close_row(done[12], "SOFI", done[2], 50.0, 150.0,
+                            "Profit target (50%) hit",
+                            closed_on=date.today() - timedelta(days=10),
+                            account="real")
+    page = _symbol_strip(monkeypatch, [still_open, done, close])
+    assert "Your trades on SOFI" in page and "real money" in page
+    assert "OPEN · ROI SO FAR" in page and "+1.0%" in page
+    assert "CLOSED · ROI" in page and "+1.5%" in page
+    assert "so far, 5 days in" in page                   # the per-trade line
+
+
+def test_a_symbol_never_traded_shows_nothing(monkeypatch):
+    from conftest import csp_row
+    assert _symbol_strip(monkeypatch, [csp_row()], sym="AAPL") == ""
