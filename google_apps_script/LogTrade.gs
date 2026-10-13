@@ -1,6 +1,11 @@
 /**
  * Trade logger for the Options Trading Assistant.
  *
+ * VERSION 9 - also copies every REAL trade into your TWA tracker spreadsheet
+ * (one strike per row). Nothing in this log changes; the tracker is a second
+ * copy. The first time you deploy this, Google asks you to allow the script to
+ * open that other spreadsheet - say Allow.
+ *
  * VERSION 8 - real money and practice money live in SEPARATE TABS.
  *
  *   "Real Money Log"       every trade placed with real money
@@ -81,6 +86,11 @@ function _mirrorSheet() {
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
+
+    // Bring trades' rows in the TWA tracker up to date (v9).
+    if (data.action === "tracker") {
+      return _json({ ok: true, tracker: _syncTracker(data.trades || []) });
+    }
 
     // Delete a trade everywhere (by Trade ID), whichever book it is in.
     if (data.action === "delete" && data.trade_id) {
@@ -262,6 +272,204 @@ function _clearMirrorRow(tradeId) {
   _resetMirrorRow(sheet, r);
 }
 
+// ------------------------------------------------------------ TWA tracker
+// Your copy of the TWA Discord Tracker. The app works out every row (it
+// replays the trade - a roll closes one row and opens the next); this part
+// only finds the right row and writes it.
+//
+// The rules that keep your template safe:
+//   - a cell holding a FORMULA is never written (P/L, days, return, price...)
+//   - rows are found by the "App ID" column, added to the right of your notes
+//     the first time; your own rows (no App ID) are never touched
+//   - the SAMPLE row is typed over first, as the template asks
+//   - your Notes on a row are never overwritten once the row exists
+var TRACKER_ID = "1Gmk_dE6nXo_lHzqF8WlRKc9Qu050EQq68sRtsQ8CEUQ";
+var TRACKER_GID = 2074716553;
+var TRACKER_KEY = "App ID";
+var TRACKER_DATES = { "Open Date": 1, "Exp Date": 1, "Closed Date": 1 };
+// The template's tabs name a few columns differently.
+var TRACKER_ALIASES = {
+  "Closed Date": ["Closed Date", "Close Date", "Date Closed"],
+  "Open Date": ["Open Date", "Open"],
+  "Premium $": ["Premium $", "Fill $"],
+  "Collateral": ["Collateral"]
+};
+var SAMPLE_TEXT = "This first row is a SAMPLE";
+
+var _trackerTz = "";   // the tracker spreadsheet's own time zone
+
+function _trackerSheet() {
+  var ss = SpreadsheetApp.openById(TRACKER_ID);
+  _trackerTz = ss.getSpreadsheetTimeZone();
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getSheetId() === TRACKER_GID) { return sheets[i]; }
+  }
+  throw new Error("The TWA tracker tab was not found (gid " + TRACKER_GID + ").");
+}
+
+// Where the header row is and which column each name lives in. Never by a
+// fixed row number - you may add rows above it.
+function _trackerLayout(sheet) {
+  var lastCol = sheet.getLastColumn();
+  var top = sheet.getRange(1, 1, Math.min(10, sheet.getLastRow()), lastCol).getValues();
+  for (var r = 0; r < top.length; r++) {
+    var names = top[r].map(function (v) { return String(v).trim(); });
+    if (names.indexOf("Type") < 0 || names.indexOf("Ticker") < 0) { continue; }
+    var cols = {};
+    var lastNamed = 0;
+    for (var c = 0; c < names.length; c++) {
+      if (!names[c]) { continue; }
+      lastNamed = c + 1;
+      if (!(names[c] in cols)) { cols[names[c]] = c + 1; }
+      if (names[c].indexOf("Notes") === 0 && !cols["Notes"]) { cols["Notes"] = c + 1; }
+    }
+    // The SAMPLE tab's notes column has no header: it is the one right after
+    // "Annual Return Rate".
+    if (!cols["Notes"] && cols["Annual Return Rate"]) {
+      cols["Notes"] = cols["Annual Return Rate"] + 1;
+    }
+    if (!cols[TRACKER_KEY]) {
+      var at = Math.max(lastNamed, cols["Notes"] || 0) + 1;
+      sheet.getRange(r + 1, at).setValue(TRACKER_KEY);
+      cols[TRACKER_KEY] = at;
+    }
+    return { headerRow: r + 1, cols: cols };
+  }
+  throw new Error("Could not find the header row (Type ... Ticker) in the TWA tracker tab.");
+}
+
+function _trackerCol(cols, name) {
+  var names = TRACKER_ALIASES[name] || [name];
+  for (var i = 0; i < names.length; i++) {
+    if (cols[names[i]]) { return cols[names[i]]; }
+  }
+  return 0;
+}
+
+// Midnight in the TRACKER's time zone. A plain new Date() is midnight in the
+// script's zone, which shows as the day before in a sheet set further west.
+function _isoToDate(s) {
+  return Utilities.parseDate(String(s), _trackerTz || Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+// Write {col: value} into row r, skipping formula cells, in as few calls as
+// possible (one per run of side-by-side columns).
+function _writeCells(sheet, r, writes) {
+  var lastCol = sheet.getLastColumn();
+  var formulas = sheet.getRange(r, 1, 1, lastCol).getFormulas()[0];
+  var cols = Object.keys(writes).map(Number).filter(function (c) {
+    return !(c <= formulas.length && formulas[c - 1]);
+  }).sort(function (a, b) { return a - b; });
+  var i = 0;
+  while (i < cols.length) {
+    var j = i;
+    while (j + 1 < cols.length && cols[j + 1] === cols[j] + 1) { j++; }
+    var vals = [];
+    for (var k = i; k <= j; k++) { vals.push(writes[cols[k]]); }
+    sheet.getRange(r, cols[i], 1, vals.length).setValues([vals]);
+    i = j + 1;
+  }
+}
+
+function _syncTracker(trades) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var sheet = _trackerSheet();
+    var layout = _trackerLayout(sheet);
+    var cols = layout.cols;
+    var first = layout.headerRow + 1;
+    var lastRow = Math.max(sheet.getLastRow(), first);
+    var n = lastRow - first + 1;
+    var lastCol = sheet.getLastColumn();
+    var grid = sheet.getRange(first, 1, n, lastCol).getValues();
+    var keyAt = cols[TRACKER_KEY] - 1, typeAt = cols["Type"] - 1,
+        tickerAt = cols["Ticker"] - 1, notesAt = (cols["Notes"] || 0) - 1;
+
+    function cell(i, at) { return at >= 0 && at < grid[i].length ? String(grid[i][at]).trim() : ""; }
+    function isSample(i) { return notesAt >= 0 && cell(i, notesAt).indexOf(SAMPLE_TEXT) === 0; }
+
+    // Every name the app writes, so a cleared row is cleared completely.
+    var names = ["Type", "Strategy", "Open Date", "Exp Date", "Closed Date", "Ticker",
+                 "Strike $", "Quantity", "Premium $", "Close $",
+                 "Covered Call Collateral", "Collateral", "Notes"];
+    var written = 0, cleared = 0;
+
+    for (var t = 0; t < trades.length; t++) {
+      var tradeId = String(trades[t].trade_id || "");
+      if (!tradeId) { continue; }
+      var rows = trades[t].rows || [];
+      var wanted = {};
+      for (var w = 0; w < rows.length; w++) { wanted[rows[w].key] = rows[w]; }
+
+      // Rows this trade already has.
+      var have = {};
+      for (var i = 0; i < grid.length; i++) {
+        var k = cell(i, keyAt);
+        if (k.indexOf(tradeId + "#") === 0) { have[k] = i; }
+      }
+
+      // Rows it should no longer have (a deleted trade, a corrected roll).
+      for (var gone in have) {
+        if (wanted[gone]) { continue; }
+        var clear = {};
+        for (var c = 0; c < names.length; c++) {
+          var col = _trackerCol(cols, names[c]);
+          if (col) { clear[col] = ""; }
+        }
+        clear[cols[TRACKER_KEY]] = "";
+        _writeCells(sheet, first + have[gone], clear);
+        grid[have[gone]][keyAt] = "";
+        grid[have[gone]][typeAt] = "";
+        grid[have[gone]][tickerAt] = "";
+        cleared++;
+      }
+
+      for (var w2 = 0; w2 < rows.length; w2++) {
+        var row = rows[w2];
+        var at = have[row.key];
+        var isNew = (at === undefined);
+        var overSample = false;
+        if (isNew) {
+          at = -1;
+          for (var i2 = 0; i2 < grid.length; i2++) {
+            if (cell(i2, keyAt)) { continue; }
+            if (isSample(i2) || (!cell(i2, typeAt) && !cell(i2, tickerAt))) {
+              at = i2; overSample = isSample(i2); break;
+            }
+          }
+          if (at < 0) {   // no free row left: add one under the last
+            grid.push(new Array(lastCol).fill(""));
+            at = grid.length - 1;
+          }
+        }
+        var writes = {};
+        for (var name in row.cells) {
+          var col2 = _trackerCol(cols, name);
+          if (!col2) { continue; }
+          var v = row.cells[name];
+          // Your notes on an existing row are yours.
+          if (name === "Notes" && !isNew && cell(at, notesAt)) { continue; }
+          if (name === "Notes" && isNew && !overSample && cell(at, notesAt)) { continue; }
+          if (TRACKER_DATES[name] && v) { v = _isoToDate(v); }
+          writes[col2] = v;
+        }
+        writes[cols[TRACKER_KEY]] = row.key;
+        _writeCells(sheet, first + at, writes);
+        grid[at][keyAt] = row.key;
+        grid[at][typeAt] = row.cells["Type"] || "x";
+        grid[at][tickerAt] = row.cells["Ticker"] || "x";
+        if (notesAt >= 0 && overSample) { grid[at][notesAt] = row.cells["Notes"] || ""; }
+        written++;
+      }
+    }
+    return { written: written, cleared: cleared, tab: sheet.getName() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ------------------------------------------------------------ GET
 // mode=rows -> every book as one JSON table (used by My trades).
 //
@@ -308,8 +516,8 @@ function doGet(e) {
       return _json({ ok: true, header: header, rows: rows });
     }
     return ContentService
-      .createTextOutput("Options Trading Assistant logger is running (v8 - "
-                        + "real money and practice in separate tabs).")
+      .createTextOutput("Options Trading Assistant logger is running (v9 - "
+                        + "real money and practice in separate tabs, TWA tracker copy).")
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return _json({ ok: false, error: String(err) });

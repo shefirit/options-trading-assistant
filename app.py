@@ -2909,6 +2909,64 @@ def _reconcile_panel(settings) -> None:
         "log a missing trade, record a close you forgot, or correct a size - "
         "and run this again.")
 
+def _twa_tracker_panel() -> None:
+    """The second copy of her real trades, in the TWA tracker spreadsheet.
+
+    Every real trade event already copies itself there as it is logged; this
+    is for the October backfill, and for repairing anything a dropped
+    connection missed. Safe to press any number of times - rows are found by
+    their App ID, so nothing is ever written twice.
+    """
+    from src.logging_tools import trade_logger, twa_tracker
+
+    st.markdown("#### 📗 Your TWA tracker")
+    if not twa_tracker.is_enabled():
+        theme.note("Copying to the TWA tracker is switched off "
+                   "(`google_sheet.twa_tracker.enabled` in settings.yaml).")
+        return
+    url = twa_tracker.settings().get("url", "")
+    start = twa_tracker.start_date()
+    theme.note(
+        f"Every **real-money** trade is also copied into your TWA tracker "
+        f"spreadsheet as you log it - one strike per row, the way the "
+        f"tracker works: a roll closes the old row and starts a new one. Only "
+        f"the cells you would type are filled in, never the formula columns. "
+        f"Put spreads, cash secured puts, the wheel, Buy / Write and LEAPS "
+        f"trades are copied. Call spreads, iron condors and Covered Call Models "
+        f"1-3 are not, because the tracker has no type for them. Rows closed "
+        f"before {start.day} {start:%B %Y} are left out.")
+
+    last = trade_logger.last_tracker_copy
+    if last is not None:
+        when = f"{last['at']:%H:%M}"
+        if last["ok"]:
+            theme.note(f"Last copy at {when}: {last['message']}.")
+        else:
+            st.warning(components._esc(f"The last copy at {when} did not reach "
+                                       f"the tracker: {last['message']}"))
+
+    c1, c2 = st.columns([1, 1])
+    pressed = c1.button("Copy to the TWA tracker now", key="twa_sync")
+    if url:
+        c2.link_button("Open your TWA tracker", url)
+    if not pressed:
+        return
+    with st.spinner("Copying your real trades to the TWA tracker..."):
+        try:
+            result = twa_tracker.sync()
+        except Exception as e:
+            st.error(components._esc(f"Could not copy to the tracker: {e}"))
+            return
+    st.success(f"Done - {result.get('written', 0)} row(s) written to "
+               f"**{result.get('tab', 'the tracker')}** from "
+               f"{result.get('trades', 0)} trade(s).")
+    skipped = result.get("skipped") or []
+    if skipped:
+        theme.note("Not copied - the tracker has no row type for these:  \n" + "  \n".join(
+            components._esc(f"- **{s['underlying']}** {s['strategy']} - {s['why']}")
+            for s in skipped))
+
+
 def _tab_settings(settings, provider) -> None:
     """The one home for connections, data status, and her plan numbers.
 
@@ -2926,6 +2984,8 @@ def _tab_settings(settings, provider) -> None:
         st.warning("Trades are saving **only on this device** right now - they won't reach "
                    "your Google Sheet until it is connected below.")
     _connect_sheet_ui()
+    if webhook_logger.is_configured():
+        _twa_tracker_panel()
 
     st.markdown("#### 📡 Data sources")
     _connect_earnings_ui()
