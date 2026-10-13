@@ -33,7 +33,7 @@ ALL_TIME = "All time"
 
 
 def _results_section(all_pos, settings, bp_used: float, mode: str = "real",
-                     every_pos=None) -> None:
+                     every_pos=None, priced=None) -> None:
     """One results block, scoped by a single picker.
 
     There used to be two: "Monthly tracking" and "Your results". They answered
@@ -67,13 +67,29 @@ def _results_section(all_pos, settings, bp_used: float, mode: str = "real",
     pick = st.selectbox("Show me", names, index=idx, key="trades_month_pick",
                         help="One month at a time, or everything since you started.")
 
+    open_now = _open_now(priced or [])
     if pick == ALL_TIME:
-        _span_view(all_pos, settings, live_from, mode, today)
+        _span_view(all_pos, settings, live_from, mode, today, open_now)
     else:
-        _month_view(all_pos, summaries, settings, live_from, mode, pick)
+        _month_view(all_pos, summaries, settings, live_from, mode, pick,
+                    open_now)
 
 
-def _span_view(all_pos, settings, live_from, mode: str, today) -> None:
+def _open_now(priced: list) -> list:
+    """[(Position, ROI so far)] for every open trade the Now tab could price -
+    the same figures its table and the Journal show. Unpriced ones are left
+    out rather than given a made-up number."""
+    out = []
+    for it in priced:
+        p = it["position"]
+        r = components.open_roi(p, components.open_pl(p, it["live"], it["signal"]))
+        if r is not None:
+            out.append((p, r))
+    return out
+
+
+def _span_view(all_pos, settings, live_from, mode: str, today,
+               open_now=None) -> None:
     """Everything since she started, against the target the span actually had.
 
     The band's goal label is the whole fix. "of your $3,500 goal" under an
@@ -82,7 +98,10 @@ def _span_view(all_pos, settings, live_from, mode: str, today) -> None:
     """
     from src.engine import goals
 
+    from src.engine import month_report as mr
+
     report = goals.span_report(all_pos, settings, live_from, today, mode)
+    mr.add_open_roi(report, open_now or [])
     days = report["days_elapsed"]
     if report["span_target"] > 0:
         label = (f"of the {income_report._d(report['span_target'])} a steady "
@@ -123,12 +142,13 @@ def _span_view(all_pos, settings, live_from, mode: str, today) -> None:
 
 
 def _month_view(all_pos, summaries, settings, live_from, mode: str,
-                pick: str) -> None:
+                pick: str, open_now=None) -> None:
     """One month, in full, through the income report."""
     from src.engine import month_report as mr
 
     month_key = next(m["month"] for m in summaries if m["label"] == pick)
     report = mr.build(all_pos, month=month_key, live_from=live_from, mode=mode)
+    mr.add_open_roi(report, open_now or [])
     monthly_goal = float(settings["targets"]["monthly"])
 
     # An empty REAL report in a month she knows she traded is the one moment

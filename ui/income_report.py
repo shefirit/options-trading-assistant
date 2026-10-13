@@ -512,9 +512,13 @@ def render_money_math(report: dict) -> None:
 
 
 def render_roi_by_strategy(report: dict) -> None:
-    """Which strategy earned the most on the money it put at risk."""
+    """Which strategy earned the most on the money it put at risk - closed
+    trades, then the open ones so far."""
     _roi_table(report.get("roi_by_strategy") or [], report.get("roi_total"),
                report, "Strategy", "All strategies")
+    _roi_table(report.get("open_roi_by_strategy") or [],
+               report.get("open_roi_total"), report, "Strategy",
+               "All strategies", open_now=True)
 
 
 def render_roi_by_underlying(report: dict) -> None:
@@ -522,10 +526,13 @@ def render_roi_by_underlying(report: dict) -> None:
     strategy run on that name, together."""
     _roi_table(report.get("roi_by_underlying") or [], report.get("roi_total"),
                report, "Symbol", "All symbols")
+    _roi_table(report.get("open_roi_by_underlying") or [],
+               report.get("open_roi_total"), report, "Symbol",
+               "All symbols", open_now=True)
 
 
 def _roi_table(rows: list[dict], total: Optional[dict], report: dict,
-               name_col: str, total_label: str) -> None:
+               name_col: str, total_label: str, open_now: bool = False) -> None:
     """The ROI table, by strategy or by symbol.
 
     The ring above answers "where did the premium come from"; this answers the
@@ -542,8 +549,12 @@ def _roi_table(rows: list[dict], total: Optional[dict], report: dict,
     def tone(x: float) -> str:
         return theme.GREEN if x >= 0 else theme.RED
 
-    head_cells = [name_col, "Closed", "Made", "Money at risk", "ROI",
-                  "ROI / year", "Avg days"]
+    # The open table is the same shape, read differently: trades still
+    # running, what they would make closed right now, and days held SO FAR.
+    head_cells = ([name_col, "Open", "So far", "Money at risk", "ROI so far",
+                   "ROI / year", "Days so far"] if open_now else
+                  [name_col, "Closed", "Made", "Money at risk", "ROI",
+                   "ROI / year", "Avg days"])
     head = "".join(
         f"<th style='padding:6px 10px;text-align:{'left' if i == 0 else 'right'};"
         f"font-size:.76rem;font-weight:800;color:{theme.SECONDARY};"
@@ -574,16 +585,26 @@ def _roi_table(rows: list[dict], total: Optional[dict], report: dict,
 
     period = ("all time" if report.get("month") == "all"
               else f"in {report.get('label', 'this month')}")
+    eyebrow = ("STILL OPEN &middot; ROI SO FAR AT LIVE PRICES" if open_now else
+               f"RETURN ON THE MONEY AT RISK &middot; TRADES CLOSED "
+               f"{_esc(period.upper())}")
     st.markdown(
         f"<div style='background:{theme.TILE};border:1px solid "
         f"{theme.BORDER_STRONG};border-radius:14px;padding:14px 16px;"
         f"margin-bottom:10px;overflow-x:auto;'>"
         f"<div style='font-size:.78rem;font-weight:800;color:{theme.SECONDARY};"
-        f"letter-spacing:.05em;margin-bottom:6px;'>RETURN ON THE MONEY AT RISK "
-        f"&middot; TRADES CLOSED {_esc(period.upper())}</div>"
+        f"letter-spacing:.05em;margin-bottom:6px;'>{eyebrow}</div>"
         f"<table style='width:100%;border-collapse:collapse;'>"
         f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>",
         unsafe_allow_html=True)
+    if open_now:
+        theme.note(
+            "**Live, not settled.** What the trades still open would make if "
+            "closed right now, over the money they have at risk - the same "
+            "figures as the open-trades table and the Journal. It moves with "
+            "the market, and a trade moves up into the table above the day it "
+            "closes. Early in a trade the yearly pace swings wildly.")
+        return
     theme.note(
         "**ROI** is what the trades made ÷ the money they had at risk - a "
         "spread's max loss, a cash secured put's strike less the premium, the "
@@ -627,7 +648,8 @@ def render_underlyings(report: dict) -> None:
     rows = [r for r in report["by_underlying"] if r["premium"] > 0][:10]
     # The ROI table can have rows when the chart has none: a month that only
     # CLOSED trades sold no premium in it, but still has results to measure.
-    if not rows and not report.get("roi_by_underlying"):
+    if (not rows and not report.get("roi_by_underlying")
+            and not report.get("open_roi_by_underlying")):
         return
     theme.section("Which names did the earning?", "Top producers")
     if rows:
