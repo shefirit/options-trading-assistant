@@ -142,13 +142,16 @@ def render(settings, strategies, provider) -> None:
     quality = pos_mod.quality(all_pos, today)
     perf = pos_mod.performance(all_pos, today)
 
+    # ROI so far on everything open - the Now band and the Plan row both read
+    # it, so it is worked out once, here, from the same priced items.
+    from src.engine import roi as roi_mod
+    open_book = roi_mod.book_of(
+        [r for _, r in components.priced_open_rois(items)])
+
     t_now, t_profit, t_plan, t_journal = st.tabs(
         ["📍 Now", "💰 Profit", "🎯 Plan", "📜 Journal"])
 
     with t_now:
-        from src.engine import roi as roi_mod
-        open_book = roi_mod.book_of(
-            [r for _, r in components.priced_open_rois(items)])
         dashboard.band(this_month, pace, targets["monthly"], targets["weekly"],
                        perf["week_pl"], needs, len(items), priced_at, mode,
                        open_book=open_book)
@@ -167,6 +170,7 @@ def render(settings, strategies, provider) -> None:
 
     with t_plan:
         dashboard.health_row(this_month, quality, pace, targets["monthly"])
+        dashboard.return_row(this_month, open_book, roi_mod.book_roi(all_pos))
         st.divider()
         # every_pos, not all_pos: the goals block draws the OTHER book faded
         # behind this one, so it needs both. It splits them itself.

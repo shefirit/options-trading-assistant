@@ -860,14 +860,18 @@ def kpi_card(label: str, value: str, sub: str = "", tone: str = "neutral",
         f'<div class="ota-kpi-sub">{_money_safe(sub)}</div></div>')
 
 
-def kpi_row(cards: list[str]) -> None:
+def kpi_row(cards: list[str], fit: bool = False) -> None:
     """The cards in a responsive grid, always equal width.
 
     A count divisible by three lays out three to a row so it can never leave a
     lone card stretched across the bottom; anything else auto-fits. See
     .ota-kpi for why this is a grid and not a flex row.
+
+    fit=True always auto-fits: for a short row (three cards) that should span
+    the page, where the six-across desktop grid would leave half of it empty.
     """
-    cls = "ota-kpi ota-kpi-3" if cards and len(cards) % 3 == 0 else "ota-kpi"
+    cls = ("ota-kpi" if fit else
+           "ota-kpi ota-kpi-3" if cards and len(cards) % 3 == 0 else "ota-kpi")
     st.markdown(f'<div class="{cls}">{"".join(cards)}</div>',
                 unsafe_allow_html=True)
 

@@ -236,6 +236,44 @@ def health_row(report: dict, quality: dict, pace: Optional[dict],
             "rules**, because that is the only number you control directly.")
 
 
+def return_row(report: dict, open_book, all_time_book) -> None:
+    """Return on the money at risk: live, this month, and all time.
+
+    Her ask (2026-10-13): ROI so far on the Plan tab. It sits between the two
+    finished figures so it has something to be read against - the open trades
+    at live prices, beside what closed this month and everything ever closed.
+    Same measure as the Journal, the report and the band.
+    """
+    def card(label, book, empty, sub_word, icon):
+        if book is None:
+            return theme.kpi_card(label, "-", empty, "neutral", icon)
+        tone = "good" if book.pct >= 0 else "bad"
+        n = book.trades
+        return theme.kpi_card(
+            label, f"{book.pct:+.1f}%",
+            # A literal "·", not &middot;: kpi_card escapes its text.
+            f"{_signed(book.result)} on {_m(book.base)} at risk · "
+            f"{book.annual_pct:+.0f}% a year · {n} {sub_word}"
+            f"{'' if n == 1 else 's'}", tone, icon)
+
+    month = report.get("roi_total")
+    from src.engine.roi import BookRoi
+    month_book = (BookRoi(**month) if month else None)
+    theme.kpi_row([
+        card("ROI so far", open_book,
+             "nothing open could be priced right now", "open trade", "⏳"),
+        card(f"ROI in {report.get('label', 'this month')}", month_book,
+             "nothing closed this month yet", "closed trade", "📅"),
+        card("ROI all time", all_time_book,
+             "nothing closed yet", "closed trade", "🏁"),
+    ], fit=True)
+    theme.note("**ROI** is what the trades made ÷ the money they had at risk; "
+               "**a year** is that pace stretched to 365 days, with each dollar "
+               "counted for as long as it was tied up. **So far** is live - the "
+               "open trades as if closed right now, so it moves with the market. "
+               "The other two are finished results.")
+
+
 # --------------------------------------------------- row 2: goals vs reality
 def goals_block(positions: list, settings: dict, live_from, mode: str,
                 today=None) -> None:

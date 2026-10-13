@@ -524,3 +524,50 @@ def test_the_now_tab_band_shows_roi_so_far(app_with_one_csp, monkeypatch):
     assert not at.exception
     band = next(str(m.value) for m in at.markdown if "<div class=\"ota-band\">" in str(m.value))
     assert "Open trades &middot; ROI so far" in band and "+1.0%" in band
+
+
+# ------------------------------------------------------------------ the Plan tab
+def _return_row_html(monkeypatch, report, open_book, all_time):
+    from ui.trades import dashboard
+
+    shown: list[str] = []
+    monkeypatch.setattr(dashboard.st, "markdown",
+                        lambda body, **k: shown.append(str(body)))
+    monkeypatch.setattr(dashboard.theme, "note", lambda text: None)
+    dashboard.return_row(report, open_book, all_time)
+    return "".join(shown)
+
+
+def test_the_plan_row_shows_live_month_and_all_time_roi(monkeypatch):
+    open_book = roi.book_of([_open_pair("SOFI", "Put Credit Spread", 70.0, 350.0, 10)[1]])
+    month = {"trades": 3, "result": 250.0, "base": 10_500.0, "pct": 2.38,
+             "annual_pct": 40.0, "avg_days": 20.0}
+    all_time = roi.book_roi([_closed(75.0, 30, max_loss=350.0, open_cash=150.0)])
+    html = _return_row_html(monkeypatch, {"label": "October 2026",
+                                          "roi_total": month}, open_book, all_time)
+    assert "ROI so far" in html and "+20.0%" in html and "1 open trade" in html
+    assert "ROI in October 2026" in html and "+2.4%" in html
+    assert "ROI all time" in html and "+21.4%" in html
+    assert "&amp;middot;" not in html                 # no escaped entity
+    assert 'class="ota-kpi"' in html                    # spans the row
+
+
+def test_the_plan_row_says_why_a_card_is_empty(monkeypatch):
+    html = _return_row_html(monkeypatch, {"label": "October 2026",
+                                          "roi_total": None}, None, None)
+    assert "nothing open could be priced right now" in html
+    assert "nothing closed this month yet" in html
+
+
+def test_the_plan_tab_shows_the_roi_row(app_with_one_csp, monkeypatch):
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(DataProvider, "price_position", lambda self, p: {
+        "priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+        "short_delta": 0.2, "position_value": None, "open_pl": None,
+        "options_pl": None, "shares_pl": None})
+    at = app_with_one_csp.run()
+    assert not at.exception
+    row = next(str(m.value) for m in at.markdown
+               if "ROI all time" in str(m.value))
+    assert "ROI so far" in row and "+1.0%" in row
