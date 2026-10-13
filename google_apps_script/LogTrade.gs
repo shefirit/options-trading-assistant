@@ -287,6 +287,11 @@ var TRACKER_ID = "1Gmk_dE6nXo_lHzqF8WlRKc9Qu050EQq68sRtsQ8CEUQ";
 var TRACKER_GID = 2074716553;
 var TRACKER_KEY = "App ID";
 var TRACKER_DATES = { "Open Date": 1, "Exp Date": 1, "Closed Date": 1 };
+// Formula columns the template means to have on every row. On a row the app
+// writes, an EMPTY cell here gets the formula copied from your own template
+// row (references shift to the row, as a paste would). A cell that already
+// has a formula, or anything typed, is left alone.
+var TRACKER_FILL = ["Today's Price", "Profit Breach Alert"];
 // The template's tabs name a few columns differently.
 var TRACKER_ALIASES = {
   "Closed Date": ["Closed Date", "Close Date", "Date Closed"],
@@ -372,6 +377,17 @@ function _writeCells(sheet, r, writes) {
   }
 }
 
+function _fillFormulas(sheet, r, templates) {
+  for (var col in templates) {
+    var src = templates[col];
+    if (src === r) { continue; }
+    var target = sheet.getRange(r, Number(col));
+    if (target.getFormula() || String(target.getValue()) !== "") { continue; }
+    sheet.getRange(src, Number(col)).copyTo(
+      target, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+  }
+}
+
 function _syncTracker(trades) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -393,6 +409,21 @@ function _syncTracker(trades) {
     // Your dropdowns. A few rows of the template allow fewer types than the
     // rest (row 23's Strategy has no LEAP), and Google refuses a value its
     // dropdown does not list - so a new row only goes where it is allowed.
+    var openAt = _trackerCol(cols, "Open Date") - 1;
+
+    // Where each per-row formula can be copied from: the first row of your
+    // template that has it. Your template has Today's Price only on row 3 and
+    // from row 53 down, so rows in between would otherwise show no price.
+    var templates = {};
+    TRACKER_FILL.forEach(function (name) {
+      var col = cols[name];
+      if (!col) { return; }
+      var f = sheet.getRange(first, col, n, 1).getFormulas();
+      for (var x = 0; x < f.length; x++) {
+        if (f[x][0]) { templates[col] = first + x; break; }
+      }
+    });
+
     var rules = {};
     ["Type", "Strategy"].forEach(function (name) {
       rules[name] = sheet.getRange(first, cols[name], n, 1).getDataValidations();
@@ -457,7 +488,9 @@ function _syncTracker(trades) {
           at = -1;
           for (var i2 = 0; i2 < grid.length; i2++) {
             if (cell(i2, keyAt) || !fits(i2, row)) { continue; }
-            if (isSample(i2) || (!cell(i2, typeAt) && !cell(i2, tickerAt))) {
+            // Free = no ticker and no open date. A dropdown picked on its own
+            // is not a trade (and the first, failed backfill left one).
+            if (isSample(i2) || (!cell(i2, tickerAt) && !cell(i2, openAt))) {
               at = i2; overSample = isSample(i2); break;
             }
           }
@@ -487,6 +520,7 @@ function _syncTracker(trades) {
         try {
           sheet.getRange(first + at, cols[TRACKER_KEY]).setValue(row.key);
           _writeCells(sheet, first + at, writes);
+          _fillFormulas(sheet, first + at, templates);
           written++;
         } catch (err) {
           errors.push(row.key + " (row " + (first + at) + "): " + String(err));
