@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ui import theme
+from ui import components, theme
 from ui.trades import dashboard, journal, pnl
 from ui.trades.account import _account_switch, live_from as account_live_from, mr_split
 from ui.trades.data import ACTION_SIGNALS, _load_trade_log, _price_positions
@@ -146,8 +146,12 @@ def render(settings, strategies, provider) -> None:
         ["📍 Now", "💰 Profit", "🎯 Plan", "📜 Journal"])
 
     with t_now:
+        from src.engine import roi as roi_mod
+        open_book = roi_mod.book_of(
+            [r for _, r in components.priced_open_rois(items)])
         dashboard.band(this_month, pace, targets["monthly"], targets["weekly"],
-                       perf["week_pl"], needs, len(items), priced_at, mode)
+                       perf["week_pl"], needs, len(items), priced_at, mode,
+                       open_book=open_book)
         _open_section(items, strategies, provider, priced_at)
 
     with t_profit:

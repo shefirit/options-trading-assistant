@@ -1306,6 +1306,22 @@ def open_roi(pos, pl: Optional[float]):
     return roi.open_roi(pos, pl)
 
 
+def priced_open_rois(priced: list) -> list:
+    """[(Position, ROI so far)] for every open trade the Now tab priced.
+
+    The one place the dashboard, the Journal and the month report turn priced
+    items into ROI, so the three can never disagree. A trade that could not be
+    priced is left out rather than given a made-up number.
+    """
+    out = []
+    for it in priced or []:
+        p = it["position"]
+        r = open_roi(p, open_pl(p, it["live"], it["signal"]))
+        if r is not None:
+            out.append((p, r))
+    return out
+
+
 def positions_column_config():
     # Widths are pixels on purpose: 11 columns of auto-sized text overflowed the
     # page and forced a horizontal scrollbar. This budget totals ~1010px, which
