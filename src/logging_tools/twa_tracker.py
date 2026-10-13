@@ -3,9 +3,10 @@
 The TWA tracker (a copy of the "TWA Discord Tracker" template) is a separate
 Google Sheet from the app's own log. It tracks ONE STRIKE PER ROW, the way the
 course does it: a sold put is a row, a covered call is a row, the shares are a
-row. A roll is not a change to a row - it CLOSES the old row at the buy-back
-price and OPENS a new one, which is how Ashley's reference tab records it
-("Rolled to 11/07, down to $135 from $140").
+row. A roll stays on the same row - new strike and expiration, the roll's net
+credit added to Premium $, and a line in Notes - which is how Ashley's
+reference tab records it ("Rolled to 11/07, down to $135 from $140 for
+$2.58cr").
 
 So this is a view, not a log. Every time anything is logged on a real trade,
 the app replays that trade from its event rows and sends the rows it should
@@ -43,6 +44,10 @@ INCLUDED = {
 }
 _SINGLE_PUT = {"cash_secured_put", "wheel", "leaps_put"}
 _LONG_CALL = {"poor_mans_covered_call", "long_call_leaps"}
+
+# Between the lines of a row's Notes (Ashley's own tab uses " / " too). The
+# script splits on it to tell which roll lines a cell already has.
+NOTE_SEP = " / "
 
 # Her backfill ruling: rows closed before this are not sent.
 DEFAULT_START = date(2026, 10, 1)
@@ -93,6 +98,11 @@ class _Row:
     @property
     def buys(self) -> bool:
         return self.side != "Sell"
+
+    def add_note(self, line: str) -> None:
+        """Notes are lines joined by NOTE_SEP. The script appends only the
+        lines a cell does not already hold, so her own words stay put."""
+        self.note = f"{self.note}{NOTE_SEP}{line}" if self.note else line
 
     def close_at(self, on: Optional[date], dollars: float) -> None:
         """Close with `dollars` of signed cash for the whole row (+ = paid her)."""
@@ -217,32 +227,44 @@ def _apply_roll(rows: list[_Row], p: Position, roll) -> None:
     put = str(roll.option_type).lower() == "put"
     kinds = ("put", "pcs") if put else ("cc",)
     current = next((r for r in reversed(rows) if r.is_open and r.kind in kinds), None)
-    word = "put" if put else "call"
 
     if current is not None:
         if roll.new_strike is None:
             # Bought back (or expired worthless at 0) with nothing in its place.
             current.close_at(roll.rolled_on, roll.cash)
             return
-        buyback = round(float(roll.new_credit) - float(roll.cash), 2)
-        current.close_at(roll.rolled_on, -buyback)
+        # Her ruling 2026-10-13: a roll stays on the SAME row, the way Ashley's
+        # reference tab keeps it. Strike and expiration move to the new ones,
+        # Premium $ becomes the running net credit (original + every roll's
+        # net), and Notes gain one line per roll - so P/L at the close is the
+        # whole trade's result, from one row.
         q = current.qty
-        new = _Row(current.kind, "Sell", current.strategy, roll.rolled_on,
-                   roll.new_expiration, roll.new_strike, q,
-                   _per_share(roll.new_credit, q),
-                   cc_collateral=current.cc_collateral,
-                   note=f"Rolled from the {current.strike:g} {word}")
+        per = _per_share(float(roll.cash), q)
+        old = (f"${current.strike:g}/${current.long_strike:g}"
+               if current.kind == "pcs" and current.long_strike is not None
+               else f"${current.strike:g}")
+        current.premium = round(current.premium + per, 4)
+        current.strike = float(roll.new_strike)
+        if roll.new_expiration is not None:
+            current.expires = roll.new_expiration
         if current.kind == "pcs":
-            long_ = (roll.new_long_strike if roll.new_long_strike is not None
-                     else current.long_strike)
-            new.long_strike = long_
-            width = abs(roll.new_strike - long_) if long_ is not None else 0.0
-            new.collateral = width * 100 * q
-            new.note = (_pcs_note(roll.new_strike, long_)
-                        + f" - rolled from ${current.strike:g}")
-        elif current.kind == "put":
-            new.collateral = roll.new_strike * 100 * q
-        rows.append(new)
+            if roll.new_long_strike is not None:
+                current.long_strike = roll.new_long_strike
+            long_ = current.long_strike
+            width = abs(current.strike - long_) if long_ is not None else 0.0
+            current.collateral = width * 100 * q
+            new = (f"${current.strike:g}/${long_:g}" if long_ is not None
+                   else f"${current.strike:g}")
+        else:
+            if current.kind == "put":
+                current.collateral = current.strike * 100 * q
+            new = f"${current.strike:g}"
+        when = f"{roll.rolled_on:%m/%d}" if roll.rolled_on else ""
+        exp = (f" (exp {roll.new_expiration:%m/%d})"
+               if roll.new_expiration is not None else "")
+        kind = "credit" if per >= 0 else "debit"
+        current.add_note(f"Rolled {when} from {old} to {new}{exp} "
+                         f"for ${abs(per):.2f} {kind}")
         return
 
     if roll.new_strike is None:
@@ -284,8 +306,7 @@ def _apply_close(rows: list[_Row], p: Position) -> None:
     for r in still:
         r.close_at(p.closed_on, float(cash) if r is anchor else 0.0)
     if len(still) > 1:
-        anchor.note = (anchor.note + " - " if anchor.note else "") + \
-            "closed with the whole trade"
+        anchor.add_note("Closed with the whole trade")
 
 
 def _skip_reason(p: Position) -> str:
