@@ -431,3 +431,50 @@ def test_an_open_trade_that_cannot_be_priced_still_reads_open(app_with_one_csp):
     at = app_with_one_csp.run()
     assert not at.exception
     assert _journal_table(at)["ROI"].iloc[0] == "open"
+
+
+# ------------------------------------------------------------------ open trades in the report
+def _open_pair(underlying, strategy, pl, base, days):
+    p = Position(trade_id=underlying, status="open", underlying=underlying,
+                 strategy_name=strategy, opened=OPEN, max_loss=base,
+                 open_cash=100.0)
+    return p, roi.open_roi(p, pl, today=OPEN + timedelta(days=days))
+
+
+def test_the_report_groups_open_trades_roi_so_far():
+    from src.engine import month_report
+
+    pairs = [_open_pair("SOFI", "Put Credit Spread", 70.0, 350.0, 10),
+             _open_pair("BE", "Put Credit Spread", -35.0, 350.0, 10),
+             _open_pair("SOFI", "Cash Secured Put", 98.0, 9_800.0, 10)]
+    report = month_report.add_open_roi({"month": "all"}, pairs)
+    by_s = {r["name"]: r for r in report["open_roi_by_strategy"]}
+    assert by_s["Put Credit Spread"]["trades"] == 2
+    assert by_s["Put Credit Spread"]["pct"] == 5.0          # $35 on $700
+    by_u = {r["name"]: r for r in report["open_roi_by_underlying"]}
+    assert by_u["SOFI"]["result"] == 168.0
+    assert report["open_roi_total"]["trades"] == 3
+
+
+def test_a_past_month_does_not_show_open_trades():
+    from src.engine import month_report
+
+    pairs = [_open_pair("SOFI", "Put Credit Spread", 70.0, 350.0, 10)]
+    report = month_report.add_open_roi(
+        {"month": "2026-08", "is_current": False}, pairs)
+    assert report["open_roi_by_strategy"] == []
+    assert report["open_roi_total"] is None
+
+
+def test_the_profit_tab_report_shows_the_open_table(app_with_one_csp, monkeypatch):
+    from src.data.provider import DataProvider
+
+    monkeypatch.setattr(DataProvider, "price_position", lambda self, p: {
+        "priced": True, "cost_to_close": 100.0, "underlying_price": 108.0,
+        "short_delta": 0.2, "position_value": None, "open_pl": None,
+        "options_pl": None, "shares_pl": None})
+    at = app_with_one_csp.run()
+    assert not at.exception
+    page = " ".join(str(m.value) for m in at.markdown)
+    assert "STILL OPEN &middot; ROI SO FAR AT LIVE PRICES" in page
+    assert "ROI SO FAR" in page and "+1.0%" in page

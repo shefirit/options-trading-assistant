@@ -272,6 +272,45 @@ def _roi_total(closed: list[Position]) -> Optional[dict[str, Any]]:
             "avg_days": book.avg_days}
 
 
+def _book_row(book, name: Optional[str] = None) -> dict[str, Any]:
+    row = {"trades": book.trades, "result": book.result, "base": book.base,
+           "pct": book.pct, "annual_pct": book.annual_pct,
+           "avg_days": book.avg_days}
+    if name is not None:
+        row["name"] = name
+    return row
+
+
+def add_open_roi(report: dict[str, Any], priced: list) -> dict[str, Any]:
+    """ROI SO FAR on the trades still open, beside the closed-trade tables.
+
+    priced is [(Position, Roi)] - each open trade with its ROI so far at live
+    prices, the same figures the open-trades table and the Journal show. Kept
+    out of build() because build() never touches the network and this needs
+    live prices; the caller has them already.
+
+    Only on the current month and all time. An open trade is about NOW, and on
+    a past month's report it would describe a day that month never saw.
+    """
+    from src.engine import roi
+
+    rows_s, rows_u = [], []
+    if report.get("is_current") or report.get("month") == ALL_TIME:
+        for key, out in ((lambda p: p.strategy_name, rows_s),
+                         (lambda p: (p.underlying or "").upper(), rows_u)):
+            groups: dict[str, list] = {}
+            for p, r in priced:
+                groups.setdefault(key(p) or "(unknown)", []).append(r)
+            out.extend(_book_row(roi.book_of(rs), name)
+                       for name, rs in groups.items())
+            out.sort(key=lambda r: r["pct"], reverse=True)
+    total = roi.book_of([r for _, r in priced]) if rows_s else None
+    report["open_roi_by_strategy"] = rows_s
+    report["open_roi_by_underlying"] = rows_u
+    report["open_roi_total"] = _book_row(total) if total else None
+    return report
+
+
 def build(positions: list[Position], month: str = ALL_TIME,
           live_from: Optional[date] = None,
           today: Optional[date] = None,

@@ -156,7 +156,10 @@ def render(settings, strategies, provider) -> None:
         # The month report in full, still reachable. Everything it does that
         # the grain view does not - the discipline tiles, the money math, the
         # month at a glance - lives in here and is worth keeping.
-        _results_section(all_pos, settings, bp_used, mode, every_pos)
+        # Priced items, for the ROI-so-far tables on the current month and
+        # all time.
+        _results_section(all_pos, settings, bp_used, mode, every_pos,
+                         priced=items)
 
     with t_plan:
         dashboard.health_row(this_month, quality, pace, targets["monthly"])

@@ -332,7 +332,12 @@ def book_roi(positions: Iterable) -> Optional[BookRoi]:
     It is total result over total "dollar-days" at risk, times 365 - every
     dollar counts for as long as it was actually tied up.
     """
-    rois = [r for r in (trade_roi(p) for p in positions) if r is not None]
+    return book_of([r for r in (trade_roi(p) for p in positions) if r is not None])
+
+
+def book_of(rois: list[Roi]) -> Optional[BookRoi]:
+    """Several per-trade ROIs as one, weighted by dollar-days - closed results
+    (book_roi) or open trades' ROI so far alike."""
     if not rois:
         return None
     result = sum(r.result for r in rois)
