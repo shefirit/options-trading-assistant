@@ -293,3 +293,44 @@ def test_a_row_with_no_key_keeps_the_name_it_was_logged_with():
     from src.engine.positions import _current_name
     assert _current_name("", "Some Old Strategy") == "Some Old Strategy"
     assert _current_name("not_a_strategy", "Kept") == "Kept"
+
+
+# ------------------------------------------------------------------ shares-only pricing
+def test_shares_with_no_call_are_valued_at_todays_price():
+    """TQQQ and NVDL on 2026-10-13: shares bought, no call yet, and the app
+    could not price them at all - so they had no P&L and no ROI so far."""
+    from src.engine.positions import shares_only_value
+
+    p = _parse(_shares_row(price=50.0))
+    v = shares_only_value(p, 52.0)
+    assert v["value"] == 5_200.0
+    assert v["open_pl"] == 200.0 and v["shares_pl"] == 200.0
+    assert v["options_pl"] == 0.0
+
+
+def test_an_expired_call_s_premium_counts_in_the_shares_only_pl():
+    from src.engine.positions import shares_only_value
+
+    p = _parse(_shares_row(opened=date.today() - timedelta(days=9)),
+               _call(52.0, 80.0, days=-1, on=date.today() - timedelta(days=8)),
+               _expired(on=date.today() - timedelta(days=1)))
+    v = shares_only_value(p, 49.0)
+    assert v["shares_pl"] == -100.0
+    assert v["options_pl"] == 80.0          # the call that expired, kept
+    assert v["open_pl"] == -20.0
+
+
+def test_shares_only_value_leaves_option_positions_alone():
+    from src.engine.positions import shares_only_value
+
+    assert shares_only_value(_parse(_shares_row(), _call(52.0, 80.0)), 51.0) is None
+    assert shares_only_value(_parse(_shares_row()), None) is None
+
+
+def test_shares_only_trades_now_get_roi_so_far():
+    from src.engine import roi
+    from src.engine.positions import shares_only_value
+
+    p = _parse(_shares_row(price=50.0))          # $5,000 in, 3 days ago
+    r = roi.open_roi(p, shares_only_value(p, 51.0)["open_pl"])
+    assert r.pct == 2.0 and r.days == 3

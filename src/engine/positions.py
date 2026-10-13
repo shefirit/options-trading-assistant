@@ -2036,6 +2036,35 @@ def position_value_from_chain(position: Position, chain,
     return out
 
 
+def shares_only_value(position: Position,
+                      underlying_price: Optional[float]) -> Optional[dict[str, float]]:
+    """What a position is worth when all it holds is shares - no option at all.
+
+    A Buy / Write with the shares bought and the first call not yet sold, or a
+    wheel between calls after assignment. There is nothing in the option chain
+    to price, so position_value_from_chain is never reached and the trade went
+    unpriced - Rita's TQQQ and NVDL read "1 of 15 unpriced" on the dashboard
+    (2026-10-13) while their share prices were right there. The shares at
+    today's price ARE the whole position. Same shape as
+    position_value_from_chain, so every screen reads it the same way.
+    """
+    if position.legs or position.shares_cost <= 0:
+        return None
+    if not underlying_price or underlying_price <= 0:
+        return None
+    value = underlying_price * 100 * max(int(position.contracts or 1), 1)
+    shares_pl = value - position.shares_cost
+    open_pl = position.open_cash + position.banked_income + value
+    return {
+        "value": round(value, 2),
+        "open_pl": round(open_pl, 2),
+        "shares_pl": round(shares_pl, 2),
+        # Everything that is not the shares: the calls written and bought back
+        # so far. options_pl + shares_pl == open_pl, as on a covered call.
+        "options_pl": round(open_pl - shares_pl, 2),
+    }
+
+
 def leg_breakdown(position: Position,
                   mids: list[tuple[Leg, float]]) -> Optional[list[dict]]:
     """What each PIECE of the position has made, not just the trade as a whole.
