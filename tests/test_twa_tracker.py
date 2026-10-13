@@ -238,3 +238,10 @@ def test_copy_to_tracker_skips_practice_and_never_raises(monkeypatch):
     trade_logger.copy_to_tracker(["R"], account="real")
     assert trade_logger.last_tracker_copy["ok"] is False
     assert trade_logger.last_tracker_copy["message"] == "script too old"
+
+
+def test_a_symbol_google_misreads_carries_its_exchange(monkeypatch):
+    monkeypatch.setattr(twa_tracker, "settings",
+                        lambda: {"google_symbols": {"DRAM": "BATS:DRAM"}})
+    assert twa_tracker.google_symbol("dram") == "BATS:DRAM"
+    assert twa_tracker.google_symbol("ual") == "UAL"

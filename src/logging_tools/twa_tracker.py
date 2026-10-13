@@ -71,6 +71,16 @@ def start_date() -> date:
         return DEFAULT_START
 
 
+def google_symbol(underlying: str) -> str:
+    """The Ticker cell. The tracker prices it with GOOGLEFINANCE, which picks
+    the wrong security for a few symbols, so those carry their exchange
+    (`google_symbols` in settings.yaml)."""
+    sym = str(underlying or "").upper()
+    overrides = {str(k).upper(): str(v) for k, v in
+                 (settings().get("google_symbols") or {}).items()}
+    return overrides.get(sym, sym)
+
+
 @dataclass
 class _Row:
     """One tracker row while the trade is being replayed."""
@@ -360,7 +370,7 @@ def rows_for(p: Position, start: Optional[date] = None) -> tuple[list[dict[str, 
             "Open Date": _iso(r.opened),
             "Exp Date": _iso(r.expires),
             "Closed Date": _iso(r.closed),
-            "Ticker": p.underlying.upper(),
+            "Ticker": google_symbol(p.underlying),
             "Strike $": round(float(r.strike), 4),
             "Quantity": r.qty,
             "Premium $": r.premium,
