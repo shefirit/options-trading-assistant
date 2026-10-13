@@ -377,6 +377,21 @@ function _writeCells(sheet, r, writes) {
   }
 }
 
+// The app's notes are lines joined by " / " (one per roll). Returns the cell's
+// text with any line it lacks added on the end, or null when nothing changes.
+var NOTE_SEP = " / ";
+function _mergeNotes(have, want) {
+  want = String(want || "");
+  if (!have) { return want ? want : null; }
+  var out = have;
+  var parts = want.split(NOTE_SEP);
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (part && out.indexOf(part) < 0) { out += NOTE_SEP + part; }
+  }
+  return out === have ? null : out;
+}
+
 function _fillFormulas(sheet, r, templates) {
   for (var col in templates) {
     var src = templates[col];
@@ -473,6 +488,12 @@ function _syncTracker(trades) {
         }
         clear[cols[TRACKER_KEY]] = "";
         _writeCells(sheet, first + have[gone], clear);
+        // The breach-alert formula the app copied in reads FALSE on an empty
+        // row, so it goes with the row - except on the row it is copied FROM.
+        var alertCol = cols["Profit Breach Alert"];
+        if (alertCol && templates[alertCol] !== first + have[gone]) {
+          sheet.getRange(first + have[gone], alertCol).clearContent();
+        }
         grid[have[gone]][keyAt] = "";
         grid[have[gone]][typeAt] = "";
         grid[have[gone]][tickerAt] = "";
@@ -504,9 +525,12 @@ function _syncTracker(trades) {
           var col2 = _trackerCol(cols, name);
           if (!col2) { continue; }
           var v = row.cells[name];
-          // Your notes on an existing row are yours.
-          if (name === "Notes" && !isNew && cell(at, notesAt)) { continue; }
-          if (name === "Notes" && isNew && !overSample && cell(at, notesAt)) { continue; }
+          // Your notes are yours: the app only ADDS the lines a cell does not
+          // already have (a new roll), after whatever you wrote.
+          if (name === "Notes" && !overSample) {
+            v = _mergeNotes(cell(at, notesAt), v);
+            if (v === null) { continue; }
+          }
           if (TRACKER_DATES[name] && v) { v = _isoToDate(v); }
           writes[col2] = v;
         }

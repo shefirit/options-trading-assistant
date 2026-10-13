@@ -57,27 +57,35 @@ def test_cash_secured_put_is_one_sell_put_row():
     assert c["Collateral"] == 5000
 
 
-def test_a_roll_closes_the_old_row_and_opens_a_new_one():
-    """Sold the 60 put for $200, rolled to the 55 for $650 banking $150, so
-    the 60 was bought back for $500."""
+def test_a_roll_updates_the_same_row_and_adds_a_note():
+    """Her ruling: no new row. Sold the 60 put for $2.00, rolled to the 55
+    for a $1.50 net credit, then again to the 50 for a $0.40 debit, then
+    closed for $0.90."""
     p = _pos(strategy_key="cash_secured_put", opened=date(2026, 10, 4),
              open_credit=200.0, open_cash=200.0,
              legs=[_leg(Action.SELL, OptionType.PUT, 60, 2.0, dte=30)],
              rolls=[RollEvent(rolled_on=date(2026, 10, 26), cash=150.0,
                               new_strike=55.0, new_expiration=date(2026, 11, 20),
-                              new_credit=650.0, option_type="put")])
-    (old, new), keys = _cells(p)
-    assert keys == ["T1#1", "T1#2"]
-    assert old["Closed Date"] == "2026-10-26" and old["Close $"] == 5.0
-    assert _pl(old) == -300.0
-    assert new["Open Date"] == "2026-10-26" and new["Strike $"] == 55
-    assert new["Premium $"] == 6.5 and new["Collateral"] == 5500
-    assert new["Notes"] == "Rolled from the 60 put"
-    # The two rows together are exactly what the trade banked so far.
-    assert _pl(old) + 650 == 200 + 150
+                              new_credit=650.0, option_type="put"),
+                    RollEvent(rolled_on=date(2026, 11, 10), cash=-40.0,
+                              new_strike=50.0, new_expiration=date(2026, 12, 18),
+                              new_credit=500.0, option_type="put")],
+             status="closed", closed_on=date(2026, 12, 1), close_cash=-90.0)
+    (c,), keys = _cells(p)
+    assert keys == ["T1#1"]
+    assert c["Open Date"] == "2026-10-04"            # the day it was opened
+    assert c["Strike $"] == 50 and c["Exp Date"] == "2026-12-18"
+    assert c["Collateral"] == 5000
+    assert c["Premium $"] == 3.1                     # 2.00 + 1.50 - 0.40
+    assert c["Close $"] == 0.9 and c["Closed Date"] == "2026-12-01"
+    assert c["Notes"] == (
+        "Rolled 10/26 from $60 to $55 (exp 11/20) for $1.50 credit / "
+        "Rolled 11/10 from $55 to $50 (exp 12/18) for $0.40 debit")
+    # One row, and its P/L is the whole trade's result.
+    assert _pl(c) == 200 + 150 - 40 - 90
 
 
-def test_rows_closed_before_the_start_are_left_out_but_keep_their_numbers():
+def test_a_trade_still_open_from_before_the_start_is_kept():
     p = _pos(strategy_key="cash_secured_put", opened=date(2026, 8, 4),
              open_credit=200.0,
              legs=[_leg(Action.SELL, OptionType.PUT, 60, 2.0)],
@@ -85,8 +93,15 @@ def test_rows_closed_before_the_start_are_left_out_but_keep_their_numbers():
                               new_strike=55.0, new_credit=650.0,
                               option_type="put")])
     cells, keys = _cells(p)
-    assert keys == ["T1#2"]          # still #2 - keys never shift
-    assert cells[0]["Strike $"] == 55
+    assert keys == ["T1#1"] and cells[0]["Strike $"] == 55
+
+
+def test_a_trade_closed_before_the_start_is_left_out():
+    p = _pos(strategy_key="cash_secured_put", opened=date(2026, 8, 4),
+             open_credit=200.0,
+             legs=[_leg(Action.SELL, OptionType.PUT, 60, 2.0)],
+             status="closed", closed_on=date(2026, 9, 20), close_cash=-50.0)
+    assert _cells(p) == ([], [])
 
 
 def test_a_wheel_assignment_becomes_an_assigned_stock_row_with_calls_on_it():
@@ -111,22 +126,22 @@ def test_a_wheel_assignment_becomes_an_assigned_stock_row_with_calls_on_it():
     assert _pl(call) == 22.0
 
 
-def test_put_credit_spread_roll_moves_both_strikes():
+def test_put_credit_spread_roll_moves_both_strikes_on_the_same_row():
     p = _pos(strategy_key="put_credit_spread", open_credit=300.0,
              legs=[_leg(Action.SELL, OptionType.PUT, 180, 5.0),
                    _leg(Action.BUY, OptionType.PUT, 160, 2.0)],
              rolls=[RollEvent(rolled_on=date(2026, 10, 9), cash=120.0,
-                              new_strike=200.0, new_long_strike=180.0,
+                              new_strike=200.0, new_long_strike=175.0,
+                              new_expiration=date(2026, 11, 20),
                               new_credit=330.0, option_type="put")],
              status="closed", closed_on=date(2026, 10, 20), close_cash=-100.0)
-    (first, second), _ = _cells(p)
-    assert first["Strategy"] == "PCS" and first["Collateral"] == 2000
-    assert first["Notes"] == "PCS $180/$160"
-    assert first["Close $"] == 2.1                   # 330 - 120 = 210 buy-back
-    assert second["Strike $"] == 200 and second["Collateral"] == 2000
-    assert second["Notes"] == "PCS $200/$180 - rolled from $180"
-    assert second["Close $"] == 1.0 and second["Closed Date"] == "2026-10-20"
-    assert _pl(first) + _pl(second) == 300 + 120 - 100
+    (c,), _ = _cells(p)
+    assert c["Strategy"] == "PCS" and c["Strike $"] == 200
+    assert c["Collateral"] == 2500                   # now 25 wide
+    assert c["Premium $"] == 4.2 and c["Close $"] == 1.0
+    assert c["Notes"] == ("PCS $180/$160 / Rolled 10/09 from $180/$160 to "
+                          "$200/$175 (exp 11/20) for $1.20 credit")
+    assert _pl(c) == 300 + 120 - 100
 
 
 def test_leaps_cost_squares_with_the_net_cash_of_the_open():
@@ -159,7 +174,7 @@ def test_buy_write_shares_then_called_away():
     assert (shares["Type"], shares["Strategy"]) == ("Buy", "STOCK")
     assert shares["Premium $"] == 50.0 and shares["Collateral"] == 5000
     assert shares["Close $"] == 52.0 and _pl(shares) == 200.0
-    assert shares["Notes"] == "Bought 100 shares - closed with the whole trade"
+    assert shares["Notes"] == "Bought 100 shares / Closed with the whole trade"
     assert call["Close $"] == 0.0 and _pl(call) == 80.0
     assert call["Covered Call Collateral"] == 5000
 
