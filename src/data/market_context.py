@@ -210,7 +210,7 @@ _PROFILES: dict[str, _Profile] = {
         handicap=0.3),
     "weekly_covered_call": _Profile(
         lean=1.2, range_pref=0.0, vol_pref=0.3,
-        name="Weekly Covered Call", instrument="us_style", traded_on=_US_ON,
+        name="Buy / Write", instrument="us_style", traded_on=_US_ON,
         requires="cash for 100 shares, with no put underneath",
         reason="Own the shares and sell a call against them every week. You keep "
                "the stock's rise up to the strike plus the premium, so it wants "

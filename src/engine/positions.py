@@ -801,6 +801,30 @@ def _get(row: list[Any], idx: dict[str, int], name: str, fallback: int) -> Any:
     return row[i]
 
 
+def _current_name(key: str, logged: str) -> str:
+    """The strategy's name as config/strategies.yaml has it TODAY.
+
+    The Strategy cell holds the name on the day the trade was logged. Rita
+    renamed the weekly covered call to "Buy / Write" (2026-10-13) the day
+    after logging TQQQ and NVDL under the old name, and every screen and the
+    month report's grouping read that cell - so two trades would have shown
+    under a name she no longer uses, split from every later one. The key in
+    Details JSON never changes, so the name follows it. Her sheet keeps the
+    cell exactly as written.
+
+    The logged name stands when there is no key (rows from before keys were
+    stored) or the key is unknown.
+    """
+    if not key:
+        return logged
+    try:
+        from src.engine.config_loader import load_strategies
+        name = (load_strategies().get(key) or {}).get("name")
+    except Exception:
+        name = None
+    return str(name) if name else logged
+
+
 def _account_of(cell: Any, details: dict[str, Any]) -> str:
     """Which book a row belongs to: "real", "paper", or "" when nobody said.
 
@@ -1644,7 +1668,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         pos = Position(
             trade_id=trade_id,
             underlying=str(_get(row, idx, "Underlying", 1) or ""),
-            strategy_name=str(_get(row, idx, "Strategy", 2) or ""),
+            strategy_name=_current_name(str(data.get("key", "")),
+                                        str(_get(row, idx, "Strategy", 2) or "")),
             strategy_key=str(data.get("key", "")),
             opened=_to_date(_get(row, idx, "Date", 0)),
             expiration=_to_date(_get(row, idx, "Expiration", 14)),
