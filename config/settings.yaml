@@ -211,3 +211,9 @@ google_sheet:
     enabled: true
     url: "https://docs.google.com/spreadsheets/d/1Gmk_dE6nXo_lHzqF8WlRKc9Qu050EQq68sRtsQ8CEUQ/edit#gid=2074716553"
     start: "2026-09-01"
+    # Tickers Google Finance resolves to the wrong security. The tracker's
+    # Today's Price is GOOGLEFINANCE(Ticker), so these are written with the
+    # exchange in front. DRAM alone finds a $5 security, not the Roundhill
+    # Memory ETF (Cboe BZX, which Google calls BATS).
+    google_symbols:
+      DRAM: "BATS:DRAM"
