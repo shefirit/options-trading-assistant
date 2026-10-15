@@ -1241,9 +1241,21 @@ def _decide_by(pos, time_exit_dte: int = 21) -> str:
     return f"{_dt.date.today() + _dt.timedelta(days=days_to_go):%a %d %b}"
 
 
+_BLANK = "\u00a0"   # an empty cell; a missing value renders as "None"
+
+
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
-    """items: [{"position": Position, "live": dict, "signal": ExitSignal}]"""
+    """items: [{"position": Position, "live": dict, "signal": ExitSignal}]
+
+    The same columns for every shape of trade, so each one means something on
+    shares and LEAPS too. Rita, on the old table: "it doesn't make sense".
+    Credit, cost to close and % kept only apply to a sold option, so on shares
+    and LEAPS they read $0, a negative "close" and "None" - they live on the
+    trade's card now. ROI / year went too: a few days in it annualizes a $6 day
+    into +226%. The Journal keeps it, on closed trades where it means something.
+    """
     from src.engine.positions import strike_cushion
+    from src.engine.roi import money_at_risk
 
     rows = []
     for it in items:
@@ -1256,29 +1268,63 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
             strike_label = f"{cushion['strike']:g} {side}"
         pl = open_pl(pos, live, sig)
         so_far = open_roi(pos, pl)
+        # Shares with nothing sold against them: no expiry to count down to
+        # and no 21-day decision. An assigned put keeps the expiry of the call
+        # she bought back, which read as "1 day left - overdue" on her SOFI.
+        bare = sig.action == "uncovered"
+        strategy = short_strategy(pos.shown_strategy_name)
+        if getattr(pos, "assigned_on", None) is not None:
+            strategy += " → shares"
         rows.append({
             "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
             "Symbol": pos.underlying,
+            "Strategy": strategy,
             "Price now": px,
-            "You sold": strike_label,
-            "Room to it": (cushion["room_pct"] * 100) if cushion else None,
-            "Strategy": short_strategy(pos.shown_strategy_name),
-            "Days left": pos.dte_left(),
+            # Text, already formatted: Streamlit draws a missing value as
+            # "None" whatever the Styler says, and on shares or a LEAPS with
+            # nothing sold these three have nothing to show.
+            "Your strike": strike_label or _BLANK,
+            "Room": f"{cushion['room_pct'] * 100:+.1f}%" if cushion else _BLANK,
+            "Days left": (_BLANK if bare or pos.dte_left() is None
+                          else str(int(pos.dte_left()))),
             # A trade she is holding to expiration on purpose has no 21-day
             # decision to date - saying "overdue" there would nag her about a
             # rule she has already, deliberately, stepped outside.
-            "Decide by": ("at expiry"
+            "Decide by": (_BLANK if bare
+                          else "at expiry"
                           if getattr(pos, "awaiting_assignment", False)
                           or ("time_exit_dte" in it and it["time_exit_dte"] is None)
                           else _decide_by(pos, it.get("time_exit_dte", 21))),
-            "Credit $": pos.credit,
-            "Close now $": live.get("cost_to_close"),
+            "Money in": money_at_risk(pos),
             "P&L $": pl,
-            "ROI so far": so_far.pct if so_far else None,
-            "ROI / year": so_far.annual_pct if so_far else None,
-            "% kept": sig.profit_pct,
+            "P&L %": so_far.pct if so_far else None,
         })
     return pd.DataFrame(rows)
+
+
+def _table_dollars(v) -> str:
+    """-$470, not $-470."""
+    if v is None or pd.isna(v):
+        return _BLANK
+    return f"-${abs(v):,.0f}" if v < 0 else f"${v:,.0f}"
+
+
+def _sign_colour(v) -> str:
+    if v is None or pd.isna(v) or v == 0:
+        return ""
+    return f"color: {theme.GREEN if v > 0 else theme.RED}; font-weight: 600"
+
+
+def positions_styled(df: pd.DataFrame):
+    """The open-trades table as shown: blanks where a column does not apply
+    (Streamlit prints a missing value as "None"), signed dollars, and the
+    result in green or red so winning and losing read at a glance."""
+    pl_cols = [c for c in ("P&L $", "P&L %") if c in df.columns]
+    return (df.style
+            .format({"Price now": "{:,.2f}", "Money in": _table_dollars,
+                     "P&L $": _table_dollars, "P&L %": "{:+.1f}%"},
+                    na_rep=_BLANK)
+            .map(_sign_colour, subset=pl_cols))
 
 
 def open_pl(pos, live: dict, sig) -> Optional[float]:
@@ -1323,57 +1369,48 @@ def priced_open_rois(priced: list) -> list:
 
 
 def positions_column_config():
-    # Widths are pixels on purpose: 11 columns of auto-sized text overflowed the
-    # page and forced a horizontal scrollbar. This budget totals ~1010px, which
-    # fits the content area on a laptop screen with the sidebar collapsed.
+    # Widths are pixels on purpose: auto-sized text overflowed the page and
+    # forced a horizontal scrollbar. This budget totals ~1010px, which fits the
+    # content area on a laptop screen with the sidebar collapsed. No formats
+    # here - positions_styled does them, so a missing value can be a blank.
     return {
         "What to do": st.column_config.TextColumn(width=125,
             help="Your own exit rules applied to live prices. Red = close, green = take "
                  "the win, amber = needs eyes on it."),
         "Symbol": st.column_config.TextColumn(width=70,
             help="The underlying you traded."),
-        "Price now": st.column_config.NumberColumn(format="%.2f", width=88,
+        "Strategy": st.column_config.TextColumn(width=150,
+            help="The strategy you opened, shortened to fit. The full name is in the "
+                 "trade's detail card below the table."),
+        "Price now": st.column_config.NumberColumn(width=85,
             help="What the underlying is trading at right now (about 15 minutes delayed)."),
-        "You sold": st.column_config.TextColumn(width=78,
+        "Your strike": st.column_config.TextColumn(width=85,
             help="The strike you SOLD that price is closest to - the one that matters. "
                  "C = a call you sold (trouble if price rises to it), P = a put you sold "
-                 "(trouble if price falls to it)."),
-        "Room to it": st.column_config.NumberColumn(format="%.1f%%", width=85,
+                 "(trouble if price falls to it). Blank when nothing is sold against "
+                 "the trade."),
+        "Room": st.column_config.TextColumn(width=75, alignment="right",
             help="How far price still has to move to reach that strike. Bigger is safer. "
                  "Under 1.5% your SOP says consider rolling; below zero the strike is "
                  "already breached."),
-        "Strategy": st.column_config.TextColumn(width=160,
-            help="The strategy you opened, shortened to fit. The full name is in the "
-                 "trade's detail card below the table."),
-        "Days left": st.column_config.NumberColumn(format="%d", width=75,
+        "Days left": st.column_config.TextColumn(width=72, alignment="right",
             help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
-                 "for a net credit. Never hold past it without deciding."),
+                 "for a net credit. Blank on shares with no call sold yet."),
         "Decide by": st.column_config.TextColumn(width=95,
             help="The date your 21-day time exit lands on. Before this day you are "
                  "just holding; on it you decide - close, or roll for a credit. "
                  "\"Today\" or \"overdue\" means that day has arrived."),
-        "Credit $": st.column_config.NumberColumn(format="$%.0f", width=80,
-            help="What the legs you hold now sold for - your 50% target is "
-                 "measured on it. After a roll that is the new legs only; the "
-                 "roll credits are in P&L. On a PMCC or covered call it is the "
-                 "short call only - the LEAPS or the shares are not in it."),
-        "Close now $": st.column_config.NumberColumn(format="$%.0f", width=95,
-            help="What it costs to buy the short side back right now (mid prices)."),
-        "P&L $": st.column_config.NumberColumn(format="$%.0f", width=78,
+        "Money in": st.column_config.NumberColumn(width=90,
+            help="What this trade has at risk: a spread's max loss, a cash secured "
+                 "put's strike less the premium, the cash laid out for shares or a "
+                 "LEAPS. P&L % is measured on it, same as the Journal."),
+        "P&L $": st.column_config.NumberColumn(width=85,
             help="What the whole trade is worth if you closed it today - your "
-                 "banked roll credits are counted in, and on a PMCC or covered "
-                 "call the long leg too."),
-        "ROI so far": st.column_config.NumberColumn(format="%+.1f%%", width=82,
-            help="The P&L ÷ the money this trade has at risk - a spread's max "
-                 "loss, a cash secured put's strike less the premium, the cash "
-                 "laid out for shares or a LEAPS. Same measure as the Journal."),
-        "ROI / year": st.column_config.NumberColumn(format="%+.0f%%", width=86,
-            help="ROI so far x 365 ÷ days held so far. Early in a trade this "
-                 "swings wildly - a good first two days reads as a huge number."),
-        "% kept": st.column_config.NumberColumn(format="%.0f%%", width=76,
-            help="How much of the SHORT CALL's credit is yours so far. Your SOP "
-                 "takes the win at 50%. On a PMCC this is about the call only - "
-                 "the P&L column is the whole trade."),
+                 "banked roll credits are counted in, and on a PMCC, covered call "
+                 "or LEAPS the long leg or shares too. Green is up, red is down."),
+        "P&L %": st.column_config.NumberColumn(width=75,
+            help="The P&L ÷ Money in. The credit, the cost to close and how much "
+                 "of the credit you have kept are on the trade's card below."),
     }
 
 

@@ -953,3 +953,18 @@ def test_an_event_this_version_does_not_know_is_not_read_as_a_new_trade():
     assert len(positions) == 1
     assert positions[0].note == "first note"
 
+
+
+def test_bare_shares_show_no_expiry_in_the_open_trades_table():
+    """Her SOFI: a put assigned, the call against it bought back. The trade kept
+    the bought-back call's expiry, and the table said "1 day left - overdue"
+    about shares that expire never."""
+    from src.engine.exit_rules import ExitSignal
+    from ui import components
+
+    p = parse_rows(COLUMNS, [_opened()])[0]
+    sig = ExitSignal(action="uncovered", headline="", reason="", tone="neutral")
+    row = components.positions_dataframe(
+        [{"position": p, "live": {}, "signal": sig}]).iloc[0]
+    assert row["Days left"].strip() == ""
+    assert row["Decide by"].strip() == ""
