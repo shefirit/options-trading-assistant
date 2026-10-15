@@ -17,6 +17,7 @@ from ui.trades.actions import (
     _pmcc_roi_strip,
     _covered_model_roi_strip,
     _close_form,
+    _close_one_side_form,
     _roll_form,
     _sell_long_leg_form,
     _wheel_panel,
@@ -224,6 +225,10 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
         # wing not yet in the log, the other for a wing already in it, and
         # using the wrong one would write the same wing twice.
         _merge_wing_form(p, all_open or [])
+        # The condor's own partial exit: one side bought back as a vertical,
+        # the other left running. Before the full close, for the same reason
+        # the leg form is - it is the decision the close button swallowed.
+        _close_one_side_form(p, provider)
         # Her third way out of a credit spread: sell the long put and let the
         # short one assign you. Offered before the close button, because it is
         # the decision the close button used to swallow.

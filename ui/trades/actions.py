@@ -1569,6 +1569,106 @@ def _add_wing_form(p) -> None:
                 st.rerun()
 
 
+def _wing_legs(p, kind: OptionType):
+    """(short, long) of one side of a condor, or None when that side is not a
+    single sold/bought pair."""
+    shorts = [l for l in p.legs if l.option_type is kind and l.action is Action.SELL]
+    longs = [l for l in p.legs if l.option_type is kind and l.action is Action.BUY]
+    if len(shorts) != 1 or len(longs) != 1:
+        return None
+    return shorts[0], longs[0]
+
+
+def _close_one_side_form(p, provider, kp: str = "detail") -> None:
+    """Record buying back ONE side of an iron condor, the other left open.
+
+    Her ask (2026-10-15), after closing the CRWD 240/250 call side the day
+    before it expired with the stock between its strikes and keeping the
+    260/250 put side: "i don't have this option to close only one side". The
+    close form ends the whole trade, and the leg form takes off one leg at a
+    time - neither is what one vertical order does.
+    """
+    import datetime as dt
+
+    if p.status != "open" or p.is_debit or not p.is_iron_condor_shape:
+        return
+    sides = [k for k in (OptionType.CALL, OptionType.PUT) if _wing_legs(p, k)]
+    if len(sides) != 2:
+        return
+
+    def label(kind):
+        short, long_ = _wing_legs(p, kind)
+        exp = p.leg_expiration(short)
+        when = f" (expires {exp.strftime('%d/%m')})" if exp else ""
+        return f"The {kind.value} side, {short.strike:g} / {long_.strike:g}{when}"
+
+    with st.expander("✂️ Close one side, keep the other open",
+                     key=f"sidewrap_{kp}_{p.trade_id}"):
+        theme.note(
+            "For when you bought back one side of the condor as a single "
+            "vertical in thinkorswim and left the other side running. Record "
+            "the fill here - the trade stays open as a plain credit spread.")
+        labels = [label(k) for k in sides]
+        pick = st.radio("Which side did you close?", labels,
+                        key=f"sidepick_{kp}_{p.trade_id}")
+        kind = sides[labels.index(pick)]
+        other = OptionType.PUT if kind is OptionType.CALL else OptionType.CALL
+        short, long_ = _wing_legs(p, kind)
+        exp = p.leg_expiration(short) or p.expiration
+        contracts = int(p.contracts or 1)
+
+        c1, c2 = st.columns(2)
+        closed_on = c1.date_input("Closed on", value=dt.date.today(),
+                                  max_value=dt.date.today(),
+                                  key=f"sidewhen_{kp}_{p.trade_id}",
+                                  format=components.DATE_FMT)
+        suggested = None
+        s_mid = _live_leg_mid(provider, p.underlying, short.strike, exp,
+                              kind, contracts)
+        l_mid = _live_leg_mid(provider, p.underlying, long_.strike, exp,
+                              kind, contracts)
+        if s_mid is not None and l_mid is not None:
+            suggested = max(s_mid - l_mid, 0.0)
+        with c2:
+            cost = _fill_price_input(
+                "Price you PAID to close that side",
+                f"sidecost_{kp}_{p.trade_id}", contracts,
+                default_total=suggested,
+                help="The debit on your TOS fill for that vertical, per "
+                     "share - the app does the x100 and the contracts. Type "
+                     "0 if it expired worthless.")
+        if suggested:
+            theme.note("**Prefilled from today's chain.** Change it to the "
+                       "price on your fill.")
+
+        collected_after = p.whole_trade_collected - float(cost)
+        rest = _wing_legs(p, other)
+        width = (abs(rest[0].strike - rest[1].strike) * 100 * contracts
+                 if rest else 0.0)
+        st.markdown(components._esc(
+            f"Recording this banks **-${float(cost):,.0f}** today. The whole "
+            f"trade has then collected **${collected_after:,.0f}** net, and "
+            f"the {other.value} side still open can cost at most "
+            f"${width:,.0f} more - so the trade finishes somewhere between "
+            f"**${collected_after:,.0f}** and **${collected_after - width:,.0f}**."))
+        note = st.text_input("Note (optional)", key=f"sidenote_{kp}_{p.trade_id}")
+
+        if st.button("Record the side I closed", type="primary",
+                     key=f"sidebtn_{kp}_{p.trade_id}"):
+            from src.logging_tools.trade_logger import close_wing
+            close_wing(p.trade_id, p.underlying, p.strategy_name, kind.value,
+                       cash=-float(cost), short_strike=float(short.strike),
+                       long_strike=float(long_.strike), note=note,
+                       closed_on=closed_on, account=p.account)
+            st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
+            st.session_state["ql_flash"] = (
+                f"Recorded: the {kind.value} side of {p.underlying} closed for "
+                f"${float(cost):,.0f}. The {other.value} side is still open and "
+                f"is now tracked as a {other.value} credit spread.")
+            st.rerun()
+
+
 def _merge_wing_form(p, all_open) -> None:
     """Two rows that are really one iron condor - say so, without re-typing.
 

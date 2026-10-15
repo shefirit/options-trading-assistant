@@ -141,6 +141,11 @@ class LegCloseEvent(BaseModel):
     # closing ONE of the two, and recording it as the whole leg would report
     # her out of a position she is still in.
     quantity: Optional[int] = None
+    # True when a whole SIDE of a condor came off - both its legs, as one
+    # order - rather than one leg. Written as its own "wingclose" row; kept in
+    # leg_closes so the ledger, the month report and the story count its cash
+    # the same way, on the day it moved.
+    wing: bool = False
     note: str = ""
 
 
@@ -699,7 +704,29 @@ class Position(BaseModel):
             return "poor_mans_covered_call"
         if self.is_iron_condor_shape:
             return "iron_condor"
+        side = self.spread_side_left
+        if side is not None:
+            return f"{side}_credit_spread"
         return self.strategy_key
+
+    @property
+    def spread_side_left(self) -> Optional[str]:
+        """"put" or "call" when one side of a condor was closed and a single
+        vertical is left - otherwise None.
+
+        Her CRWD trade was logged as a CALL credit spread; with the call side
+        bought back on 2026-10-15 what she holds is a put credit spread, and
+        running the call page's rules over it would be wrong.
+        """
+        if not any(e.wing for e in self.leg_closes):
+            return None
+        if self.strategy_key not in ("put_credit_spread", "call_credit_spread",
+                                     "iron_condor"):
+            return None
+        sides = {l.option_type for l in self.legs if l.action is Action.SELL}
+        if len(sides) != 1:
+            return None
+        return next(iter(sides)).value
 
     @property
     def shown_strategy_name(self) -> str:
@@ -720,6 +747,9 @@ class Position(BaseModel):
         if (self.effective_strategy_key == "iron_condor"
                 and self.strategy_key != "iron_condor"):
             return "Iron Condor"
+        if (self.spread_side_left is not None
+                and self.effective_strategy_key != self.strategy_key):
+            return _current_name(self.effective_strategy_key, self.strategy_name)
         return self.strategy_name
 
     @property
@@ -1118,6 +1148,41 @@ def _apply_leg_close(pos: Position, event: LegCloseEvent) -> None:
         pos.expiration = pos.near_short_expiration or pos.expiration
 
 
+def _apply_wing_close(pos: Position, event: LegCloseEvent) -> None:
+    """One side of a condor bought back as a vertical; the other carries on.
+
+    What she holds afterwards is a plain credit spread, and the app has to
+    read it as one:
+
+      the legs     every leg on that side goes - short and long together
+      the credit   the 50% target measures the side still open, so `credit`
+                   drops to that wing's share. Leaving the closed wing's
+                   credit in would set a target the remaining spread can
+                   never reach.
+      the ledger   the cost is banked on its own day, like a roll, so the
+                   whole-trade stop and the month report both see it
+      the risk     _reprice_risk runs after every event and prices what is
+                   left as one vertical
+    """
+    pos.leg_closes.append(event)
+    try:
+        kind = OptionType(event.option_type)
+    except ValueError:
+        return
+    if not any(l.option_type is kind for l in pos.legs):
+        return
+    split = (_wing_credits(pos)
+             if not pos.is_debit and pos.is_iron_condor_shape else None)
+    pos.legs = [l for l in pos.legs if l.option_type is not kind]
+    if split is not None:
+        pos.credit = round(split.get(_other_side(kind).value, pos.credit), 2)
+    pos.wing_credit = {}
+    if not pos.legs:
+        pos.expiration = None
+    elif not pos.is_debit:
+        pos.expiration = pos.near_short_expiration or pos.expiration
+
+
 def _legs_from_json(raw: Any) -> list[Leg]:
     """Legs out of an edit's changes block - same shape the open row stores.
 
@@ -1446,7 +1511,10 @@ def _reprice_risk(pos: Position) -> None:
         return
 
     # A plain two-leg vertical, one side only: risk is the width less what she
-    # has collected, and the broker holds exactly that.
+    # has collected, and the broker holds exactly that. Wings count: a condor
+    # with one side closed is a vertical again, and the credit the merged or
+    # added wing brought in is still hers against what is left.
+    collected += sum(w.credit for w in pos.wings)
     for side in (puts, calls):
         if (calls if side is puts else puts) or len(side) != 2:
             continue
@@ -1535,6 +1603,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     roll_seq: dict[str, int] = {}
     assigns: list[tuple[str, dict[str, Any]]] = []
     leg_closes: list[tuple[str, LegCloseEvent]] = []
+    wing_closes: list[tuple[str, LegCloseEvent]] = []
     wings: list[tuple[str, WingEvent]] = []
     # (absorbed trade, target trade, day the merge was written)
     merges: list[tuple[str, str, Optional[date]]] = []
@@ -1593,6 +1662,19 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
                 side=str(data.get("side") or "buy"),
                 for_assignment=bool(data.get("for_assignment")),
                 quantity=(int(_to_float(data.get("qty")) or 0) or None),
+                note=str(_get(row, idx, "Notes", 11) or ""),
+            )))
+            continue
+
+        if event == "wingclose" and trade_id:
+            data, _ = _parse_details(_get(row, idx, "Details JSON", 17))
+            wing_closes.append((trade_id, LegCloseEvent(
+                closed_on=_to_date(_get(row, idx, "Date", 0)),
+                cash=_to_float(_get(row, idx, "Realized P&L $", 16)) or 0.0,
+                strike=_to_float(data.get("short")),
+                option_type=str(data.get("type") or "call"),
+                side="sell",
+                wing=True,
                 note=str(_get(row, idx, "Notes", 11) or ""),
             )))
             continue
@@ -1800,6 +1882,17 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_roll(pos, roll)
+
+    # A whole side coming off goes last. It removes legs that a merge brought
+    # in and that later rolls moved - her CRWD call side sat on the trade the
+    # put wing was merged INTO, and the puts it left behind were rolled twice
+    # after the merge - so everything that builds the condor has to be done
+    # before a side of it can be taken away.
+    for trade_id, wc in sorted(wing_closes,
+                               key=lambda r: r[1].closed_on or date.min):
+        pos = opens.get(trade_id)
+        if pos is not None:
+            _apply_wing_close(pos, wc)
 
     # Every position, not only the rolled ones. _reprice_risk used to run at the
     # end of a roll and nowhere else, so a trade she never rolled kept whatever
@@ -2402,7 +2495,8 @@ def story(position: Position) -> list[dict[str, Any]]:
     for lc in position.leg_closes:
         steps.append({
             "on": lc.closed_on,
-            "what": ("You sold the long leg" if lc.side == "buy"
+            "what": (f"You closed the {lc.option_type} side" if lc.wing
+                     else "You sold the long leg" if lc.side == "buy"
                      else "You bought one short leg back"),
             "detail": lc.note or _leg_close_detail(lc),
             "cash": round(lc.cash, 2),
@@ -2557,6 +2651,8 @@ def _and(items) -> str:
 
 def _leg_close_detail(event: LegCloseEvent) -> str:
     """What came off, and what she was left holding."""
+    if event.wing:
+        return f"Bought the {event.option_type} side back"
     what = (f"the {event.strike:g} {event.option_type}"
             if event.strike else f"the long {event.option_type}")
     if event.side == "buy":
