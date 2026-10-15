@@ -519,6 +519,61 @@ def build_leg_close_row(
     ]
 
 
+def build_wing_close_row(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    option_type: str,
+    cash: float,
+    short_strike: Optional[float] = None,
+    long_strike: Optional[float] = None,
+    note: str = "",
+    closed_on: Optional[date] = None,
+    account: str = "",
+) -> list[Any]:
+    """The "wingclose" event row - one whole side of an iron condor bought
+    back, the other side left open.
+
+    Her CRWD condor, 2026-10-15: the 240/250 call side expired the next day
+    with the stock between its strikes, so she closed that vertical as one
+    order and kept the 260/250 put side running. A "close" row would have
+    ended the put side too, and two "legclose" rows could only bank the cash -
+    they left the call wing's credit inside the 50% target and the card still
+    reading the trade as a condor.
+
+      cash   signed: negative when buying the side back cost her, which is
+             the usual case. Banked on closed_on, like a roll.
+
+    Its own event rather than a flavour of legclose, so a version of the app
+    that does not know it skips the row instead of misreading it as one leg.
+    """
+    option_type = "call" if str(option_type).lower() == "call" else "put"
+    strikes = " / ".join(f"{k:g}" for k in (short_strike, long_strike) if k)
+    other = "put" if option_type == "call" else "call"
+    text = note or (f"Closed the {strikes + ' ' if strikes else ''}{option_type} "
+                    f"side - the {other} side stays open")
+    return [
+        (closed_on or date.today()).isoformat(),
+        underlying,
+        strategy_name,
+        strikes,
+        "", "", "",                   # delta/dte/contracts - on the open row
+        "",                           # Credit $ - this is not premium sold
+        "", "", "",                   # max loss/BP/passed SOP - recomputed on replay
+        text,
+        trade_id,
+        "wingclose",
+        "",                           # Expiration - the other side keeps its own
+        "",                           # Exit Cost $ - the trade is not closed
+        round(float(cash), 2),        # Realized P&L $: the cash banked today
+        json.dumps({"type": option_type,
+                    **({"short": float(short_strike)} if short_strike else {}),
+                    **({"long": float(long_strike)} if long_strike else {})},
+                   separators=(",", ":")),
+        _account(account),
+    ]
+
+
 def build_assign_row(
     trade_id: str,
     underlying: str,

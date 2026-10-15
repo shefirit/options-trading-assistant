@@ -2017,7 +2017,8 @@ def month_trades_dataframe(rows: list[dict]) -> pd.DataFrame:
         leg = r.get("leg_close")
         if tag == "legclose" and leg is not None:
             out.append({
-                "Result": _month_result_word(p, tag),
+                "Result": ("✂️ Side closed" if getattr(leg, "wing", False)
+                           else _month_result_word(p, tag)),
                 "Symbol": p.underlying,
                 "Strategy": p.strategy_name,
                 "Opened": p.opened,

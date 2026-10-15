@@ -16,7 +16,7 @@ from src.logging_tools.row import (COLUMNS, build_add_wing_row,
                                    build_assign_row, build_close_row,
                                    build_edit_row, build_leg_close_row,
                                    build_reopen_row, build_roll_row, build_row,
-                                   new_trade_id)
+                                   build_wing_close_row, new_trade_id)
 
 
 # The last TWA tracker copy, for the Settings panel: {"ok", "at", "message"}.
@@ -222,6 +222,31 @@ def close_leg(
                               strike=strike, option_type=option_type, side=side,
                               for_assignment=for_assignment, note=note,
                               closed_on=closed_on, account=account)
+    return _append(row)
+
+
+def close_wing(
+    trade_id: str,
+    underlying: str,
+    strategy_name: str,
+    option_type: str,
+    cash: float,
+    short_strike: Optional[float] = None,
+    long_strike: Optional[float] = None,
+    note: str = "",
+    closed_on: Optional[date] = None,
+    account: str = "",
+) -> tuple[str, bool]:
+    """Record that one whole side of an iron condor was bought back while the
+    other side stays open (a "wingclose" event on the same Trade ID).
+
+    cash is signed - negative when closing the side cost her - and is banked
+    on closed_on, which defaults to today. Returns (destination, went_to_sheet).
+    """
+    row = build_wing_close_row(trade_id, underlying, strategy_name,
+                               option_type, cash, short_strike=short_strike,
+                               long_strike=long_strike, note=note,
+                               closed_on=closed_on, account=account)
     return _append(row)
 
 
