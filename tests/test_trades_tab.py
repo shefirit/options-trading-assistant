@@ -268,7 +268,8 @@ def test_the_table_answers_is_this_winning_without_a_click(app_with_one_pmcc):
     tables = [d.value for d in at.dataframe if "What to do" in list(d.value.columns)]
     assert tables, "expected the open trades table"
     cols = list(tables[0].columns)
-    for col in ("What to do", "Symbol", "Days left", "Decide by", "% kept", "P&L $"):
+    for col in ("What to do", "Symbol", "Days left", "Decide by", "Money in",
+                "P&L $", "P&L %"):
         assert col in cols, f"missing from the table: {col}"
 
 
@@ -891,3 +892,19 @@ def test_an_early_discretionary_close_is_not_scored_as_by_the_rules():
     for reason in ("Profit target (50%) hit", "21 DTE time exit",
                    "Stop loss hit", "Expired worthless"):
         assert mr._exit_bucket(reason)[2] is True, reason
+
+
+def test_the_open_trades_table_shows_blanks_and_signed_dollars():
+    """Rita: the table "doesn't make sense". Shares and LEAPS have no strike or
+    expiry, and those cells printed "None"; a loss printed as "$-470"."""
+    import pandas as pd
+
+    from ui import components
+
+    df = pd.DataFrame([{"Symbol": "TEST", "Your strike": None, "Room": None,
+                        "Days left": None, "Money in": 895.0,
+                        "P&L $": -470.0, "P&L %": -13.9}])
+    html = components.positions_styled(df).to_html()
+    assert "None" not in html and "nan" not in html
+    assert "-$470" in html and "$-470" not in html
+    assert "-13.9%" in html
