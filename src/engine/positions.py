@@ -1254,6 +1254,14 @@ def _apply_edit(pos: Optional[Position],
         cash = _to_float(changes["open_cash"])
         if cash is not None:
             pos.open_cash = cash
+    if "shares_cost" in changes:
+        # A share price typed wrong on a Buy / Write or covered call: the
+        # shares are most of the money, so the fill has to be correctable.
+        shares = _to_float(changes["shares_cost"])
+        if shares is not None:
+            pos.shares_cost = shares
+    if "underlying_price" in changes:
+        pos.underlying_price_at_entry = _to_float(changes["underlying_price"])
     if "max_loss" in changes:
         pos.max_loss = _to_float(changes["max_loss"]) or 0.0
     if "buying_power" in changes:

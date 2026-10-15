@@ -160,7 +160,8 @@ def resize_bought_call(strat: dict[str, Any], trade: Trade,
 
 def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
                       old_credit: float, old_open_cash: float,
-                      old_shares_cost: float, old_contracts: int) -> dict[str, float]:
+                      old_shares_cost: float, old_contracts: int,
+                      new_share_price: Optional[float] = None) -> dict[str, float]:
     """Fresh sizing after she corrects a trade's details.
 
     Correcting the contracts or a strike changes what the trade can lose, and
@@ -197,11 +198,19 @@ def resize_after_edit(strat: dict[str, Any], trade: Trade, credit_total: float,
         # Per contract, so a corrected contract count scales the cost with it.
         per_contract = (float(old_credit) - float(old_open_cash)) / old_contracts
         leaps_cost = per_contract * max(int(trade.contracts), 1)
-    elif basis in ("shares_plus_protection", "ratio_risk"):
+    elif basis in ("shares_plus_protection", "ratio_risk", "shares"):
+        # "shares" (Buy / Write) belongs here too: without it the share price
+        # fell back to the entry quote instead of what she actually paid.
         share_price = float(old_shares_cost) / (100.0 * old_contracts) or None
-        per_contract = (float(old_credit) - float(old_shares_cost)
-                        - float(old_open_cash)) / old_contracts
-        protection = per_contract * max(int(trade.contracts), 1)
+        if basis != "shares":
+            per_contract = (float(old_credit) - float(old_shares_cost)
+                            - float(old_open_cash)) / old_contracts
+            protection = per_contract * max(int(trade.contracts), 1)
+        # A corrected fill price replaces the recovered one. The protection
+        # above is still recovered against the OLD share cost, which is the
+        # one the stored ledger was built from.
+        if new_share_price:
+            share_price = float(new_share_price)
 
     return sizing_from_fill(trade, strat, credit_total,
                             leaps_cost_total=leaps_cost,

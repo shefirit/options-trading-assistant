@@ -805,6 +805,60 @@ def test_correcting_a_pmcc_leaps_cost_scales_with_the_contracts():
     assert fresh["buying_power"] == pytest.approx(18000.0)
 
 
+def _buy_write_row(px: float = 10.0):
+    """100 shares bought, no call sold yet - a Buy / Write as Quick Log saves it.
+    Invented numbers; this repo is public."""
+    from src.engine.config_loader import load_strategies
+    from src.engine.quick_log import sizing_from_fill
+    from src.logging_tools.row import build_row
+
+    strat = load_strategies()["weekly_covered_call"]
+    trade = Trade(strategy_key="weekly_covered_call", underlying="TEST",
+                  contracts=1, legs=[], underlying_price=px)
+    sizing = sizing_from_fill(trade, strat, 0.0, share_price=px)
+    return strat, trade, build_row(trade, strat["name"], {**sizing, "account": "real"},
+                                   True, "", trade_id="BW1",
+                                   opened_on=date(2026, 7, 1))
+
+
+def test_correcting_a_buy_write_share_price_reprices_the_shares():
+    """Her case: the fill was 10.05 but 10.00 got typed. The correction has to
+    move the share cost, the cash out and the risk together."""
+    from src.engine.quick_log import resize_after_edit
+
+    strat, trade, opened = _buy_write_row(10.0)
+    fresh = resize_after_edit(strat, trade, 0.0, old_credit=0.0,
+                              old_open_cash=-1000.0, old_shares_cost=1000.0,
+                              old_contracts=1, new_share_price=10.05)
+    assert fresh["shares_cost"] == pytest.approx(1005.0)
+    assert fresh["open_cash"] == pytest.approx(-1005.0)
+
+    fix = build_edit_row("BW1", "TEST", strat["name"],
+                         {"shares_cost": fresh["shares_cost"],
+                          "open_cash": fresh["open_cash"],
+                          "max_loss": fresh["max_loss"],
+                          "buying_power": fresh["buying_power"],
+                          "underlying_price": 10.05})
+    p = parse_rows(COLUMNS, [opened, fix])[0]
+    assert p.shares_cost == pytest.approx(1005.0)
+    assert p.open_cash == pytest.approx(-1005.0)
+    assert p.underlying_price_at_entry == pytest.approx(10.05)
+
+
+def test_changing_buy_write_contracts_keeps_the_price_she_paid():
+    """Resizing used to drop the share price on a Buy / Write and fall back to
+    the entry quote. It has to scale what she actually paid."""
+    from src.engine.quick_log import resize_after_edit
+
+    strat, _, _ = _buy_write_row(10.0)
+    two = Trade(strategy_key="weekly_covered_call", underlying="TEST",
+                contracts=2, legs=[], underlying_price=12.0)
+    fresh = resize_after_edit(strat, two, 0.0, old_credit=0.0,
+                              old_open_cash=-1000.0, old_shares_cost=1000.0,
+                              old_contracts=1)
+    assert fresh["shares_cost"] == pytest.approx(2000.0)
+
+
 # ---------- taking back a close that never happened (the "reopen" event) ----------
 def test_a_reopen_puts_the_trade_back_on_the_books():
     """Her actual complaint: a close landed on a trade she had not closed, and

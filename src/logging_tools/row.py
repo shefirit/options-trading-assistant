@@ -342,7 +342,7 @@ def build_merge_row(
 # different trade, and the honest fix for that is delete and re-log.
 EDITABLE = ("opened_on", "expiration", "contracts", "credit", "open_cash",
             "legs", "strikes", "max_loss", "buying_power", "bp_effect",
-            "account", "note")
+            "account", "note", "shares_cost", "underlying_price")
 
 
 def build_edit_row(

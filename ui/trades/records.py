@@ -415,6 +415,23 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                         if is_bought and put_credit else "")))
             if abs(paid - abs(old_paid)) > 0.005:
                 bits.append(f"LEAPS cost ${abs(old_paid):,.0f} → ${paid:,.0f}")
+        # The share fill, on every shape that holds shares. Without it a share
+        # price typed wrong (8.90 for an 8.95 fill) could not be corrected at
+        # all, and the shares are most of the money in these trades.
+        holds_shares = basis in ("shares", "shares_plus_protection", "ratio_risk")
+        old_px = (float(p.shares_cost or 0.0) / (100.0 * max(int(p.contracts or 1), 1))
+                  if holds_shares else 0.0)
+        new_px = old_px
+        if holds_shares:
+            new_px = float(st.number_input(
+                "Price you paid per share $", value=round(old_px, 2),
+                min_value=0.0, step=0.01, format="%.2f",
+                key=f"ed_sharepx_{p.trade_id}",
+                help="What one share cost you, as thinkorswim shows the fill. "
+                     "The app does the x100 and the contracts."))
+            if abs(new_px - old_px) > 0.005:
+                bits.append(f"share price ${old_px:,.2f} → ${new_px:,.2f}")
+        px_changed = holds_shares and abs(new_px - old_px) > 0.005
         book = c5.selectbox(
             "Which book", ["real", "paper"],
             index=0 if (p.account or "real") == "real" else 1,
@@ -445,7 +462,7 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
         # numbers the dashboard and the monthly limit are built on.
         paid_changed = paid is not None and abs(paid - abs(old_paid or 0.0)) > 0.005
         if changes.get("legs") or "contracts" in changes or paid_changed or \
-                abs(credit - day_one_credit) > 0.005:
+                px_changed or abs(credit - day_one_credit) > 0.005:
             try:
                 trade = Trade(strategy_key=p.strategy_key, underlying=p.underlying,
                               contracts=contracts, legs=legs,
@@ -469,7 +486,12 @@ def _edit_details_form(editable: list, labels: list[str], strategies: dict) -> N
                         old_credit=float(p.open_credit or p.credit or 0),
                         old_open_cash=old_cash,
                         old_shares_cost=float(p.shares_cost or 0.0),
-                        old_contracts=int(p.contracts or 1))
+                        old_contracts=int(p.contracts or 1),
+                        new_share_price=new_px if px_changed else None)
+                if holds_shares:
+                    changes["shares_cost"] = fresh["shares_cost"]
+                if px_changed:
+                    changes["underlying_price"] = round(new_px, 2)
                 changes.update({
                     "credit": fresh["credit"], "open_cash": fresh["open_cash"],
                     "max_loss": fresh["max_loss"],
