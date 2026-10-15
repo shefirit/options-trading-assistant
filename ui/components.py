@@ -1247,12 +1247,13 @@ _BLANK = "\u00a0"   # an empty cell; a missing value renders as "None"
 def positions_dataframe(items: list[dict]) -> pd.DataFrame:
     """items: [{"position": Position, "live": dict, "signal": ExitSignal}]
 
-    The same columns for every shape of trade, so each one means something on
-    shares and LEAPS too. Rita, on the old table: "it doesn't make sense".
-    Credit, cost to close and % kept only apply to a sold option, so on shares
-    and LEAPS they read $0, a negative "close" and "None" - they live on the
-    trade's card now. ROI / year went too: a few days in it annualizes a $6 day
-    into +226%. The Journal keeps it, on closed trades where it means something.
+    Plain-language headings, and every cell readable on its own. Rita, twice:
+    "it doesn't make sense" and "make this table much more friendly and clear".
+    So no column needs a formula to read it: "9% away" rather than +9.4,
+    "now" rather than "overdue", and the share of the premium kept - the
+    number her 50% rule is about - rather than a return on the cash behind a
+    put, which showed NFLX $63 up as "+1%". The credit, cost to close and
+    return figures are on the trade's card below the table.
     """
     from src.engine.positions import strike_cushion
     from src.engine.roi import money_at_risk
@@ -1262,69 +1263,116 @@ def positions_dataframe(items: list[dict]) -> pd.DataFrame:
         pos, live, sig = it["position"], it["live"], it["signal"]
         px = live.get("underlying_price")
         cushion = strike_cushion(pos, px)
-        strike_label = None
-        if cushion:
-            side = "C" if cushion["option_type"] == "call" else "P"
-            strike_label = f"{cushion['strike']:g} {side}"
-        pl = open_pl(pos, live, sig)
-        so_far = open_roi(pos, pl)
         # Shares with nothing sold against them: no expiry to count down to
         # and no 21-day decision. An assigned put keeps the expiry of the call
         # she bought back, which read as "1 day left - overdue" on her SOFI.
         bare = sig.action == "uncovered"
-        strategy = short_strategy(pos.shown_strategy_name)
-        if getattr(pos, "assigned_on", None) is not None:
-            strategy += " → shares"
+        if bare or pos.dte_left() is None:
+            decide = _BLANK
+        elif (getattr(pos, "awaiting_assignment", False)
+              or ("time_exit_dte" in it and it["time_exit_dte"] is None)):
+            # Held to expiration on purpose: no 21-day decision to nag about.
+            decide = "at expiry"
+        else:
+            decide = _decide_by(pos, it.get("time_exit_dte", 21))
+            if decide in ("overdue", "today"):
+                decide = "now"
         rows.append({
-            "What to do": _SIGNAL_WORD.get(sig.action, sig.action),
-            "Symbol": pos.underlying,
-            "Strategy": strategy,
-            "Price now": px,
+            "Action": _SIGNAL_WORD.get(sig.action, sig.action),
+            "Stock": pos.underlying,
+            "The trade": _trade_label(pos, cushion),
+            "Stock now": px,
             # Text, already formatted: Streamlit draws a missing value as
-            # "None" whatever the Styler says, and on shares or a LEAPS with
-            # nothing sold these three have nothing to show.
-            "Your strike": strike_label or _BLANK,
-            "Room": f"{cushion['room_pct'] * 100:+.1f}%" if cushion else _BLANK,
+            # "None" whatever the Styler says.
+            "Room to your strike": _room_label(cushion),
             "Days left": (_BLANK if bare or pos.dte_left() is None
                           else str(int(pos.dte_left()))),
-            # A trade she is holding to expiration on purpose has no 21-day
-            # decision to date - saying "overdue" there would nag her about a
-            # rule she has already, deliberately, stepped outside.
-            "Decide by": (_BLANK if bare
-                          else "at expiry"
-                          if getattr(pos, "awaiting_assignment", False)
-                          or ("time_exit_dte" in it and it["time_exit_dte"] is None)
-                          else _decide_by(pos, it.get("time_exit_dte", 21))),
-            "Money in": money_at_risk(pos),
-            "P&L $": pl,
-            "P&L %": so_far.pct if so_far else None,
+            "Decide by": decide,
+            "Profit / loss": open_pl(pos, live, sig),
+            "Premium kept (goal 50%)": _kept_label(sig.profit_pct),
+            "Cash tied up": money_at_risk(pos),
         })
     return pd.DataFrame(rows)
 
 
+def _trade_label(pos, cushion) -> str:
+    """"CSP · sold 66 put", "Buy / Write · 100 shares", "CSP → 100 shares"."""
+    name = short_strategy(pos.shown_strategy_name)
+    shares = f"{100 * int(pos.contracts or 1)} shares"
+    if getattr(pos, "assigned_on", None) is not None:
+        # The put was assigned: what she holds now is the shares.
+        name += " → " + ("shares" if cushion else shares)
+    elif not cushion and (pos.shares_cost or 0) > 0:
+        return f"{name} · {shares}"
+    if cushion:
+        name += f" · sold {cushion['strike']:g} {cushion['option_type']}"
+    return name
+
+
+def _room_label(cushion) -> str:
+    """How far the stock is from the strike she sold, in words. Her SOP says
+    consider rolling under 1.5%, so that gets the warning sign too."""
+    if not cushion:
+        return _BLANK
+    pct = cushion["room_pct"] * 100
+    size = f"{abs(pct):.1f}" if abs(pct) < 10 else f"{abs(pct):.0f}"
+    if size == "0.0":       # SOFI at 15.01 on a 15 strike read "0.0% away"
+        return "⚠️ right at it"
+    if pct < 0:
+        return f"⚠️ {size}% past it"
+    return f"{'⚠️ ' if pct < 1.5 else ''}{size}% away"
+
+
+def _kept_label(pct) -> str:
+    """Share of the premium sold that is hers so far. Under water reads
+    "losing" - a figure like -427% says nothing a red loss does not."""
+    if pct is None:
+        return _BLANK
+    return "losing" if pct < 0 else f"{pct:.0f}%"
+
+
 def _table_dollars(v) -> str:
-    """-$470, not $-470."""
+    """$6,460 - and -$470, not $-470."""
     if v is None or pd.isna(v):
         return _BLANK
     return f"-${abs(v):,.0f}" if v < 0 else f"${v:,.0f}"
 
 
+def _pl_dollars(v) -> str:
+    """+$64 / -$440 / $0."""
+    if v is None or pd.isna(v):
+        return _BLANK
+    return f"+${v:,.0f}" if round(v) > 0 else _table_dollars(v)
+
+
 def _sign_colour(v) -> str:
-    if v is None or pd.isna(v) or v == 0:
+    if v is None or pd.isna(v) or round(v) == 0:
         return ""
     return f"color: {theme.GREEN if v > 0 else theme.RED}; font-weight: 600"
 
 
+def _kept_colour(v) -> str:
+    """Green at the 50% goal - the take-the-win line - red when losing."""
+    if v == "losing":
+        return f"color: {theme.RED}; font-weight: 600"
+    try:
+        hit = float(str(v).rstrip("%")) >= 50
+    except ValueError:
+        return ""
+    return f"color: {theme.GREEN}; font-weight: 600" if hit else ""
+
+
 def positions_styled(df: pd.DataFrame):
-    """The open-trades table as shown: blanks where a column does not apply
-    (Streamlit prints a missing value as "None"), signed dollars, and the
-    result in green or red so winning and losing read at a glance."""
-    pl_cols = [c for c in ("P&L $", "P&L %") if c in df.columns]
-    return (df.style
-            .format({"Price now": "{:,.2f}", "Money in": _table_dollars,
-                     "P&L $": _table_dollars, "P&L %": "{:+.1f}%"},
-                    na_rep=_BLANK)
-            .map(_sign_colour, subset=pl_cols))
+    """The open-trades table as shown: signed dollars, and the result in green
+    or red so winning and losing read at a glance."""
+    styled = df.style.format({"Stock now": "{:,.2f}",
+                              "Profit / loss": _pl_dollars,
+                              "Cash tied up": _table_dollars}, na_rep=_BLANK)
+    if "Profit / loss" in df.columns:
+        styled = styled.map(_sign_colour, subset=["Profit / loss"])
+    if "Premium kept (goal 50%)" in df.columns:
+        styled = styled.map(_kept_colour, subset=["Premium kept (goal 50%)"])
+    return styled
 
 
 def open_pl(pos, live: dict, sig) -> Optional[float]:
@@ -1370,47 +1418,45 @@ def priced_open_rois(priced: list) -> list:
 
 def positions_column_config():
     # Widths are pixels on purpose: auto-sized text overflowed the page and
-    # forced a horizontal scrollbar. This budget totals ~1010px, which fits the
+    # forced a horizontal scrollbar. This budget totals ~1030px, which fits the
     # content area on a laptop screen with the sidebar collapsed. No formats
     # here - positions_styled does them, so a missing value can be a blank.
     return {
-        "What to do": st.column_config.TextColumn(width=125,
+        "Action": st.column_config.TextColumn(width=125,
             help="Your own exit rules applied to live prices. Red = close, green = take "
-                 "the win, amber = needs eyes on it."),
-        "Symbol": st.column_config.TextColumn(width=70,
-            help="The underlying you traded."),
-        "Strategy": st.column_config.TextColumn(width=150,
-            help="The strategy you opened, shortened to fit. The full name is in the "
-                 "trade's detail card below the table."),
-        "Price now": st.column_config.NumberColumn(width=85,
-            help="What the underlying is trading at right now (about 15 minutes delayed)."),
-        "Your strike": st.column_config.TextColumn(width=85,
-            help="The strike you SOLD that price is closest to - the one that matters. "
-                 "C = a call you sold (trouble if price rises to it), P = a put you sold "
-                 "(trouble if price falls to it). Blank when nothing is sold against "
-                 "the trade."),
-        "Room": st.column_config.TextColumn(width=75, alignment="right",
-            help="How far price still has to move to reach that strike. Bigger is safer. "
-                 "Under 1.5% your SOP says consider rolling; below zero the strike is "
-                 "already breached."),
-        "Days left": st.column_config.TextColumn(width=72, alignment="right",
-            help="Days to expiration. At 21 your SOP makes you decide: close, or roll "
-                 "for a net credit. Blank on shares with no call sold yet."),
-        "Decide by": st.column_config.TextColumn(width=95,
-            help="The date your 21-day time exit lands on. Before this day you are "
-                 "just holding; on it you decide - close, or roll for a credit. "
-                 "\"Today\" or \"overdue\" means that day has arrived."),
-        "Money in": st.column_config.NumberColumn(width=90,
-            help="What this trade has at risk: a spread's max loss, a cash secured "
-                 "put's strike less the premium, the cash laid out for shares or a "
-                 "LEAPS. P&L % is measured on it, same as the Journal."),
-        "P&L $": st.column_config.NumberColumn(width=85,
-            help="What the whole trade is worth if you closed it today - your "
-                 "banked roll credits are counted in, and on a PMCC, covered call "
-                 "or LEAPS the long leg or shares too. Green is up, red is down."),
-        "P&L %": st.column_config.NumberColumn(width=75,
-            help="The P&L ÷ Money in. The credit, the cost to close and how much "
-                 "of the credit you have kept are on the trade's card below."),
+                 "the win, amber = needs eyes on it. Click the row for the buttons."),
+        "Stock": st.column_config.TextColumn(width=55,
+            help="The stock, ETF or index you traded."),
+        "The trade": st.column_config.TextColumn(width=190,
+            help="The strategy, and the option you SOLD that matters most - the "
+                 "one closest to the stock price. The full details are on the "
+                 "trade's card below the table."),
+        "Stock now": st.column_config.NumberColumn(width=80,
+            help="What the stock is trading at right now (about 15 minutes delayed)."),
+        "Room to your strike": st.column_config.TextColumn(width=115, alignment="right",
+            help="How far the stock can still move before it reaches the strike you "
+                 "sold. More is safer. ⚠️ under 1.5% - your SOP says consider "
+                 "rolling - and ⚠️ past it means the strike is already breached."),
+        "Days left": st.column_config.TextColumn(width=65, alignment="right",
+            help="Days until the option you sold expires. Blank on shares with "
+                 "nothing sold against them."),
+        "Decide by": st.column_config.TextColumn(width=80,
+            help="The day your 21-days-left rule kicks in: close it, or roll it "
+                 "for a credit. \"now\" means that day has come. \"at expiry\" "
+                 "means you are holding it to expiration on purpose."),
+        "Profit / loss": st.column_config.NumberColumn(width=90,
+            help="What the whole trade would make or lose if you closed it right "
+                 "now - roll credits included, and on shares or a LEAPS their "
+                 "change in value too. Green is up, red is down."),
+        "Premium kept (goal 50%)": st.column_config.TextColumn(width=135, alignment="right",
+            help="How much of the premium you SOLD is yours so far. Your SOP "
+                 "takes the win at 50% - it turns green there. \"losing\" means "
+                 "the option costs more to buy back than it paid you. On a PMCC "
+                 "or covered call it is the call only. Blank where nothing is sold."),
+        "Cash tied up": st.column_config.NumberColumn(width=95,
+            help="The cash this trade blocks in your account. A cash secured "
+                 "put: the strike x 100, less the premium. A spread: its most you "
+                 "can lose. Shares or a LEAPS: what you paid for them."),
     }
 
 

@@ -265,11 +265,11 @@ def test_the_table_answers_is_this_winning_without_a_click(app_with_one_pmcc):
     at = app_with_one_pmcc.run()
     # Every tab body renders, so the page carries several tables. Find ours by
     # its columns rather than by position.
-    tables = [d.value for d in at.dataframe if "What to do" in list(d.value.columns)]
+    tables = [d.value for d in at.dataframe if "Action" in list(d.value.columns)]
     assert tables, "expected the open trades table"
     cols = list(tables[0].columns)
-    for col in ("What to do", "Symbol", "Days left", "Decide by", "Money in",
-                "P&L $", "P&L %"):
+    for col in ("Action", "Stock", "The trade", "Days left", "Decide by",
+                "Profit / loss", "Premium kept (goal 50%)", "Cash tied up"):
         assert col in cols, f"missing from the table: {col}"
 
 
@@ -901,10 +901,11 @@ def test_the_open_trades_table_shows_blanks_and_signed_dollars():
 
     from ui import components
 
-    df = pd.DataFrame([{"Symbol": "TEST", "Your strike": None, "Room": None,
-                        "Days left": None, "Money in": 895.0,
-                        "P&L $": -470.0, "P&L %": -13.9}])
+    df = pd.DataFrame([{"Stock": "TEST", "Stock now": None,
+                        "Cash tied up": 895.0, "Profit / loss": -470.0},
+                       {"Stock": "TEST", "Stock now": 9.05,
+                        "Cash tied up": None, "Profit / loss": 64.0}])
     html = components.positions_styled(df).to_html()
     assert "None" not in html and "nan" not in html
     assert "-$470" in html and "$-470" not in html
-    assert "-13.9%" in html
+    assert "+$64" in html and "$895" in html
