@@ -968,3 +968,39 @@ def test_bare_shares_show_no_expiry_in_the_open_trades_table():
         [{"position": p, "live": {}, "signal": sig}]).iloc[0]
     assert row["Days left"].strip() == ""
     assert row["Decide by"].strip() == ""
+
+
+def test_the_open_trades_table_shows_how_much_premium_is_kept():
+    """NFLX: $63 up on a $140 put read "+1%" against the cash behind it. The
+    share of the premium kept - 45%, near her 50% target - is a column too."""
+    from src.engine.exit_rules import ExitSignal
+    from ui import components
+
+    p = parse_rows(COLUMNS, [_opened()])[0]
+    kept = ExitSignal(action="hold", headline="", reason="", tone="neutral",
+                      profit_pct=45.0)
+    none = ExitSignal(action="uncovered", headline="", reason="", tone="neutral")
+    df = components.positions_dataframe(
+        [{"position": p, "live": {}, "signal": kept},
+         {"position": p, "live": {}, "signal": none}])
+    col = "Premium kept (goal 50%)"
+    assert df[col].iloc[0] == "45%"
+    assert df[col].iloc[1].strip() == ""
+    losing = ExitSignal(action="stop", headline="", reason="", tone="red",
+                        profit_pct=-427.0)
+    df = components.positions_dataframe(
+        [{"position": p, "live": {}, "signal": losing}])
+    assert df[col].iloc[0] == "losing"
+
+
+def test_the_open_trades_table_says_room_and_trade_in_words():
+    """"9% away", "now" and "CSP · sold 66 put" - nothing to decode."""
+    from ui import components
+
+    assert components._room_label({"room_pct": 0.094}) == "9.4% away"
+    assert components._room_label({"room_pct": 0.012}) == "⚠️ 1.2% away"
+    assert components._room_label({"room_pct": -0.155}) == "⚠️ 16% past it"
+    assert components._room_label({"room_pct": 0.0004}) == "⚠️ right at it"
+    p = parse_rows(COLUMNS, [_opened()])[0]
+    label = components._trade_label(p, {"strike": 7000.0, "option_type": "put"})
+    assert label.endswith("· sold 7000 put")

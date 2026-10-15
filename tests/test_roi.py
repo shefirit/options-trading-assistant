@@ -156,12 +156,13 @@ def test_the_open_trades_table_and_card_show_roi_so_far(app_with_one_csp,
     at = app_with_one_csp.run()
     assert not at.exception
     table = next(d.value for d in at.dataframe
-                 if "P&L %" in list(d.value.columns))
-    assert table["P&L $"].iloc[0] == 100.0
-    assert table["P&L %"].iloc[0] == pytest.approx(1.02, abs=0.01)
-    # The money it is measured on sits beside it, and the per-year figure
-    # stays off this table - a few days in it is not a real number.
-    assert table["Money in"].iloc[0] == pytest.approx(9800.0)
+                 if "Cash tied up" in list(d.value.columns))
+    assert table["Profit / loss"].iloc[0] == 100.0
+    assert table["Cash tied up"].iloc[0] == pytest.approx(9800.0)
+    # $100 of the $200 premium is half of it - her take-the-win line. The
+    # return on the cash behind the put lives on the card, not the table:
+    # on a put it reads tiny ("+1%") and confused her.
+    assert table["Premium kept (goal 50%)"].iloc[0] == "50%"
     assert "ROI / year" not in list(table.columns)
     page = " ".join(str(m.value) for m in at.markdown)
     assert "ROI so far: **+1.0%**" in page
