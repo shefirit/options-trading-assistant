@@ -150,9 +150,17 @@ def _quick_log_body(settings, strategies, provider) -> None:
             "Opened on", value=today, max_value=today,
             help="Change this only if you placed the trade on an earlier day.",
             key=f"ql_opened_{strategy_key}", format=components.DATE_FMT)
-        contracts = d3.number_input("Contracts", min_value=1, max_value=50,
-                                    value=1, step=1,
-                                    key=f"ql_contracts_{strategy_key}")
+        # On the share strategies the label spells out the x100: "Contracts"
+        # beside a stock purchase reads as a share count, and she typed 100
+        # for 100 shares - which the box refuses as 10,000 shares.
+        holds_shares = owns_shares or basis in ("shares_plus_protection",
+                                                "ratio_risk")
+        contracts = d3.number_input(
+            "Contracts (1 = 100 shares)" if holds_shares else "Contracts",
+            min_value=1, max_value=50, value=1, step=1,
+            key=f"ql_contracts_{strategy_key}",
+            help="One contract covers 100 shares, so 100 shares is 1 and "
+                 "200 shares is 2." if holds_shares else None)
 
         far_exp = None
         leaps_cost = None
