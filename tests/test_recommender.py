@@ -45,11 +45,16 @@ def test_monthly_target_shifts_off_a_holiday_friday():
 
 
 def test_monthly_target_flags_a_monthly_past_the_preferred_window():
-    """A 5-week gap between monthlies can push the rolled target past dte_max."""
-    mt = rec.monthly_target(dt.date(2026, 9, 26))   # Oct 16 = 20d -> rolls to Nov 20 = 55d
+    """A 5-week gap between monthlies can push the rolled target past dte_max.
+
+    With her 60-day window (2026-10-20) a rolled monthly is always inside it -
+    monthlies sit 4-5 weeks apart - so the old 49-day cap is passed in to keep
+    the flag itself tested."""
+    mt = rec.monthly_target(dt.date(2026, 9, 26), dte_max=49)   # Oct 16 = 20d -> Nov 20 = 55d
     assert mt.expiration == dt.date(2026, 11, 20)
     assert mt.dte == 55
     assert not mt.within_sop
+    assert rec.monthly_target(dt.date(2026, 9, 26)).within_sop
     assert "past your preferred" in mt.label
 
 
@@ -125,7 +130,7 @@ def test_sop_summary_reads_the_put_credit_spread_rules_from_config():
     joined = " ".join(rec.sop_summary(get_strategy("put_credit_spread")))
     assert "0.25" in joined
     assert "21-45" in joined
-    assert "30-49" in joined            # the US-style early-assignment adjustment
+    assert "30-60" in joined            # the US-style early-assignment adjustment
     assert "2x the credit" in joined
     assert "21 days left" in joined
     assert "50% of the credit" in joined

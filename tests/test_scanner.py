@@ -39,8 +39,8 @@ def test_strategy_dte_window_narrower_than_wide_default():
     lo, hi = scanner.strategy_dte_window(strat, "SPX")   # European index: 21-45
     assert (lo, hi) == (21, 45)
 
-    lo, hi = scanner.strategy_dte_window(strat, "AAPL")  # US-style stock: 30-49
-    assert (lo, hi) == (30, 49)
+    lo, hi = scanner.strategy_dte_window(strat, "AAPL")  # US-style stock: 30-60
+    assert (lo, hi) == (30, 60)
 
     # Either way, meaningfully narrower than the old blanket 15-70 fetch window.
     assert hi - lo < 70 - 15
