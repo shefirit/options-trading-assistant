@@ -43,7 +43,7 @@ strategies:
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
       dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
-      dte_max_us_style: 49        # but still catch the real ~monthly expiration (chains cluster near 34/48)
+      dte_max_us_style: 60        # Rita's ruling 2026-10-20: 30-60 (was 49) - room for the monthly after next
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -74,7 +74,7 @@ strategies:
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
       dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
-      dte_max_us_style: 49        # but still catch the real ~monthly expiration (chains cluster near 34/48)
+      dte_max_us_style: 60        # Rita's ruling 2026-10-20: 30-60 (was 49) - room for the monthly after next
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0
@@ -113,7 +113,7 @@ strategies:
       dte_min: 21                 # European indices may enter at 21
       dte_max: 45
       dte_min_us_style: 30        # SOP: stocks/ETFs avoid the ~21-DTE early-assignment zone
-      dte_max_us_style: 49        # but still catch the real ~monthly expiration
+      dte_max_us_style: 60        # Rita's ruling 2026-10-20: 30-60 (was 49)
     exit:
       profit_target_pct: 50
       stop_loss_multiple: 2.0

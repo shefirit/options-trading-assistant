@@ -18,7 +18,7 @@ from urllib.parse import quote
 import streamlit as st
 
 from src.data import barchart
-from src.engine.candidate import CALL, PUT
+from src.engine.candidate import CALL, PUT, five_questions
 from src.engine.config_loader import (
     default_spread_width,
     entry_dte_window,
@@ -157,6 +157,24 @@ def _volatility_source_panel(sym: str, kind: str, vol) -> None:
                 st.rerun()
 
 
+# ------------------------------------------------------------- five questions
+_ANSWER = {"good": "Yes", "ok": "Neither yes nor no", "watch": "No - look at this",
+           "bad": "No - this blocks it", "unknown": "Not measured"}
+
+
+def render_five_questions(questions: list[dict], heading: str,
+                          key: str) -> None:
+    """Her five entry questions (the Spread Entry Checklist page in Notion),
+    answered from the layers. Icon and words always agree, and each answer
+    opens to the measurement behind it."""
+    st.markdown(f"**{heading}**")
+    for q in questions:
+        icon = _ICON.get(q["status"], "➖")
+        with st.expander(f"{icon}  {q['question']}  ·  {_ANSWER.get(q['status'], '')}",
+                         expanded=False, key=f"fq_{key}_{q['key']}"):
+            theme.note(q["read"] or "Nothing measured.")
+
+
 # ------------------------------------------------------------------- verdicts
 def _side_card(side) -> str:
     fit = side.fit_pct
@@ -255,6 +273,14 @@ def render(sym: str, kind: str, provider, settings, strategies) -> None:
     _volatility_source_panel(sym, kind, vol)
     st.divider()
     _render_verdicts(report)
+    theme.section("Your five questions before entering", "ENTRY CHECKLIST")
+    left, right = st.columns(2)
+    with left:
+        render_five_questions(five_questions(report, [PUT]), "Put Credit Spread",
+                              f"put_{sym}")
+    with right:
+        render_five_questions(five_questions(report, [CALL]), "Call Credit Spread",
+                              f"call_{sym}")
     _render_layers(report)
 
     _handoff(report, sym)

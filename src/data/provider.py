@@ -541,11 +541,16 @@ class DataProvider:
 
     def get_candidate(self, symbol: str, kind: str, *, width: float,
                       put_delta: float = 0.25, call_delta: float = 0.10,
-                      dte_target: int = 45, dte_lo: int = 30, dte_hi: int = 49,
+                      dte_target: int = 45, dte_lo: int = 30, dte_hi: int = 60,
                       min_credit_pct: float = 0.06, vix_stop: float = 28.0,
                       vix_zone: tuple[float, float] = (13.0, 25.0),
-                      barchart_import=None, manual_rank: Optional[float] = None):
+                      barchart_import=None, manual_rank: Optional[float] = None,
+                      put_short: Optional[float] = None,
+                      call_short: Optional[float] = None):
         """The whole candidate check for one symbol - every layer, both sides.
+
+        put_short / call_short grade strikes she already chose (the log form)
+        rather than the ones her SOP deltas would pick.
 
         Assembles the inputs and hands them to the pure engine. Anything that
         fails to arrive is passed through as None, and the engine grades that
@@ -593,6 +598,9 @@ class DataProvider:
                  if self.is_real else None),
             vix_stop=vix_stop, vix_zone=vix_zone, earnings=earnings, dte_hi=dte_hi,
             chain_read=chain_read, min_credit_pct=min_credit_pct,
+            put_short=put_short, call_short=call_short,
+            strike_dte=(dte_target if put_short is not None or call_short is not None
+                        else None),
         )
         return report, vol
 

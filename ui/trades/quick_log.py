@@ -420,6 +420,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
             except Exception:
                 notes.append("The SOP check could not run just now - the trade "
                              "still gets logged and tracked.")
+            entry_check = _entry_check(settings, strategies, provider,
+                                       strategy_key, underlying, strikes, dte)
             # What the prices she typed came to in dollars. The boxes in the
             # form cannot show this as she types (a form holds its values until
             # submit), so the confirmation belongs here, on the card she reads
@@ -457,6 +459,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 "collateral": round(put_strike_total * 100 * n_con, 2),
                 "put_shares": 100 * n_puts * n_con,
                 "has_target": bool(strat.get("exit", {}).get("profit_target_pct")),
+                "entry_check": entry_check,
             }
 
     draft = st.session_state.get("ql_draft")
@@ -555,6 +558,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
                            "here so the next one starts cleaner.")
             for n in draft["notes"]:
                 theme.note(n)
+            _render_entry_check(draft.get("entry_check"))
             # She is logging a trade that is already on her TOS screen, so the
             # real BP Effect is right there to copy.
             components.bp_effect_input(draft["sizing"], "ql")
@@ -584,3 +588,79 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 st.session_state.pop("ql_draft", None)
                 st.session_state.pop("ql_dialog_open", None)
                 st.rerun()
+
+
+# The spreads her five entry questions apply to, and which side(s) each sells.
+_SPREAD_SIDES = {"put_credit_spread": ["put"], "call_credit_spread": ["call"],
+                 "iron_condor": ["put", "call"]}
+
+
+def _entry_check(settings, strategies, provider, strategy_key: str,
+                 underlying: str, strikes: dict, dte: int):
+    """Her five entry questions, graded for the strikes she actually sold.
+
+    Asked after her CRWD condor (2026-10-20): the Spread check tab would have
+    graded those calls "Wrong side" on the day she sold them, but nothing put
+    it in front of her. The log form is the one screen every trade passes
+    through, so the grade lands here - on the trade as placed, so the next one
+    is chosen with it in mind. Never blocks, and None when it cannot run.
+    """
+    sides = _SPREAD_SIDES.get(strategy_key)
+    if not sides or not underlying or not getattr(provider, "is_real", False):
+        return None
+    from src.engine.candidate import five_questions, placed_verdict
+    from ui.candidate import _import, _manual_ranks
+
+    put_short, call_short = strikes.get("short_put"), strikes.get("short_call")
+    widths = [abs(strikes[a] - strikes[b]) for a, b in
+              (("short_put", "long_put"), ("short_call", "long_call"))
+              if strikes.get(a) and strikes.get(b)]
+    unders = settings.get("underlyings") or {}
+    kind = ("index" if underlying in (unders.get("european_style") or [])
+            else "etf" if underlying in (unders.get("us_style") or [])
+            else "stock")
+    pcs = strategies.get("put_credit_spread", {}).get("entry", {})
+    ccs = strategies.get("call_credit_spread", {}).get("entry", {})
+    market = settings.get("market_read") or {}
+    try:
+        report, _vol = provider.get_candidate(
+            underlying, kind, width=max(widths) if widths else 5.0,
+            put_delta=float(pcs.get("short_leg_delta_max", 0.25)),
+            call_delta=float(ccs.get("short_leg_delta_max", 0.10)),
+            dte_target=dte, dte_lo=max(dte - 7, 0), dte_hi=dte,
+            min_credit_pct=float(pcs.get("min_credit_pct_of_width", 0.06)),
+            vix_stop=float(market.get("vix_stop", 28.0)),
+            vix_zone=(float(market.get("vix_zone_low", 13.0)),
+                      float(market.get("vix_zone_high", 25.0))),
+            barchart_import=_import(),
+            manual_rank=_manual_ranks().get(underlying),
+            put_short=float(put_short) if put_short else None,
+            call_short=float(call_short) if call_short else None)
+    except Exception:
+        return {"error": True}
+    verdicts = [(v.name, v.verdict, v.tone) for v in
+                (placed_verdict(report, side) for side in sides)]
+    return {"questions": five_questions(report, sides), "verdicts": verdicts,
+            "symbol": underlying}
+
+
+def _render_entry_check(check) -> None:
+    """The five questions on the Ready-to-save card."""
+    if not check:
+        return
+    if check.get("error"):
+        theme.note("The entry check could not read the market just now - the "
+                   "trade still saves normally.")
+        return
+    from ui.candidate import render_five_questions
+    words = " · ".join(f"{name}: **{verdict}**" for name, verdict, _ in
+                       check["verdicts"])
+    tone = ("red" if any(t == "red" for *_, t in check["verdicts"]) else
+            "amber" if any(t == "amber" for *_, t in check["verdicts"]) else "green")
+    st.markdown(theme.chip("Entry check: " + " · ".join(
+        v for _, v, _ in check["verdicts"]), tone), unsafe_allow_html=True)
+    theme.note(f"How this entry scores on your five questions, for the strikes "
+               f"you sold. {words}. The full read is in Analyze, "
+               f"🩺 Spread check, for {check['symbol']}.")
+    render_five_questions(check["questions"], "Your five questions",
+                          f"ql_{check['symbol']}")

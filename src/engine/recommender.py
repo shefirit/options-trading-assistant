@@ -149,7 +149,7 @@ class PicksReport(BaseModel):
 
 # ------------------------------------------------------------------ the monthly expiration
 def monthly_target(today: Optional[dt.date] = None,
-                   dte_min: int = 21, dte_max: int = 49) -> MonthlyTarget:
+                   dte_min: int = 21, dte_max: int = 60) -> MonthlyTarget:
     """The next monthly (3rd Friday) expiration at least dte_min days out.
 
     Rolls to the following month when the nearest monthly is too close (your

@@ -24,6 +24,16 @@ The layers, and why each one is here:
   8. Tradability  Can she actually get filled, and does the credit clear her
                   minimum? The call side often fails this where the put side
                   passes, which is skew doing exactly what skew does.
+  9. Location     Is the sold strike beyond the expected move AND behind a
+                  swing high or low? Two obstacles between price and the strike
+                  instead of none.
+ 10. Timing       Is she selling into a move that is still running? A big gap
+                  - an earnings gap above all - tends to keep going, and the
+                  side it runs toward is the wrong one to sell for a while.
+
+Layers 9 and 10 came from her CRWD condor (2026-10-20): calls sold six days
+after a 20% earnings gap, at the edge of a +-$35 expected move, ran 40% higher.
+She asked for better entries, not only better management.
 
 Pure functions only - no network, no Streamlit, no pandas - so the whole thing
 is unit tested against hand-worked numbers.
@@ -51,6 +61,8 @@ W_VOLATILITY = 1.5
 W_CONVICTION = 1.0
 W_STRENGTH = 1.0
 W_MARKET = 1.0
+W_LOCATION = 1.0
+W_TIMING = 1.5
 
 # Verdict cutoffs, applied to the score a side actually earned.
 GOOD = 4.0
@@ -709,6 +721,302 @@ def tradability_layer(read: ChainRead, min_credit_pct: float) -> Layer:
                  status=status, blocks=sorted(set(blocks)))
 
 
+def expected_move(spot: Optional[float], vol_pct: Optional[float],
+                  dte: Optional[int]) -> Optional[float]:
+    """One standard deviation of price by expiration, in dollars:
+    spot x volatility x sqrt(days / 365). Roughly two times in three the stock
+    finishes inside it."""
+    if not spot or not vol_pct or not dte or dte <= 0 or spot <= 0 or vol_pct <= 0:
+        return None
+    return spot * vol_pct / 100 * math.sqrt(dte / 365)
+
+
+def swing_levels(highs: list[float], lows: list[float], spot: float,
+                 lookback: int = 126, k: int = 3) -> tuple[list[float], list[float]]:
+    """(supports, resistances): swing lows under price and swing highs over it,
+    from about the last six months, nearest first.
+
+    The 20-day high and low are added because a swing point needs k bars after
+    it to be confirmed, so the freshest peak - often the one that matters most -
+    would otherwise be invisible. CRWD's 233.88 two days before her entry was
+    exactly that. Empty on a side means price is beyond every swing there.
+    """
+    if not spot:
+        return [], []
+    ups = {v for _, v in pivots(highs[-lookback:], k, "high")}
+    downs = {v for _, v in pivots(lows[-lookback:], k, "low")}
+    if len(highs) >= 20:
+        ups.add(max(highs[-20:]))
+        downs.add(min(lows[-20:]))
+    supports = sorted((v for v in downs if v < spot), reverse=True)
+    resistances = sorted(v for v in ups if v > spot)
+    return supports, resistances
+
+
+def _side_location(side: str, strike: float, spot: float, em: Optional[float],
+                   levels: list[float]) -> tuple[float, str]:
+    """Points (up to W_LOCATION) and one sentence for one side's sold strike.
+
+    `levels` are the swing points on that side of price, nearest first. The
+    strike is "behind" a level when at least one sits between price and it;
+    the one named is the furthest of those, the last wall price has to break.
+    """
+    word = "put" if side == PUT else "call"
+    pts = 0.0
+    bits: list[str] = []
+    if em is not None:
+        edge = spot - em if side == PUT else spot + em
+        beyond = strike <= edge if side == PUT else strike >= edge
+        if beyond:
+            pts += W_LOCATION / 2
+            bits.append(f"the {strike:g} {word} is outside the expected move "
+                        f"({edge:,.2f})")
+        else:
+            pts -= W_LOCATION / 2
+            bits.append(f"the {strike:g} {word} is INSIDE the expected move "
+                        f"({edge:,.2f}) - an ordinary move reaches it")
+    name = "support" if side == PUT else "resistance"
+    walls = [v for v in levels if (strike <= v if side == PUT else strike >= v)]
+    if not levels:
+        pts -= W_LOCATION / 2
+        bits.append("price is beyond every swing " + ("low" if side == PUT else "high")
+                    + " of the last six months, so there is no "
+                    + ("floor under" if side == PUT else "ceiling over")
+                    + " the strike")
+    elif walls:
+        pts += W_LOCATION / 2
+        bits.append(f"it sits behind {name} at {walls[-1]:,.2f}")
+    else:
+        pts -= W_LOCATION / 4
+        bits.append(f"it sits in front of {name} at {levels[0]:,.2f}, so price can "
+                    "reach it without breaking anything")
+    return round(pts, 2), "; ".join(bits)
+
+
+def location_layer(spot: Optional[float], highs: list[float], lows: list[float],
+                   read: ChainRead, iv: Optional[float] = None,
+                   hv: Optional[float] = None) -> Layer:
+    """Where each sold strike sits: beyond the expected move, and behind a
+    swing low (puts) or swing high (calls). Each is half the layer's weight.
+
+    The expected move uses implied volatility when there is one and falls back
+    to what the stock actually did, saying which it used. SPX's familiar 6-7%
+    is no yardstick for a single stock - CRWD's was 17% on the day her call
+    spread went on.
+    """
+    label = "Strike location"
+    strikes = {PUT: read.put_short_strike, CALL: read.call_short_strike}
+    if not spot or read.dte is None or not any(strikes.values()):
+        return _unknown("location", label,
+                        "Needs a price and a sold strike on at least one side.",
+                        W_LOCATION)
+    vol, src = (iv, "implied") if iv else (hv, "actual")
+    em = expected_move(spot, vol, read.dte)
+    supports, resistances = swing_levels(highs, lows, spot)
+
+    pts = {PUT: 0.0, CALL: 0.0}
+    said: list[str] = []
+    for side, strike in strikes.items():
+        if not strike:
+            continue
+        levels = supports if side == PUT else resistances
+        pts[side], text = _side_location(side, float(strike), spot, em, levels)
+        said.append(("Put side: " if side == PUT else "Call side: ") + text + ".")
+
+    head = (f"Expected move by expiration ({read.dte} days, {vol:.0f}% {src} "
+            f"volatility): about ±{em:,.2f}, or {em / spot * 100:.1f}%. "
+            if em is not None else
+            "No volatility figure, so the expected move could not be measured. ")
+    value = f"±{em / spot * 100:.1f}% move" if em is not None else "levels only"
+    known = [p for side, p in pts.items() if strikes[side]]
+    status = ("watch" if any(p < 0 for p in known)
+              else "good" if known and all(p > 0 for p in known) else "ok")
+    return Layer(key="location", label=label, value=value,
+                 read=head + " ".join(said), status=status,
+                 put_points=pts[PUT], call_points=pts[CALL], weight=W_LOCATION)
+
+
+def timing_layer(closes: list[float], highs: list[float],
+                 lows: list[float]) -> Layer:
+    """Is a move still running into the side she would sell?
+
+    Measured against the stock's own normal day (the 60 sessions before the
+    last 10, so a fresh shock does not inflate its own yardstick):
+
+      shock    any day in the last 10 sessions moving 3x a normal day (at least
+               3%). Stocks keep drifting the way an earnings gap goes for weeks,
+               so the side it ran toward is marked down hard.
+      running  closing within 1.5% of the 20-day high (or low) after a 10-day
+               run of two normal 10-day moves - the move has not paused yet.
+      pause    3-12% back from the 20-day high in a month that is still up (or
+               off the low in one still down): the pullback a put seller waits
+               for, or the bounce a call seller waits for.
+    """
+    label = "Timing"
+    if len(closes) < 72:
+        return _unknown("timing", label, "Needs about three months of prices.",
+                        W_TIMING)
+    rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))
+            if closes[i - 1] > 0]
+    # A normal day from the median, not the standard deviation: one earnings
+    # gap in the window doubled CRWD's "normal" to 4.7% and hid the October
+    # run behind it. The median absolute deviation (scaled to read like a
+    # standard deviation) barely notices a single outlier.
+    base = rets[-70:-10]
+    mid = _median(base) or 0.0
+    typical = (_median([abs(r - mid) for r in base]) or 0.0) * 1.4826
+    if typical <= 0:
+        return _unknown("timing", label, "Price has not moved enough to measure.",
+                        W_TIMING)
+    spot = closes[-1]
+    hi20, lo20 = max(highs[-20:]), min(lows[-20:])
+    r10 = closes[-1] / closes[-11] - 1
+    r20 = closes[-1] / closes[-21] - 1
+    # A run is 1.5 normal moves over 10 days, or over 20. Two was tried first
+    # and missed CRWD on Oct 5: +28% in a month, at its high, read "quiet".
+    ran_up = (r10 >= 1.5 * typical * math.sqrt(10)
+              or r20 >= 1.5 * typical * math.sqrt(20))
+    ran_down = (r10 <= -1.5 * typical * math.sqrt(10)
+                or r20 <= -1.5 * typical * math.sqrt(20))
+    move = r20 if abs(r20) > abs(r10) else r10
+    span = "20" if move is r20 else "10"
+
+    recent = rets[-10:]
+    big_i = max(range(len(recent)), key=lambda i: abs(recent[i]))
+    big = recent[big_i]
+    ago = len(recent) - 1 - big_i
+    shock = abs(big) >= max(3 * typical, 0.03)
+    when = "today" if ago == 0 else f"{ago} session{'s' if ago != 1 else ''} ago"
+
+    put_pts = call_pts = 0.0
+    said: list[str] = []
+    value = "Quiet"
+    if shock and big > 0:
+        call_pts = -W_TIMING
+        value = f"Jumped {big * 100:.1f}% {when}"
+        said.append(f"It jumped {big * 100:.1f}% in one day {when}, against a normal "
+                    f"day of about {typical * 100:.1f}%. Big jumps, earnings gaps "
+                    "above all, tend to keep running for days or weeks. Selling "
+                    "calls into that is selling against the move.")
+    elif shock and big < 0:
+        put_pts = -W_TIMING
+        value = f"Dropped {abs(big) * 100:.1f}% {when}"
+        said.append(f"It fell {abs(big) * 100:.1f}% in one day {when}, against a "
+                    f"normal day of about {typical * 100:.1f}%. Big drops tend to "
+                    "keep sliding for a while. Selling puts under that is catching "
+                    "a falling knife.")
+    if spot >= hi20 * 0.985 and ran_up:
+        if not (shock and big > 0):
+            call_pts = -W_TIMING * 2 / 3
+            value = f"At the 20-day high, {move * 100:+.1f}% in {span} days"
+        said.append(f"It is at its 20-day high after {move * 100:+.1f}% in {span} "
+                    "days - the run has not paused. A put spread fits the "
+                    "direction, but it pays better after the first pullback, "
+                    "with the sold put further from a price that just ran.")
+    elif spot <= lo20 * 1.015 and ran_down:
+        if not (shock and big < 0):
+            put_pts = -W_TIMING * 2 / 3
+            value = f"At the 20-day low, {move * 100:+.1f}% in {span} days"
+        said.append(f"It is at its 20-day low after {move * 100:+.1f}% in {span} days - "
+                    "the slide has not paused. Wait for it to stop falling before "
+                    "selling anything under it.")
+    else:
+        off_high = 1 - spot / hi20 if hi20 else 0.0
+        off_low = spot / lo20 - 1 if lo20 else 0.0
+        # The turn has to be fresh. CRWD on Oct 15 was 15% off its high and
+        # still falling, yet 6% above a September low - an old low is not a
+        # bounce. The extreme must sit inside the last 10 sessions.
+        high_fresh = max(highs[-10:]) >= hi20
+        low_fresh = min(lows[-10:]) <= lo20
+        if (r20 > 0 and high_fresh and 0.03 <= off_high <= 0.12
+                and not (shock and big < 0)):
+            put_pts = W_TIMING / 2
+            if value == "Quiet":
+                value = f"Pulled back {off_high * 100:.1f}% from the high"
+            said.append(f"It has pulled back {off_high * 100:.1f}% from its 20-day "
+                        "high in a month that is still up. That pause is the "
+                        "classic moment to sell a put spread.")
+        elif (r20 < 0 and low_fresh and 0.03 <= off_low <= 0.12
+              and not (shock and big > 0)):
+            call_pts = W_TIMING / 2
+            if value == "Quiet":
+                value = f"Bounced {off_low * 100:.1f}% off the low"
+            said.append(f"It has bounced {off_low * 100:.1f}% off its 20-day low in "
+                        "a month that is still down. Selling calls into a stalled "
+                        "bounce is the call seller's version of a pullback entry.")
+    if not said:
+        said.append("No fresh jump, drop or run to sell against - nothing here "
+                    "argues for waiting.")
+
+    status = ("watch" if put_pts < 0 or call_pts < 0
+              else "good" if put_pts > 0 or call_pts > 0 else "ok")
+    return Layer(key="timing", label=label, value=value, read=" ".join(said),
+                 status=status, put_points=round(put_pts, 2),
+                 call_points=round(call_pts, 2), weight=W_TIMING)
+
+
+# The five questions she asks before every entry (her Spread Entry Checklist in
+# Notion), each answered from the layers that measure it.
+QUESTIONS = [
+    ("trend", "Am I selling the side the stock is moving away from?",
+     ("structure", "averages")),
+    ("volatility", "Are options expensive (IV Rank about 30 or more)?",
+     ("volatility",)),
+    ("location", "Is the sold strike beyond the expected move and behind a level?",
+     ("location",)),
+    ("timing", "Has the last move paused, or am I selling into it?", ("timing",)),
+    ("calendar", "Is the window clear of earnings?", ("events",)),
+]
+
+
+def placed_verdict(report: CandidateReport, side: str) -> SideVerdict:
+    """A side's verdict without the tradability layer.
+
+    Tradability grades the strikes her SOP deltas would pick from today's
+    chain. On a trade she has already placed at strikes of her own, a thin
+    quote at some other strike says nothing about it - and it was reading
+    "Stand aside" on CRWD for exactly that reason.
+    """
+    name = report.put_side.name if side == PUT else report.call_side.name
+    return _side(side, name, [lay for lay in report.layers
+                              if lay.key != "tradability"])
+
+
+def five_questions(report: CandidateReport, sides: list[str]) -> list[dict]:
+    """Her five entry questions, answered for the side(s) she is trading.
+
+    Each answer is "good", "watch", "ok" or "unknown", plus the layer reads
+    behind it. For an iron condor both sides are asked and the worse answer
+    stands - a trend is good for one wing exactly by being bad for the other,
+    which is why her Iron Condor page says not to open one in a trend.
+    """
+    by_key = {lay.key: lay for lay in report.layers}
+    rank = {"watch": 0, "ok": 1, "good": 2}
+    out: list[dict] = []
+    for key, question, layer_keys in QUESTIONS:
+        lays = [by_key[k] for k in layer_keys if k in by_key]
+        known = [lay for lay in lays if lay.known]
+        if not known:
+            out.append({"key": key, "question": question, "status": "unknown",
+                        "read": " ".join(lay.read for lay in lays)})
+            continue
+        if key in ("volatility", "calendar"):
+            # These do not depend on the side: read the layer's own grade.
+            status = min((lay.status for lay in known),
+                         key=lambda s: {"bad": -1, **rank}.get(s, 1))
+        else:
+            per_side = []
+            for side in sides:
+                pts = sum(lay.put_points if side == PUT else lay.call_points
+                          for lay in known)
+                per_side.append("good" if pts > 0.01 else
+                                "watch" if pts < -0.01 else "ok")
+            status = min(per_side, key=lambda s: rank[s]) if per_side else "ok"
+        out.append({"key": key, "question": question, "status": status,
+                    "read": " ".join(lay.read for lay in known)})
+    return out
+
+
 # ------------------------------------------------------------------ verdict
 def _verdict_words(score: float, blocked: bool) -> tuple[str, str]:
     if blocked:
@@ -767,8 +1075,17 @@ def assess(
     chain_read: Optional[ChainRead] = None,
     min_credit_pct: float = 0.06,
     today: Optional[dt.date] = None,
+    put_short: Optional[float] = None,
+    call_short: Optional[float] = None,
+    strike_dte: Optional[int] = None,
 ) -> CandidateReport:
-    """Every layer, both sides, one verdict each."""
+    """Every layer, both sides, one verdict each.
+
+    put_short / call_short grade the location of strikes she actually chose
+    (the log form) instead of the ones the chain finds at her SOP deltas, and
+    strike_dte is the days left on that trade - the expected move needs it even
+    when no chain came back for that exact expiration.
+    """
     today = today or dt.date.today()
     closes = closes or []
     highs = highs or closes
@@ -788,6 +1105,14 @@ def assess(
         events_layer(earnings, today, dte_hi, kind),
         tradability_layer(chain_read or ChainRead(), min_credit_pct),
     ]
+    where = (chain_read or ChainRead()).model_copy()
+    if put_short is not None or call_short is not None:
+        where.put_short_strike = put_short
+        where.call_short_strike = call_short
+    if strike_dte:
+        where.dte = strike_dte
+    layers.append(location_layer(price, highs, lows, where, iv, hv))
+    layers.append(timing_layer(closes, highs, lows))
 
     put_side = _side(PUT, "Put Credit Spread", layers)
     call_side = _side(CALL, "Call Credit Spread", layers)

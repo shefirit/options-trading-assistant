@@ -112,7 +112,7 @@ market_read:
 #   SOP's wording is "Any liquid stock, ETF, or index (e.g. SPX, QQQ, MSFT)".
 #   The European list is your PREFERRED pick (no early assignment, may enter at
 #   21 DTE), not a restriction. Stocks/ETFs are allowed - they just enter at
-#   30-49 DTE and use the $5-10 stock width. Liquidity is the gate, not style.
+#   30-60 DTE and use the $5-10 stock width. Liquidity is the gate, not style.
 #   The one real requirement: covered calls, CSP and PMCC need a name you can
 #   own shares of, so those are US-style only.
 underlyings:
