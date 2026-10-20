@@ -19,7 +19,8 @@ import pytest
 from src.engine import exit_rules
 from src.engine.models import OptionType
 from src.engine.positions import cash_events, parse_rows, story
-from src.logging_tools.row import (COLUMNS, build_close_row,
+from src.logging_tools.row import (COLUMNS, build_add_wing_row,
+                                   build_close_row, build_roll_row,
                                    build_wing_close_row)
 from test_merge_condor import (EXP, LATER, PUT_WING, _by_id,
                                      _crwd_today, _spread, _strikes)
@@ -123,6 +124,54 @@ def test_closing_the_rest_later_adds_up_to_the_cash_that_moved():
     assert p.status == "closed"
     gross_in = 272.0 + 430.0 + 274.0 + 498.69
     assert p.realized_total == pytest.approx(gross_in - 710.0 - 1445.0)
+
+
+# ------------------------------------------------ the side sold again
+RESOLD_ON = date(2026, 10, 20)
+
+
+def _new_call_side():
+    """Her 20 Oct fill: SOLD -2 VERTICAL CRWD 23 OCT 237.5/247.5 CALL @.90."""
+    return build_add_wing_row("T-CALL", "CRWD",
+                              "Call Credit Spread (Bear Call Spread)", "call",
+                              237.5, 247.5, 180.0, added_on=RESOLD_ON,
+                              expiration=LATER, account="real")
+
+
+def _resold(*more):
+    return _by_id(_crwd_today() + [_call_side_off(), _new_call_side(),
+                                   *more])["T-CALL"]
+
+
+def test_a_call_side_sold_after_the_close_survives_it():
+    """The close took every call leg with it, including the new ones sold five
+    days later - the condor read as a lone put spread."""
+    p = _resold()
+    assert _strikes(p, OptionType.CALL) == [237.5, 247.5]
+    assert _strikes(p, OptionType.PUT) == [250, 260]
+    assert p.is_iron_condor_shape
+    assert p.expiration == LATER
+
+
+def test_the_target_measures_both_sides_now_open():
+    p = _resold()
+    assert p.credit == 564.0 + 180.0
+    assert p.wing_credit == {"put": 564.0, "call": 180.0}
+
+
+def test_the_whole_trade_adds_the_new_side():
+    assert _resold().whole_trade_collected == pytest.approx(764.69 + 180.0)
+
+
+def test_a_roll_of_the_new_side_moves_the_new_legs():
+    roll = build_roll_row("T-CALL", "CRWD",
+                          "Call Credit Spread (Bear Call Spread)", 60.0,
+                          242.5, LATER, 120.0, "",
+                          rolled_on=date(2026, 10, 21), account="real",
+                          option_type="call", new_long_strike=252.5)
+    p = _resold(roll)
+    assert _strikes(p, OptionType.CALL) == [242.5, 252.5]
+    assert _strikes(p, OptionType.PUT) == [250, 260]
 
 
 # ------------------------------------------------------------ edge cases
