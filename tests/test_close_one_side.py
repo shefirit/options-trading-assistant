@@ -163,6 +163,16 @@ def test_the_whole_trade_adds_the_new_side():
     assert _resold().whole_trade_collected == pytest.approx(764.69 + 180.0)
 
 
+def test_the_story_is_told_in_date_order():
+    """Her Journal listed the 20 Oct call side before the 15 Oct close, and
+    both before the September rolls."""
+    steps = story(_resold())
+    days = [s["on"] for s in steps]
+    assert days == sorted(days)
+    assert [s["kind"] for s in steps][-2:] == ["legclose", "wing"]
+    assert steps[-1]["running"] == pytest.approx(764.69 + 180.0)
+
+
 def test_a_roll_of_the_new_side_moves_the_new_legs():
     roll = build_roll_row("T-CALL", "CRWD",
                           "Call Credit Spread (Bear Call Spread)", 60.0,

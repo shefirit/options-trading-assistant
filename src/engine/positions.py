@@ -2596,6 +2596,16 @@ def story(position: Position) -> list[dict[str, Any]]:
             "kind": "close",
         })
 
+    # Gathered by kind above, told by date here. Her CRWD condor's Journal
+    # listed the 20 Oct call side before the 15 Oct close and both before the
+    # September rolls. On one day the closing side goes before the new one:
+    # she buys the old side back, then sells its replacement.
+    rank = {"open": 0, "open_sold": 0, "legclose": 1, "wing": 2,
+            "assign": 3, "roll": 4, "close": 9}
+    steps.sort(key=lambda s: (
+        s["on"] or (date.max if s["kind"] == "close" else date.min),
+        rank.get(s["kind"], 5)))
+
     running = 0.0
     for s in steps:
         running += s["cash"]
