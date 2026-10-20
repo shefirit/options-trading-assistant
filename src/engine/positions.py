@@ -1819,10 +1819,32 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
         if pos is not None:
             _apply_assignment(pos, a)
 
+    # A wing sold on a side she had already closed is a NEW side, and has to
+    # go on after that close - the close takes every leg of its type with it.
+    # Applied in the normal place, her CRWD 237.5/247.5 calls (sold 20 Oct)
+    # were wiped out by the 240/250 calls she bought back on 15 Oct, and the
+    # condor read as a lone put spread. From the day of that close on, the
+    # trade's wing closes, wings and rolls replay in date order at the end.
+    resold_from: dict[str, date] = {}
+    for trade_id, wing in wings:
+        for wc_id, wc in wing_closes:
+            if (wc_id == trade_id and wc.option_type == wing.option_type
+                    and wc.closed_on is not None and wing.added_on is not None
+                    and wing.added_on >= wc.closed_on):
+                prior = resold_from.get(trade_id)
+                resold_from[trade_id] = (wc.closed_on if prior is None
+                                         else min(prior, wc.closed_on))
+
+    def _late(trade_id: str, on: Optional[date]) -> bool:
+        start = resold_from.get(trade_id)
+        return start is not None and on is not None and on >= start
+
     # Wings before rolls. A wing only ever ADDS legs, and a roll that came
     # after it may well have moved one of them - so the legs have to exist
     # before the roll goes looking for the near short on that side.
     for trade_id, wing in sorted(wings, key=lambda r: r[1].added_on or date.min):
+        if _late(trade_id, wing.added_on):
+            continue
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_wing(pos, wing)
@@ -1849,7 +1871,7 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # Rolls in the order they happened, so the last one wins on strike/date.
     ordered_rolls = sorted(rolls, key=lambda r: r[2].rolled_on or date.min)
     for trade_id, _seq, roll in ordered_rolls:
-        if _after_merge((trade_id, _seq, roll)):
+        if _after_merge((trade_id, _seq, roll)) or _late(trade_id, roll.rolled_on):
             continue
         pos = opens.get(trade_id)
         if pos is not None:
@@ -1885,7 +1907,8 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
 
     # Now the rolls that were waiting on a merge, still in date order.
     for trade_id, _seq, roll in ordered_rolls:
-        if not _after_merge((trade_id, _seq, roll)):
+        if (not _after_merge((trade_id, _seq, roll))
+                or _late(trade_id, roll.rolled_on)):
             continue
         pos = opens.get(trade_id)
         if pos is not None:
@@ -1898,9 +1921,35 @@ def parse_rows(header: list[str], rows: list[list[Any]]) -> list[Position]:
     # before a side of it can be taken away.
     for trade_id, wc in sorted(wing_closes,
                                key=lambda r: r[1].closed_on or date.min):
+        if _late(trade_id, wc.closed_on):
+            continue
         pos = opens.get(trade_id)
         if pos is not None:
             _apply_wing_close(pos, wc)
+
+    # The side sold again after a close (see resold_from above), and anything
+    # after it, in the order it happened. On one day the close goes first: she
+    # buys the old side back before selling the new one.
+    late: list[tuple[date, int, str, Any]] = []
+    for trade_id, wc in wing_closes:
+        if _late(trade_id, wc.closed_on):
+            late.append((wc.closed_on, 0, trade_id, wc))
+    for trade_id, wing in wings:
+        if _late(trade_id, wing.added_on):
+            late.append((wing.added_on, 1, trade_id, wing))
+    for trade_id, _seq, roll in ordered_rolls:
+        if _late(trade_id, roll.rolled_on):
+            late.append((roll.rolled_on, 2, trade_id, roll))
+    for _on, kind, trade_id, ev in sorted(late, key=lambda r: (r[0], r[1])):
+        pos = opens.get(trade_id)
+        if pos is None:
+            continue
+        if kind == 0:
+            _apply_wing_close(pos, ev)
+        elif kind == 1:
+            _apply_wing(pos, ev)
+        else:
+            _apply_roll(pos, ev)
 
     # Every position, not only the rolled ones. _reprice_risk used to run at the
     # end of a roll and nowhere else, so a trade she never rolled kept whatever
