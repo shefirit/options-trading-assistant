@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 from src.engine.config_loader import load_settings
 from src.engine.models import Action, OptionType
-from src.engine.positions import Position, parse_rows
+from src.engine.positions import Position, before_share_merges, parse_rows
 
 # Strategies the tracker has a type for. Everything else is skipped, with the
 # reason shown on the Settings sync panel.
@@ -147,11 +147,15 @@ def _pcs_note(short: float, long: Optional[float]) -> str:
 
 def _opening_rows(p: Position) -> tuple[list[_Row], str]:
     """Day one as tracker rows, or ([], why) when the tracker cannot show it."""
-    legs = p.open_legs or p.legs
+    key = p.strategy_key
+    # Shares bought with no call yet open with no legs at all, and that is the
+    # day-one truth. Falling back to today's legs dated a call sold a week
+    # later to the day the shares were bought, then "rolled" it to itself.
+    legs = (p.open_legs if key == "weekly_covered_call"
+            else p.open_legs or p.legs)
     c = max(int(p.contracts or 1), 1)
     sold = [l for l in legs if l.action == Action.SELL]
     bought = [l for l in legs if l.action == Action.BUY]
-    key = p.strategy_key
 
     if key in _SINGLE_PUT:
         if len(legs) != 1 or not sold or sold[0].option_type != OptionType.PUT:
@@ -319,10 +323,36 @@ def _apply_close(rows: list[_Row], p: Position) -> None:
         anchor.add_note("Closed with the whole trade")
 
 
+def _is_share_lot(p: Position) -> bool:
+    """Shares folded into another trade - unlike a merged condor wing, its put
+    and its shares were real rows here, and they stay."""
+    return bool(p.merged_into) and float(p.shares_cost or 0.0) > 0
+
+
+def _apply_share_merge(rows: list[_Row], m) -> None:
+    """Another lot joins: the shares row grows to hold both, at the average
+    price, so a call on all of them has the whole lot as its collateral."""
+    stock = next((r for r in reversed(rows) if r.is_open and r.kind == "stock"),
+                 None)
+    if stock is None:
+        return
+    stock.qty += m.contracts
+    stock.collateral = round(float(stock.collateral or 0.0) + m.shares_cost, 2)
+    stock.premium = _per_share(stock.collateral, stock.qty)
+    if stock.side == "Buy":
+        stock.strike = stock.premium
+    when = f" on {m.merged_on:%m/%d}" if m.merged_on else ""
+    stock.add_note(f"Added {m.contracts * 100} shares at "
+                   f"${m.paid_per_share:g}{when} - now {stock.qty * 100} "
+                   f"at ${stock.premium:g} average")
+
+
 def _skip_reason(p: Position) -> str:
     if (p.account or "") != "real":
         return "not a real-money trade"
-    if p.status in ("merged", "legacy") or p.merged_into:
+    if _is_share_lot(p):
+        pass
+    elif p.status in ("merged", "legacy") or p.merged_into:
         return "merged into another trade" if p.merged_into else "logged before tracking"
     if p.strategy_key not in INCLUDED:
         return "the tracker has no type for this strategy"
@@ -342,7 +372,10 @@ def rows_for(p: Position, start: Optional[date] = None) -> tuple[list[dict[str, 
     why = _skip_reason(p)
     if why:
         return [], why
-    rows, why = _opening_rows(p)
+    # Lots folded in later are added on the day they joined, so day one and
+    # every call before then are sized as the trade really was.
+    view = before_share_merges(p)
+    rows, why = _opening_rows(view)
     if why:
         return [], why
 
@@ -352,13 +385,29 @@ def rows_for(p: Position, start: Optional[date] = None) -> tuple[list[dict[str, 
         events.append((r.rolled_on or date.min, 0 if put else 2, r.seq, "roll", r))
     if p.assigned_on is not None:
         events.append((p.assigned_on, 1, 0, "assign", None))
+    for n, m in enumerate(p.share_merges, start=1):
+        events.append((m.merged_on or date.min, 1, n, "merge", m))
     for _, _, _, kind, ev in sorted(events, key=lambda e: e[:3]):
         if kind == "roll":
-            _apply_roll(rows, p, ev)
+            _apply_roll(rows, view, ev)
+        elif kind == "merge":
+            _apply_share_merge(rows, ev)
+            view = view.model_copy(update={
+                "contracts": view.contracts + ev.contracts,
+                "shares_cost": round(view.shares_cost + ev.shares_cost, 2)})
         else:
-            _apply_assignment(rows, p)
+            _apply_assignment(rows, view)
     if p.status == "closed":
         _apply_close(rows, p)
+    if _is_share_lot(p):
+        # Its shares now live on the other trade's row. Closed here at what
+        # they cost, so this row shows no profit and the shares are not
+        # counted twice.
+        for r in rows:
+            if r.is_open and r.kind == "stock":
+                r.close_at(p.merged_on, float(r.collateral or 0.0))
+                r.add_note(f"Moved into the combined {p.underlying} row "
+                           f"({p.merged_into})")
 
     out = []
     for n, r in enumerate(rows, start=1):

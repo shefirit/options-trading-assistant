@@ -12,6 +12,7 @@ from ui import components, theme
 from ui.trades.actions import (
     _add_wing_form,
     _assign_form,
+    _merge_shares_form,
     _merge_wing_form,
     _assignment_plan_panel,
     _pmcc_roi_strip,
@@ -203,6 +204,9 @@ def _trade_card(it: dict, strategies, provider, all_open=None) -> None:
         with st.expander("🔢 Show the numbers", key=f"num_{p.trade_id}"):
             _trade_numbers(p, live, sig, strategies, px)
 
+        # Before the call form: when the shares are split over two trades,
+        # combining them is what lets one call cover them all.
+        _merge_shares_form(p, all_open or [])
         if p.can_write_call:
             # is_uncovered alone left the bought LEAPS out: it has no short call
             # by shape, so the app had nothing to offer her when she decided to

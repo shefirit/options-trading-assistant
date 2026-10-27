@@ -1669,6 +1669,67 @@ def _close_one_side_form(p, provider, kp: str = "detail") -> None:
             st.rerun()
 
 
+def _merge_shares_form(p, all_open) -> None:
+    """Two trades holding the same shares - make them one, so one call covers
+    all of them.
+
+    Her report (2026-10-27): 200 SOFI in thinkorswim with 2 calls sold against
+    them, and the app had two trades of 100 shares each - one from an assigned
+    put, one from another - with nowhere to record a 2-contract call. This card
+    keeps the trade; the other one's shares, cost and premium join it.
+
+    Like the condor merge, neither original row is touched: the merge is its
+    own row, and deleting it splits them again.
+    """
+    from src.engine.wheel import share_lot_candidates
+
+    matches = share_lot_candidates(p, all_open)
+    if not matches:
+        return
+    shares = 100 * max(int(p.contracts or 1), 1)
+
+    with st.expander(f"🔗 You hold more {p.underlying} shares on another "
+                     f"trade - combine them", key=f"mergeshares_{p.trade_id}"):
+        theme.note(
+            f"Selling one call against all your {p.underlying} shares? Combine "
+            f"the trades first. They become **one trade, one cost basis** (the "
+            f"average, like thinkorswim shows), and the call you record next "
+            f"covers every share. **This trade stays**; the other one's shares, "
+            f"cost and the premium it already collected move into it.")
+
+        labels = {}
+        for other in matches:
+            n = 100 * max(int(other.contracts or 1), 1)
+            per = other.shares_cost / n if n else 0.0
+            labels[(f"{n} shares at {per:g} · {other.strategy_name} · opened "
+                    f"{components.fmt_date(other.opened)}")] = other
+        pick = st.radio("Which shares join this trade?", list(labels),
+                        key=f"mergesharespick_{p.trade_id}")
+        other = labels[pick]
+
+        total = shares + 100 * max(int(other.contracts or 1), 1)
+        avg = (p.shares_cost + other.shares_cost) / total
+        theme.note(
+            f"**After combining: {total} shares at {avg:,.2f} average** - "
+            f"{total // 100} contracts, so your next call is "
+            f"{total // 100} contracts too. The other trade stays in your sheet "
+            f"exactly as you wrote it and stops showing as its own card.")
+
+        if st.button(f"Yes - combine into {total} shares", type="primary",
+                     key=f"mergesharesbtn_{p.trade_id}"):
+            from src.logging_tools.trade_logger import merge_trades
+            merge_trades(other.trade_id, p.trade_id, other.underlying,
+                         other.strategy_name, account=other.account,
+                         note=f"Shares combined into {p.trade_id}")
+            st.session_state.pop("trades_rows", None)
+            st.session_state.pop("_priced_positions", None)
+            st.session_state["ql_flash"] = (
+                f"Combined: {total} {p.underlying} shares at {avg:,.2f} "
+                f"average, on one trade. Sell your call against all of them "
+                f"below.")
+            st.rerun()
+
+
 def _merge_wing_form(p, all_open) -> None:
     """Two rows that are really one iron condor - say so, without re-typing.
 
