@@ -63,6 +63,31 @@ class WingEvent(BaseModel):
         return abs(self.short_strike - self.long_strike)
 
 
+class ShareMerge(BaseModel):
+    """Another lot of the same shares, folded into this trade.
+
+    Her SOFI and TQQQ (2026-10-27): 100 shares from one assigned put and 100
+    from another trade, and a covered call sold against all 200. thinkorswim
+    shows one line of 200 shares; the app had two trades of 100 each and no way
+    to put a 2-contract call on either. Kept as an event, like a wing, so the
+    story can say when the second lot joined and what it brought with it.
+    """
+
+    merged_on: Optional[date] = None
+    trade_id: str = ""                # the trade that was folded in
+    strategy_name: str = ""
+    opened: Optional[date] = None
+    contracts: int = 1                # 100 shares each
+    shares_cost: float = 0.0          # what that lot's shares cost
+    open_cash: float = 0.0            # its whole opening ledger, put premium included
+    premium: float = 0.0              # every dollar of premium it had banked
+
+    @property
+    def paid_per_share(self) -> float:
+        shares = 100 * max(int(self.contracts or 1), 1)
+        return round(self.shares_cost / shares, 4) if shares else 0.0
+
+
 class RollEvent(BaseModel):
     """One roll of the income leg: buying back the option you sold and selling
     a further-out one in its place, usually for a net credit."""
@@ -199,6 +224,13 @@ class Position(BaseModel):
     # Set when this trade turned out to be the other wing of another one. The
     # row stays in her sheet exactly as she wrote it; this says how to read it.
     merged_into: str = ""
+    # The day it was merged, on the trade that was folded in.
+    merged_on: Optional[date] = None
+    # Other lots of the same shares folded into this one. `contracts`,
+    # `shares_cost` and `open_cash` already include them; these say where the
+    # extra came from, and carry the premium those lots had banked on their
+    # own trades, which still counts towards what the shares really cost.
+    share_merges: list[ShareMerge] = Field(default_factory=list)
     # How many contracts of each short side she held before a buy-back dropped
     # the leg. A roll that writes the next one has to put back what was there:
     # assuming one silently collapses a ratio (her SMH is short TWO 615 calls
@@ -1003,6 +1035,9 @@ def _apply_merge(absorbed: Optional[Position],
         return
     if absorbed.status != "open":
         return
+    if holds_shares(absorbed) and holds_shares(target):
+        _apply_share_merge(absorbed, target, merged_on)
+        return
     # A target that has since CLOSED still takes the wing. Merges are applied
     # after closes, so her SPX condor - merged 18 September, bought back whole
     # on the 23rd - found its target already closed, skipped the merge, and
@@ -1046,6 +1081,80 @@ def _apply_merge(absorbed: Optional[Position],
     # of, just moved from the cards into the budget.
     absorbed.max_loss = 0.0
     absorbed.buying_power = 0.0
+
+
+def holds_shares(pos: Position) -> bool:
+    """Shares and nothing else to protect them: an assigned put, or shares
+    bought outright to write calls against. Models 1-3 hold shares too, but
+    their puts are part of the trade and two of them cannot be added up."""
+    from src.engine.wheel import BOUGHT_SHARE_STRATEGIES
+
+    if float(pos.shares_cost or 0.0) <= 0:
+        return False
+    return bool(pos.assigned_strike) or pos.strategy_key in BOUGHT_SHARE_STRATEGIES
+
+
+def _apply_share_merge(absorbed: Position, target: Position,
+                       merged_on: Optional[date] = None) -> None:
+    """Fold one lot of shares into another, so one call can cover them all.
+
+    Only while neither lot has an option open. A call already written against
+    100 shares would silently turn into a call against 200 the moment the
+    contracts are added, which is a fill she never made.
+
+    The shares, the contracts and the opening ledger move across; the lot's
+    rolls stay on its own trade, banked on their own dates, so no month counts
+    them twice. What they collected rides along in `premium`, because it still
+    pulls down what the shares cost her.
+    """
+    if absorbed.legs or target.legs:
+        return
+    if target.status == "closed":
+        if (merged_on is None or target.closed_on is None
+                or merged_on > target.closed_on):
+            return
+    elif target.status != "open":
+        return
+    if (absorbed.underlying or "").upper() != (target.underlying or "").upper():
+        return
+
+    target.share_merges.append(ShareMerge(
+        merged_on=merged_on,
+        trade_id=absorbed.trade_id,
+        strategy_name=absorbed.strategy_name,
+        opened=absorbed.opened,
+        contracts=max(int(absorbed.contracts or 1), 1),
+        shares_cost=round(float(absorbed.shares_cost or 0.0), 2),
+        open_cash=round(float(absorbed.open_cash or 0.0), 2),
+        premium=absorbed.premium_collected,
+    ))
+    target.contracts = (max(int(target.contracts or 1), 1)
+                        + max(int(absorbed.contracts or 1), 1))
+    target.shares_cost = round(target.shares_cost + absorbed.shares_cost, 2)
+    target.open_cash = round(target.open_cash + absorbed.open_cash, 2)
+    target.max_loss = round(target.max_loss + absorbed.max_loss, 2)
+    target.buying_power = round(target.buying_power + absorbed.buying_power, 2)
+
+    absorbed.status = "merged"
+    absorbed.merged_into = target.trade_id
+    absorbed.merged_on = merged_on
+    absorbed.max_loss = 0.0
+    absorbed.buying_power = 0.0
+
+
+def before_share_merges(position: Position) -> Position:
+    """The trade as it was before other lots joined it - its own shares, its
+    own contracts, its own opening cash. What its day-one story is told from."""
+    if not position.share_merges:
+        return position
+    return position.model_copy(update={
+        "contracts": max(int(position.contracts or 1)
+                         - sum(m.contracts for m in position.share_merges), 1),
+        "shares_cost": round(position.shares_cost
+                             - sum(m.shares_cost for m in position.share_merges), 2),
+        "open_cash": round(position.open_cash
+                           - sum(m.open_cash for m in position.share_merges), 2),
+    })
 
 
 def _apply_assignment(pos: Position, event: dict[str, Any]) -> None:
@@ -2533,7 +2642,26 @@ def story(position: Position) -> list[dict[str, Any]]:
     # condor's Journal showed a call spread opened for $702 on 2 September;
     # $430 of that was the put side, sold on the 17th.
     wing_cash = round(sum(w.credit for w in position.wings), 2)
-    steps.extend(_opening_steps(position, later_wings=wing_cash))
+    # Shares folded in from another trade are told on their own line, on the
+    # day they joined - not as if day one had bought them all.
+    own = before_share_merges(position)
+    steps.extend(_opening_steps(own, later_wings=wing_cash))
+
+    for m in position.share_merges:
+        shares = 100 * m.contracts
+        source = (f"your {m.strategy_name} trade opened {m.opened:%d %b}"
+                  if m.opened else "another trade")
+        detail = f"{shares} shares at {m.paid_per_share:g} from {source}"
+        if m.premium:
+            detail += (f", with the ${m.premium:,.0f} of premium it had "
+                       f"already collected")
+        steps.append({
+            "on": m.merged_on,
+            "what": f"You combined {shares} more shares into this trade",
+            "detail": detail,
+            "cash": round(m.open_cash, 2),
+            "kind": "merge",
+        })
 
     for w in sorted(position.wings, key=lambda w: w.added_on or date.min):
         side = "put" if w.option_type == "put" else "call"
@@ -2571,7 +2699,7 @@ def story(position: Position) -> list[dict[str, Any]]:
             "detail": (f"The {position.assigned_strike:g} put was assigned - "
                        f"you own the shares from here"
                        if position.assigned_strike else "Assigned into shares"),
-            "cash": round(-position.shares_cost, 2),
+            "cash": round(-own.shares_cost, 2),
             "kind": "assign",
         })
 
@@ -2601,7 +2729,7 @@ def story(position: Position) -> list[dict[str, Any]]:
     # September rolls. On one day the closing side goes before the new one:
     # she buys the old side back, then sells its replacement.
     rank = {"open": 0, "open_sold": 0, "legclose": 1, "wing": 2,
-            "assign": 3, "roll": 4, "close": 9}
+            "assign": 3, "merge": 3.5, "roll": 4, "close": 9}
     steps.sort(key=lambda s: (
         s["on"] or (date.max if s["kind"] == "close" else date.min),
         rank.get(s["kind"], 5)))

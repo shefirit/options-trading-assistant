@@ -113,12 +113,19 @@ def state_from(position, market_price: Optional[float] = None) -> Optional[Wheel
 
     contracts = max(int(position.contracts or 1), 1)
     shares = 100 * contracts
+    # Lots folded in from other trades each came at their own price, so what a
+    # share cost is the average - the same figure thinkorswim shows.
+    merges = getattr(position, "share_merges", None) or []
+    cost = float(getattr(position, "shares_cost", 0.0) or 0.0)
+    if merges and cost > 0:
+        strike = round(cost / shares, 4)
     # banked_income, not roll_income: it is roll credits PLUS any leg she sold
     # off on the way here, and both are cash this trade collected.
     banked = getattr(position, "banked_income", None)
     if banked is None:
         banked = position.roll_income
-    premium = round(float(position.open_credit or 0.0) + float(banked or 0.0), 2)
+    premium = round(float(position.open_credit or 0.0) + float(banked or 0.0)
+                    + sum(m.premium for m in merges), 2)
     basis = round(float(strike) - premium / shares, 2)
 
     unrealised = (round((float(market_price) - basis) * shares, 2)
@@ -145,6 +152,25 @@ def state_from(position, market_price: Optional[float] = None) -> Optional[Wheel
         called_away_profit=called_away,
         bought=bought,
     )
+
+
+def share_lot_candidates(position, others: list) -> list:
+    """Other open trades holding the same shares, that could join this one.
+
+    One call can only be written against one trade, so 100 shares from an
+    assigned put and 100 bought outright could never carry the 2-contract call
+    she actually sold. Same underlying, same book, both holding shares and no
+    option open on either - see positions._apply_share_merge for why.
+    """
+    from src.engine.positions import holds_shares
+
+    if position.status != "open" or position.legs or not holds_shares(position):
+        return []
+    return [o for o in others
+            if o is not position and o.trade_id != position.trade_id
+            and o.status == "open" and not o.legs and holds_shares(o)
+            and o.underlying.upper() == position.underlying.upper()
+            and (o.account or "") == (position.account or "")]
 
 
 def assignment_cash(strike: float, contracts: int) -> float:
