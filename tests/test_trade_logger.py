@@ -150,3 +150,51 @@ def test_fetch_all_rows_prefers_sheet_then_local(tmp_path, monkeypatch):
     header, rows, source = trade_logger.fetch_all_rows()
     assert source == "local"
     assert rows == [["2026-07-04"]]
+
+
+def _sent_rows(monkeypatch):
+    sent = []
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
+    monkeypatch.setattr(webhook_logger, "append",
+                        lambda row, header, mirror=None: sent.append(row) or "url")
+    monkeypatch.setattr(trade_logger, "copy_to_tracker", lambda *a, **k: None)
+    return sent
+
+
+def test_a_second_click_does_not_write_the_roll_twice(monkeypatch):
+    """Her SOFI roll landed in the sheet twice (2026-10-28) and counted its
+    $26 twice. The same row again within minutes is a repeat, not a fill."""
+    sent = _sent_rows(monkeypatch)
+    for _ in range(2):
+        dest, went = trade_logger.roll_trade("T-1", "XYZ", "Wheel", cash=26.0,
+                                             new_strike=18.0, new_credit=84.0)
+        assert went is True
+    assert len(sent) == 1
+
+
+def test_a_different_roll_on_the_same_trade_still_goes_through(monkeypatch):
+    sent = _sent_rows(monkeypatch)
+    trade_logger.roll_trade("T-1", "XYZ", "Wheel", cash=26.0, new_strike=18.0)
+    trade_logger.roll_trade("T-1", "XYZ", "Wheel", cash=30.0, new_strike=19.0)
+    assert len(sent) == 2
+
+
+def test_a_failed_send_can_be_retried(monkeypatch):
+    """If the sheet did not take it, pressing the button again must work."""
+    calls = []
+
+    def flaky(row, header, mirror=None):
+        calls.append(row)
+        if len(calls) == 1:
+            raise RuntimeError("timed out")
+        return "url"
+
+    monkeypatch.setattr(webhook_logger, "is_configured", lambda: True)
+    monkeypatch.setattr(webhook_logger, "append", flaky)
+    monkeypatch.setattr(sheets_logger, "is_configured", lambda: False)
+    monkeypatch.setattr(trade_logger.excel_logger, "append_values",
+                        lambda row: "log.xlsx")
+    monkeypatch.setattr(trade_logger, "copy_to_tracker", lambda *a, **k: None)
+    assert trade_logger.roll_trade("T-1", "XYZ", "Wheel", cash=26.0)[1] is False
+    assert trade_logger.roll_trade("T-1", "XYZ", "Wheel", cash=26.0)[1] is True
+    assert len(calls) == 2
