@@ -2324,6 +2324,42 @@ def shares_only_value(position: Position,
     }
 
 
+def standing_today(position: Position,
+                   live: Optional[dict[str, Any]]) -> Optional[dict[str, float]]:
+    """Where an open trade that owns shares stands at today's prices.
+
+    Rita, 2026-10-28: the Journal showed the premiums and what the stock cost,
+    "but what about stock appreciation?" The story is cash only, so on a wheel
+    it ends thousands negative - the shares bought - with nothing saying what
+    those shares are worth now. These are the missing lines: the shares at
+    today's price, what closing the options would cost, and the total. All of
+    it is from the same pricing the Now tab uses, so the two never disagree.
+
+    None for a closed trade, one without shares, or one that is not priced.
+    """
+    if position.status != "open" or position.shares_cost <= 0 or not live:
+        return None
+    price = live.get("underlying_price")
+    gain = live.get("shares_pl")
+    total = live.get("open_pl")
+    if not price or gain is None or total is None:
+        return None
+    shares = 100 * max(int(position.contracts or 1), 1)
+    value = round(position.shares_cost + gain, 2)
+    so_far = round(position.open_cash + position.banked_income, 2)
+    return {
+        "shares": shares,
+        "price": round(float(price), 2),
+        "paid_per_share": round(position.shares_cost / shares, 2),
+        "shares_value": value,
+        "shares_gain": round(gain, 2),
+        # Closing every option at today's mids: minus when buying back calls
+        # she is short costs money, plus when what she owns is worth more.
+        "options_now": round(total - so_far - value, 2),
+        "if_closed": round(total, 2),
+    }
+
+
 def leg_breakdown(position: Position,
                   mids: list[tuple[Leg, float]]) -> Optional[list[dict]]:
     """What each PIECE of the position has made, not just the trade as a whole.
@@ -2812,12 +2848,19 @@ def _open_detail(position: Position, side: Optional[Action] = None) -> str:
     `side` narrows it to one half, for the trades whose opening is told as two
     rows - what she bought, then what she sold against it.
     """
-    legs = position.open_legs or position.legs
+    # Shares bought with no call yet open with no legs, and that is day one.
+    # Falling back to today's legs told her TQQQ as "Bought 100 shares, sold
+    # the 77.5 call" on a day she only bought shares.
+    legs = (position.open_legs if position.strategy_key == "weekly_covered_call"
+            else position.open_legs or position.legs)
     bought = [leg for leg in legs
               if leg.action == Action.BUY and side is not Action.SELL]
     sold = [leg for leg in legs
             if leg.action == Action.SELL and side is not Action.BUY]
-    shares = position.shares_cost > 0 and side is not Action.SELL
+    # An assigned put's shares arrived later, on their own line - day one only
+    # sold the put.
+    shares = (position.shares_cost > 0 and position.assigned_on is None
+              and side is not Action.SELL)
 
     def names(group) -> str:
         return "the " + _and(f"{leg.strike:g} {leg.option_type.value}"

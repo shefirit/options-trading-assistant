@@ -209,3 +209,49 @@ def test_tracker_closes_the_folded_lot_at_cost_so_nothing_counts_twice():
     assert stock["Closed Date"] == TODAY.isoformat()
     assert stock["Close $"] == stock["Premium $"] == 50.0
     assert BOUGHT_LOT in stock["Notes"]
+
+
+# ------------------------------------------------- the Journal, at today's price
+def test_journal_shows_what_the_shares_are_worth_today():
+    """Rita, 2026-10-28: the Journal showed the premiums and what the stock
+    cost - "but what about stock appreciation?" 200 shares paid 52 a share,
+    53 today, one call worth $100 to buy back."""
+    keep = _combined()
+    keep = keep[BOUGHT_LOT]
+    live = {"underlying_price": 53.0, "shares_pl": 200.0,
+            "open_pl": round(keep.open_cash + keep.banked_income
+                             + 53.0 * 200 - 100.0, 2)}
+    t = positions.standing_today(keep, live)
+    assert t["shares"] == 200 and t["paid_per_share"] == 52.0
+    assert t["shares_value"] == 10600.0
+    assert t["shares_gain"] == 200.0
+    assert t["options_now"] == -100.0
+    # Cash so far (-10,050) + shares (10,600) - the call (100).
+    assert t["if_closed"] == 450.0
+
+
+def test_journal_today_lines_match_the_shares_only_pricing():
+    """Between calls the shares are the whole position - same arithmetic."""
+    p = _parse(*_put_lot(), *_bought_lot(), _merge())[BOUGHT_LOT]
+    live = positions.shares_only_value(p, 50.0)
+    live["underlying_price"] = 50.0
+    t = positions.standing_today(p, live)
+    assert t["shares_gain"] == -400.0
+    assert t["options_now"] == 0.0
+    assert t["if_closed"] == round(p.open_cash + p.banked_income + 10000.0, 2)
+
+
+def test_no_today_lines_without_shares_or_a_price():
+    p = _combined()[BOUGHT_LOT]
+    assert positions.standing_today(p, None) is None
+    assert positions.standing_today(p, {"underlying_price": None}) is None
+
+
+def test_day_one_tells_only_what_happened_that_day():
+    """TQQQ read "Bought 100 shares, sold the 77.5 call" on a day she only
+    bought shares; SOFI read "Bought 100 shares" on the day she sold a put."""
+    book = _combined()
+    bought = positions.story(book[BOUGHT_LOT])[0]
+    assert bought["detail"] == "Bought 100 shares"
+    put = positions.story(_parse(*_put_lot())[PUT_LOT])[0]
+    assert put["detail"] == "Sold the 50 put"
