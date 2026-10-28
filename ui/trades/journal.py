@@ -81,8 +81,10 @@ def render(all_pos, settings, strategies, provider, mode: str,
     picked = _picked(shown)
     if picked is not None:
         st.divider()
+        live = {it["position"].trade_id: it.get("live")
+                for it in priced or [] if it.get("position") is not None}
         _trade_page(picked, settings, strategies, provider,
-                    so_far.get(picked.trade_id))
+                    so_far.get(picked.trade_id), live.get(picked.trade_id))
 
 
 # ---------------------------------------------------------------- the rows
@@ -360,7 +362,8 @@ def _picked(rows: list[dict]):
 
 
 # --------------------------------------------------------- one trade, whole
-def _trade_page(position, settings, strategies, provider, so_far=None) -> None:
+def _trade_page(position, settings, strategies, provider, so_far=None,
+                live=None) -> None:
     """Everything about one trade, on one page instead of behind three clicks.
 
     Order is the order the questions come: what is this, how did it go, what
@@ -370,11 +373,11 @@ def _trade_page(position, settings, strategies, provider, so_far=None) -> None:
 
     p = position
     theme.section(_headline(p), "This trade")
-    _summary_stats(p, so_far)
+    _summary_stats(p, so_far, pos_mod.standing_today(p, live))
 
     steps = pos_mod.story(p)
     if steps:
-        components.render_story(p, steps)
+        components.render_story(p, steps, live)
 
     _corrections(p, settings, strategies, provider)
 
@@ -406,7 +409,7 @@ def _credit_card(p) -> tuple[str, str, str]:
             "what the legs you hold sold for - your 50% target is half of this")
 
 
-def _summary_stats(p, so_far=None) -> None:
+def _summary_stats(p, so_far=None, today=None) -> None:
     """The five numbers that answer "how did this go" without scrolling."""
     # dte_left and days_held are METHODS on Position, not properties. Read as
     # attributes they are truthy bound methods, so the card printed
@@ -452,6 +455,13 @@ def _summary_stats(p, so_far=None) -> None:
                 "BANKED SO FAR", theme.signed(p.banked_income),
                 "from rolls and legs already sold",
                 "up" if p.banked_income >= 0 else "down"))
+        if today is not None:
+            gain = today["shares_gain"]
+            cards.append(theme.stat(
+                "SHARES TODAY", theme.signed(gain),
+                f"{today['shares']} shares at {today['price']:,.2f} - you "
+                f"paid {today['paid_per_share']:,.2f}",
+                "up" if gain >= 0 else "down"))
         if so_far is not None:
             cards.append(theme.stat(
                 "ROI SO FAR", f"{so_far.pct:+.1f}%",

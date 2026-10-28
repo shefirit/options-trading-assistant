@@ -1933,7 +1933,7 @@ def _premium_panel(position, closed: bool) -> None:
         f"tally.{tail}")
 
 
-def render_story(position, steps: list[dict]) -> None:
+def render_story(position, steps: list[dict], live: Optional[dict] = None) -> None:
     """One trade from the first fill to the last, as a list she can read.
 
     This was a dataframe with a "Running total" column, and Rita's verdict was
@@ -1949,10 +1949,13 @@ def render_story(position, steps: list[dict]) -> None:
     if not steps:
         return
 
+    from src.engine.positions import standing_today
+
     paid = sum(s["cash"] for s in steps if s["cash"] < 0)
     took = sum(s["cash"] for s in steps if s["cash"] > 0)
     final = steps[-1]["running"]
     closed = steps[-1]["kind"] == "close"
+    today = None if closed else standing_today(position, live)
 
     # ---- the header: what this trade was, and how it ended
     when = fmt_date(position.opened)
@@ -1980,8 +1983,16 @@ def render_story(position, steps: list[dict]) -> None:
             sub = "Every fill from the day you opened it to the day you closed it"
     else:
         headline = (f'<div class="ota-story-result" style="color:{theme.INK};">'
-                    f'&#36;{took + paid:,.0f} so far</div>')
+                    f'{"-" if took + paid < 0 else ""}&#36;'
+                    f'{abs(took + paid):,.0f} so far</div>')
         sub = "Not a profit yet - it becomes one on the day you close"
+        if today is not None:
+            # On a trade that owns shares the cash line is mostly the shares
+            # bought, so on its own it reads like a big loss.
+            word = "up" if today["if_closed"] >= 0 else "down"
+            sub = (f"Cash in and out so far. Counting your shares at today's "
+                   f"price, the whole trade is {word} &#36;"
+                   f"{abs(today['if_closed']):,.0f}")
 
     head = (f'<div class="ota-story-head">'
             f'<div class="ota-story-title">{_story_esc(position.underlying)} '
@@ -2001,6 +2012,25 @@ def render_story(position, steps: list[dict]) -> None:
         + _story_row("", "", "Money you collected", "", took)
         + _story_row("", "", "Result" if closed else "Where that leaves you",
                      "", final, "ota-story-final"))
+    if today is not None:
+        # Not money that has moved - what the shares and options are worth
+        # today, so the cash total above is not the whole picture.
+        gain = today["shares_gain"]
+        change = (f"{'up' if gain > 0 else 'down'} ${abs(gain):,.0f} since you "
+                  f"got them" if gain else "no change since you got them")
+        summary += (
+            _story_row("", "", f"Your {today['shares']} shares, at "
+                       f"{today['price']:,.2f} today",
+                       f"they cost you {today['paid_per_share']:,.2f} a share, "
+                       f"{change}", today["shares_value"], "ota-story-sum"))
+        if today["options_now"]:
+            cost = today["options_now"] < 0
+            summary += _story_row(
+                "", "", ("Buying back your option(s) today" if cost
+                         else "Selling your option(s) today"),
+                "at today's prices", today["options_now"])
+        summary += _story_row("", "", "If you closed everything today", "",
+                              today["if_closed"], "ota-story-final")
 
     st.markdown(f'<div class="ota-story">{head}{body}{summary}</div>',
                 unsafe_allow_html=True)
