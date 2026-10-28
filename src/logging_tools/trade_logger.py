@@ -5,6 +5,9 @@ local Excel backup so you never lose a record.
 
 from __future__ import annotations
 
+import json
+import threading
+import time
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -48,6 +51,36 @@ def copy_to_tracker(trade_ids: list[str], account: Any = "") -> None:
         last_tracker_copy = {"ok": False, "at": datetime.now(), "message": str(e)}
 
 
+# Rows sent to the sheet in the last few minutes: {row as JSON: when}. Her log
+# held a SOFI roll twice (2026-10-28), an NFLX close three times and three more
+# pairs - a second click while the sheet was still answering runs the button
+# again. Every row carries the date, not the time, so the same row twice inside
+# a few minutes is always a repeat and never a second real fill.
+_recent_rows: dict[str, float] = {}
+_recent_lock = threading.Lock()
+REPEAT_WINDOW_SECONDS = 600
+
+
+def _claim(row: list[Any]) -> Optional[str]:
+    """The row's key if it is new and now reserved; None if it was just sent."""
+    key = json.dumps(row, default=str)
+    now = time.monotonic()
+    with _recent_lock:
+        for k, at in list(_recent_rows.items()):
+            if now - at > REPEAT_WINDOW_SECONDS:
+                del _recent_rows[k]
+        if key in _recent_rows:
+            return None
+        _recent_rows[key] = now
+    return key
+
+
+def _release(key: str) -> None:
+    """The send failed, so a retry has to be allowed through."""
+    with _recent_lock:
+        _recent_rows.pop(key, None)
+
+
 def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
     """Send one event row wherever it can land: sheet webhook, then service
     account, then the local Excel backup. Returns (destination, went_to_sheet).
@@ -57,10 +90,14 @@ def _append(row: list[Any], mirror: Optional[dict] = None) -> tuple[str, bool]:
     carries a mirror field, so omitting it freezes the tab with no redeploy."""
     # 1. Apps Script web app (Rita's chosen method).
     if webhook_logger.is_configured():
+        key = _claim(row)
+        if key is None:
+            # Already in the sheet - say so exactly as the first send did.
+            return webhook_logger.sheet_url(), True
         try:
             dest = webhook_logger.append(row, COLUMNS, mirror=mirror)
         except Exception:
-            pass
+            _release(key)
         else:
             at = COLUMNS.index("Account")
             copy_to_tracker(twa_tracker.trade_ids_in_row(row, COLUMNS),
