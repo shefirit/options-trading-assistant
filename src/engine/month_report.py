@@ -53,6 +53,10 @@ _EXIT_BUCKETS: list[tuple[str, str, str, bool]] = [
     # money and the shares were sold at its strike.
     ("shares called away", "Shares called away", "green", True),
     ("stop loss", "Stopped out at 2x", "amber", True),
+    # A credit spread assigned and its long leg exercised: the full width lost.
+    # Not an SOP exit - a stock spread is meant to be off by 21 DTE, before
+    # early assignment - so it is named, but it does not count as by the rules.
+    ("assigned", "Assigned, long option exercised", "amber", False),
     ("rolled", "Rolled to a new position", "neutral", False),
 ]
 _OTHER_BUCKET = ("Closed for another reason", "red", False)
