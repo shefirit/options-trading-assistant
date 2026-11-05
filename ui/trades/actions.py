@@ -1313,6 +1313,50 @@ def _assign_form(p, kp: str = "detail") -> None:
                 st.rerun()
 
 
+# Her AMAT spread (2026-11-05): the short 450 put was assigned the day before
+# expiry and she exercised the long 430 put to sell the shares straight back.
+# The close form had no word for that, so she could not record it at all.
+ASSIGNED_EXERCISED = "Assigned - exercised my long option"
+
+
+def spread_width(p) -> Optional[float]:
+    """The width of a plain two-leg vertical, in points; None for anything else.
+
+    Only a single short and a single long of the same type - a condor's width
+    depends on which side was assigned, so the form does not guess at it.
+    """
+    shorts = [l for l in p.legs if l.action is Action.SELL]
+    longs = [l for l in p.legs if l.action is Action.BUY]
+    if len(shorts) != 1 or len(longs) != 1:
+        return None
+    if shorts[0].option_type is not longs[0].option_type:
+        return None
+    return abs(float(shorts[0].strike) - float(longs[0].strike))
+
+
+def _assigned_exercised_hint(p, exit_cost: float) -> None:
+    """Tell her what to type: the shares were bought at one strike and sold at
+    the other, so the close cost exactly the width - whatever TOS marks the
+    legs at. Warns when the typed price is something else."""
+    width = spread_width(p)
+    if width is None:
+        theme.note("Type the difference between the two strikes as the price "
+                   "you paid - the shares were bought at one and sold at the "
+                   "other.")
+        return
+    contracts = int(p.contracts or 1)
+    total = width * 100 * contracts
+    theme.note(components._esc(
+        f"You were assigned on one strike and exercised the other, so closing "
+        f"cost exactly the width: type **{width:.2f}** as the price you paid "
+        f"(**${total:,.0f}**). Add any exercise fee Schwab charged."))
+    if exit_cost + 0.005 < total:
+        st.warning(components._esc(
+            f"That is less than the ${total:,.0f} width. After an assignment "
+            "and exercise the close always costs the full width - check the "
+            "price above."))
+
+
 def _close_form(p, live: dict, label: str = "✔️ Close this trade (records the result)",
                 kp: str = "detail") -> None:
     """Record the close of an open trade.
@@ -1370,9 +1414,11 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
             ["Profit target (50%) hit", "21 DTE time exit",
              "21 DTE credit roll (opened a new spread)", "Stop loss hit",
              "Rolled to a new position", "Expired worthless",
-             "Shares called away", "Closed early", "Other"],
+             "Shares called away", ASSIGNED_EXERCISED, "Closed early", "Other"],
             index=None, placeholder="Pick the reason - this scores your rules",
             key=f"exit_reason_{kp}_{p.trade_id}")
+        if reason == ASSIGNED_EXERCISED:
+            _assigned_exercised_hint(p, exit_cost)
         note = st.text_input("Lesson learned (optional - future you says thanks)",
                              key=f"exit_note_{kp}_{p.trade_id}")
         # The close banks the capital result. Roll credits - and anything a
