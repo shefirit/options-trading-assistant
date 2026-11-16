@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from src.engine.models import Action, OptionType
 from src.engine.positions import Position
+from src.engine.wheel import BOUGHT_SHARE_STRATEGIES
 
 # SOP: "consider rolling when price comes within 1-1.5% of your short strike".
 STRIKE_PROXIMITY = 0.015
@@ -435,7 +436,7 @@ def evaluate(
     # ---- 0-i. A weekly call whose date has passed. Every Friday on this
     # strategy, so it gets a plain instruction rather than "could not price"
     # (the chain no longer lists a contract that has expired).
-    if (position.strategy_key == "weekly_covered_call" and position.has_short_call
+    if (position.strategy_key in BOUGHT_SHARE_STRATEGIES and position.has_short_call
             and dte_left is not None and dte_left < 0):
         return ExitSignal(
             action="expired", tone="amber",
@@ -447,6 +448,16 @@ def evaluate(
             notes=[drop] if drop else [])
 
     # ---- 0. Nothing sold: none of the exit rules have anything to measure.
+    # Plain shares are not "missing" a call - holding them IS the trade.
+    if position.is_uncovered and position.strategy_key == "shares":
+        return ExitSignal(
+            action="hold", tone="neutral",
+            headline="Holding the shares",
+            reason=("Just the shares - no option on this trade, so there are no "
+                    "exit rules to watch. If you sell a call against them, record "
+                    "it with ➕ Sell a call against it. When you sell the shares, "
+                    "record it with ✔️ Close this trade."),
+            notes=[drop] if drop else [])
     if position.is_uncovered and position.strategy_key == "weekly_covered_call":
         return ExitSignal(
             action="uncovered", tone="amber",
@@ -499,7 +510,7 @@ def evaluate(
     # Not on the weekly covered call: it has no rules by her choice, and its
     # calls are written right AT this delta, so the flag would fire every week.
     if (short_delta is not None and short_delta >= DELTA_RED_FLAG
-            and position.strategy_key != "weekly_covered_call"):
+            and position.strategy_key not in BOUGHT_SHARE_STRATEGIES):
         notes.append(
             f"The short leg's delta is now {short_delta:.2f} - past your ~0.30 red "
             "flag, so assignment is getting more likely. On a Wheel that is an "

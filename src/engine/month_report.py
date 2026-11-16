@@ -58,6 +58,9 @@ _EXIT_BUCKETS: list[tuple[str, str, str, bool]] = [
     # early assignment - so it is named, but it does not count as by the rules.
     ("assigned", "Assigned, long option exercised", "amber", False),
     ("rolled", "Rolled to a new position", "neutral", False),
+    # A Buy shares trade sold with no call on it. That strategy has no rules,
+    # so it is neither a win for discipline nor "another reason".
+    ("sold the shares", "Sold the shares", "neutral", False),
 ]
 _OTHER_BUCKET = ("Closed for another reason", "red", False)
 

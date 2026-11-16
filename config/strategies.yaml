@@ -439,6 +439,33 @@ strategies:
     sizing:
       max_loss_basis: shares      # 100 shares per contract, no protection
 
+  # Rita, 2026-11-16: "in my trades i want to add a option just to buy shares".
+  # Shares and nothing else - no option on day one. Log only: it is in the
+  # Log a trade list and nowhere the app looks for setups (Find a trade, the
+  # scans). If she later sells a call against them it stays ONE trade, run
+  # the way a Buy / Write is - so it shares every Buy / Write share rule
+  # through wheel.BOUGHT_SHARE_STRATEGIES. No rules, same as the Buy / Write:
+  # the 10% drop under her cost is a warning, never an instruction to sell.
+  shares:
+    name: "Buy shares"
+    family: shares
+    log_only: true
+    market_outlook: "Bullish"
+    difficulty: "Beginner"
+    underlying_style: us
+    plain_english: "You BUY shares of a stock or ETF and hold them - no option at all. If you later sell a call against them, record it on the trade's card with ➕ Sell a call against it, and it becomes a covered call on the same trade."
+    tos_hint: "You own the shares (+100 per lot). No options."
+    requires_shares: true
+    legs: []
+    entry:
+      # Where the date box opens if she later sells a call against them.
+      short_call_dte_target: 30
+    exit:
+      accepts_assignment: true    # a call written later may call them away - fine
+      share_drop_warn_pct: 10     # warn once the shares are 10% under her real cost
+    sizing:
+      max_loss_basis: shares
+
   # ---------------- COVERED CALLS (own 100 real shares) ----------------
   covered_call_model_1:
     name: "Covered Call - Model 1: Absolute Protection (Collar)"

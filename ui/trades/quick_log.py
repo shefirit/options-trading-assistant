@@ -122,6 +122,9 @@ def _quick_log_body(settings, strategies, provider) -> None:
     # them, with no put side at all - so it needs the share price, and none of
     # the protective-put boxes Models 1-3 ask for.
     owns_shares = basis == "shares"
+    # Buy shares: the shares and nothing else, so there is no option to ask
+    # about at all - no expiration, no strike, no credit.
+    stock_only = owns_shares and not strat.get("legs")
     # How far out this strategy's expiration normally sits, so the date box
     # opens near the right place. A LEAPS put is a year or more out like the
     # bought call is, and defaulting it to 45 days just means retyping.
@@ -137,7 +140,9 @@ def _quick_log_body(settings, strategies, provider) -> None:
         # every money box below is now a PRICE, and a price only becomes
         # dollars once the app knows how many contracts it applies to.
         d1, d2, d3 = st.columns([2, 2, 1])
-        expiration = d1.date_input(
+        if stock_only:
+            d1, d2 = d2, d1   # "Opened on" takes the first box, the other stays empty
+        expiration = today if stock_only else d1.date_input(
             "Expiration of the call you SOLD" if owns_shares
             else "Expiration date (from your TOS fill)"
             if not has_far_leg else "Short call expiration (the near one)",
@@ -147,7 +152,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
             min_value=today,
             key=f"ql_exp_{strategy_key}", format=components.DATE_FMT)
         opened_on = d2.date_input(
-            "Opened on", value=today, max_value=today,
+            "Bought on" if stock_only else "Opened on",
+            value=today, max_value=today,
             help="Change this only if you placed the trade on an earlier day.",
             key=f"ql_opened_{strategy_key}", format=components.DATE_FMT)
         # On the share strategies the label spells out the x100: "Contracts"
@@ -156,7 +162,8 @@ def _quick_log_body(settings, strategies, provider) -> None:
         holds_shares = owns_shares or basis in ("shares_plus_protection",
                                                 "ratio_risk")
         contracts = d3.number_input(
-            "Contracts (1 = 100 shares)" if holds_shares else "Contracts",
+            "Lots of 100 shares (1 = 100)" if stock_only
+            else "Contracts (1 = 100 shares)" if holds_shares else "Contracts",
             min_value=1, max_value=50, value=1, step=1,
             key=f"ql_contracts_{strategy_key}",
             help="One contract covers 100 shares, so 100 shares is 1 and "
@@ -210,7 +217,12 @@ def _quick_log_body(settings, strategies, provider) -> None:
                      "shares per contract - the app does the x100. If you "
                      "already owned the shares, use what you paid for them.")
             with s2:
-                theme.note("No put underneath on this one: the shares carry the "
+                theme.note("Just the shares - no option. The app tracks what "
+                           "they are worth against what you paid, and warns you "
+                           "if they fall 10% under it - it never tells you to "
+                           "sell. Sell a call against them later and it stays "
+                           "this same trade." if stock_only else
+                           "No put underneath on this one: the shares carry the "
                            "whole downside, less what the calls pay you. The "
                            "app warns you if they fall well below what they "
                            "really cost you - it never tells you to sell.")
@@ -268,7 +280,7 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 strikes["financing_put"] = put_strike
             else:
                 put_credit = 0.0
-        else:
+        elif not stock_only:
             if owns_shares:
                 # Rita, 2026-10-12: "sometimes i will buy 100 shares and just
                 # 1-2 days after will sell a call". So the call is optional
@@ -374,7 +386,10 @@ def _quick_log_body(settings, strategies, provider) -> None:
                                           if far_exp else None))
                 notes.extend(fill_notes)
             except LookupError:
-                notes.append("Just the shares for now. When you sell the call, "
+                notes.append("Just the shares. If you later sell a call against "
+                             "them, record it with ➕ Sell a call against it on "
+                             "this trade's card in My trades." if stock_only else
+                             "Just the shares for now. When you sell the call, "
                              "record it with ➕ Sell a call against it on this "
                              "trade's card in My trades.")
             except Exception:
@@ -460,18 +475,23 @@ def _quick_log_body(settings, strategies, provider) -> None:
                 "put_shares": 100 * n_puts * n_con,
                 "has_target": bool(strat.get("exit", {}).get("profit_target_pct")),
                 "entry_check": entry_check,
+                "stock_only": stock_only,
             }
 
     draft = st.session_state.get("ql_draft")
     if draft:
         with st.container(border=True):
             p_trade, p_size = draft["trade"], draft["sizing"]
+            size_words = (f"{p_trade.contracts * 100:,} shares"
+                          if draft.get("stock_only")
+                          else f"{p_trade.contracts} contract(s)")
             theme.note(f"**Ready to save: {p_trade.underlying} · "
-                       f"{draft['strat_name']}** · {p_trade.contracts} "
-                       f"contract(s) · opened {components.fmt_date(draft['opened_on'])} · "
+                       f"{draft['strat_name']}** · {size_words} · "
+                       f"opened {components.fmt_date(draft['opened_on'])} · "
                        + (f"expires {components.fmt_date(draft['expiration'])} "
                           f"({draft['dte']} days)" if draft["expiration"] else
-                          "shares only - no call sold yet"))
+                          ("shares only" if draft.get("stock_only")
+                           else "shares only - no call sold yet")))
             open_cash = float(p_size.get("open_cash", p_size["credit"]))
             collateral = float(draft.get("collateral") or 0.0)
             if draft.get("bought"):
@@ -507,6 +527,17 @@ def _quick_log_body(settings, strategies, provider) -> None:
                         f"{int(draft.get('put_shares') or 0):,} shares. That, not "
                         f"the \\${-open_cash:,.0f} that left today, is what this "
                         "trade actually ties up.")
+            elif draft.get("stock_only"):
+                # No option, so no credit, no target and no buying-power
+                # puzzle: what left the account is the shares, and that is
+                # also the most they can lose.
+                m = st.columns(2)
+                m[0].metric("The shares cost you", money(-open_cash),
+                            help="Price per share x 100 per lot. This is the "
+                                 "money at risk and what every return is "
+                                 "measured on.")
+                m[1].metric("Most you can lose", money(p_size["max_loss"]),
+                            help="Only if the stock went to zero.")
             elif open_cash < 0:
                 # A PMCC or covered call takes money OUT to open. Showing only
                 # the call credit here is what made a multi-thousand-dollar
@@ -541,7 +572,9 @@ def _quick_log_body(settings, strategies, provider) -> None:
                            + ". Wrong by a factor of 100? Type the price in "
                              "the box above, not the dollar total.")
             broke = draft.get("broke") or []
-            if draft["passed"] and not broke:
+            if draft.get("stock_only"):
+                pass   # shares only - no SOP rule applies, so no verdict to show
+            elif draft["passed"] and not broke:
                 st.markdown(theme.chip("SOP check: passed", "green"),
                             unsafe_allow_html=True)
             else:

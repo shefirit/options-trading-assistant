@@ -34,6 +34,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from src.engine.models import Action, Leg, OptionType
+from src.engine.wheel import BOUGHT_SHARE_STRATEGIES
 
 
 class WingEvent(BaseModel):
@@ -2851,7 +2852,7 @@ def _open_detail(position: Position, side: Optional[Action] = None) -> str:
     # Shares bought with no call yet open with no legs, and that is day one.
     # Falling back to today's legs told her TQQQ as "Bought 100 shares, sold
     # the 77.5 call" on a day she only bought shares.
-    legs = (position.open_legs if position.strategy_key == "weekly_covered_call"
+    legs = (position.open_legs if position.strategy_key in BOUGHT_SHARE_STRATEGIES
             else position.open_legs or position.legs)
     bought = [leg for leg in legs
               if leg.action == Action.BUY and side is not Action.SELL]

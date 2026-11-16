@@ -2198,7 +2198,8 @@ def _width_sanity_note(names: tuple, width) -> None:
 
 def _tab_build(settings, strategies, provider) -> None:
     from src.data import stock_universe
-    keys = list(strategies.keys())
+    # Log-only strategies (Buy shares) have no option to scan for or build.
+    keys = [k for k, s in strategies.items() if not s.get("log_only")]
     # The strategy she trades most, not whichever happens to be first in
     # config/strategies.yaml. A handoff from Market, Picks or Analyze still
     # overrides it - those set build_strategy before this runs.

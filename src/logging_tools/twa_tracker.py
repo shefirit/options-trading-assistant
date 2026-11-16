@@ -33,6 +33,7 @@ from typing import Any, Optional
 from src.engine.config_loader import load_settings
 from src.engine.models import Action, OptionType
 from src.engine.positions import Position, before_share_merges, parse_rows
+from src.engine.wheel import BOUGHT_SHARE_STRATEGIES
 
 # Strategies the tracker has a type for. Everything else is skipped, with the
 # reason shown on the Settings sync panel.
@@ -40,7 +41,7 @@ INCLUDED = {
     "cash_secured_put", "wheel", "leaps_put",
     "put_credit_spread",
     "poor_mans_covered_call", "long_call_leaps",
-    "weekly_covered_call",
+    "weekly_covered_call", "shares",
 }
 _SINGLE_PUT = {"cash_secured_put", "wheel", "leaps_put"}
 _LONG_CALL = {"poor_mans_covered_call", "long_call_leaps"}
@@ -151,7 +152,7 @@ def _opening_rows(p: Position) -> tuple[list[_Row], str]:
     # Shares bought with no call yet open with no legs at all, and that is the
     # day-one truth. Falling back to today's legs dated a call sold a week
     # later to the day the shares were bought, then "rolled" it to itself.
-    legs = (p.open_legs if key == "weekly_covered_call"
+    legs = (p.open_legs if key in BOUGHT_SHARE_STRATEGIES
             else p.open_legs or p.legs)
     c = max(int(p.contracts or 1), 1)
     sold = [l for l in legs if l.action == Action.SELL]
@@ -178,9 +179,9 @@ def _opening_rows(p: Position) -> tuple[list[_Row], str]:
                      long_strike=long_.strike, collateral=width * 100 * q,
                      note=_pcs_note(short.strike, long_.strike))], ""
 
-    if key == "weekly_covered_call" or key in _LONG_CALL:
+    if key in BOUGHT_SHARE_STRATEGIES or key in _LONG_CALL:
         rows: list[_Row] = []
-        if key == "weekly_covered_call":
+        if key in BOUGHT_SHARE_STRATEGIES:
             if bought or not p.shares_cost:
                 return [], "no shares on the trade"
             cost = float(p.shares_cost)
@@ -191,7 +192,7 @@ def _opening_rows(p: Position) -> tuple[list[_Row], str]:
         else:
             if len(bought) != 1 or bought[0].option_type != OptionType.CALL:
                 return [], "not one long call"
-        if key == "weekly_covered_call" and (
+        if key in BOUGHT_SHARE_STRATEGIES and (
                 len(sold) > 1 or any(l.option_type != OptionType.CALL for l in sold)):
             return [], "more than one call sold on day one"
 
