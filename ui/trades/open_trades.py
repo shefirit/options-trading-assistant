@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.engine.wheel import BOUGHT_SHARE_STRATEGIES
 from ui import components, theme
 from ui.trades.actions import (
     _add_wing_form,
@@ -349,7 +350,7 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
     if cushion:
         side = "call" if cushion["option_type"] == "call" else "put"
         direction = "rise" if side == "call" else "fall"
-        if cushion["breached"] and side == "call" and p.strategy_key == "weekly_covered_call":
+        if cushion["breached"] and side == "call" and p.strategy_key in BOUGHT_SHARE_STRATEGIES:
             theme.note(
                 f"**{p.underlying} is at \\${px:,.2f}, past the {cushion['strike']:g} "
                 f"call you sold.** If it stays there to expiration your shares are "
@@ -365,7 +366,7 @@ def _trade_numbers(p, live: dict, sig, strategies, px) -> None:
                 f"**{p.underlying} is at \\${px:,.2f}.** The closest option you sold "
                 f"is the **{cushion['strike']:g} {side}** - price would have to "
                 f"{direction} **{abs(cushion['room_pct']) * 100:.1f}%** to reach it. "
-                + ("" if p.strategy_key == "weekly_covered_call" else
+                + ("" if p.strategy_key in BOUGHT_SHARE_STRATEGIES else
                    "Your SOP says think about rolling once that room drops "
                    "under 1.5%."))
         for lk in cushion.get("locked") or []:

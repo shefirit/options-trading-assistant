@@ -129,6 +129,9 @@ def _write_call_form(p, provider, kp: str = "detail") -> None:
                    "here. "
                    + ("This is your weekly call - the date below opens a week "
                       "out. " if weekly else
+                      "A call against shares you bought - it stays this same "
+                      "trade, and if the stock ends above the strike the shares "
+                      "are sold at it. " if p.strategy_key == "shares" else
                       "Your SOP's PMCC sells about 30 days out at delta 0.30. ")
                    + "The credit is banked in this month's profit and the "
                    "app starts watching the new call.")
@@ -1317,6 +1320,9 @@ def _assign_form(p, kp: str = "detail") -> None:
 # expiry and she exercised the long 430 put to sell the shares straight back.
 # The close form had no word for that, so she could not record it at all.
 ASSIGNED_EXERCISED = "Assigned - exercised my long option"
+# The ending of a Buy shares trade with no call on it. Not an SOP exit - that
+# trade has no rules - so month_report files it as neutral, not "by the rules".
+SOLD_THE_SHARES = "Sold the shares"
 
 
 def spread_width(p) -> Optional[float]:
@@ -1372,8 +1378,12 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
                    "your results stay accurate.")
         default_cost = float(live["cost_to_close"]) if live.get("cost_to_close") \
             is not None else 0.0
+        shares_only = p.shares_cost > 0 and not p.legs
         if p.is_debit:
-            if p.shares_cost > 0:
+            if shares_only:
+                theme.note("**Sold the shares?** Type the price per share on your "
+                           "fill - the app does the x100.")
+            elif p.shares_cost > 0:
                 theme.note("**Shares called away?** Type the call's strike as the "
                            "price received - your shares were sold at exactly "
                            "that, and the call is used up. **Sold them "
@@ -1389,10 +1399,12 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
                 # Selling a LEAPS back is routinely 50.00+ a share, so the
                 # typed-a-total guard has no business firing here.
                 total_hint_above=None,
-                help="Selling the LEAPS back, minus buying back the short "
-                     "call - the one net price on your fill, per share. A "
-                     "50.00 credit on 1 contract = $5,000. If closing "
-                     "somehow cost you money, type 0 and note it below.")
+                help=("The price per share you sold them at. 100 shares at "
+                      "50.00 = $5,000." if shares_only else
+                      "Selling the LEAPS back, minus buying back the short "
+                      "call - the one net price on your fill, per share. A "
+                      "50.00 credit on 1 contract = $5,000. If closing "
+                      "somehow cost you money, type 0 and note it below."))
             close_cash = float(proceeds)
             exit_cost = 0.0
         else:
@@ -1409,12 +1421,14 @@ def _close_form(p, live: dict, label: str = "✔️ Close this trade (records th
         # rule-following win whatever actually happened. It mislabelled a real
         # -$340 META loss as a profit target and counted it toward "By the
         # rules", which is the one score on the tab she controls directly.
+        # Shares with no option on them have one real ending, so it leads.
+        reasons = ([SOLD_THE_SHARES] if shares_only else []) + [
+            "Profit target (50%) hit", "21 DTE time exit",
+            "21 DTE credit roll (opened a new spread)", "Stop loss hit",
+            "Rolled to a new position", "Expired worthless",
+            "Shares called away", ASSIGNED_EXERCISED, "Closed early", "Other"]
         reason = st.selectbox(
-            "Why you closed it",
-            ["Profit target (50%) hit", "21 DTE time exit",
-             "21 DTE credit roll (opened a new spread)", "Stop loss hit",
-             "Rolled to a new position", "Expired worthless",
-             "Shares called away", ASSIGNED_EXERCISED, "Closed early", "Other"],
+            "Why you closed it", reasons,
             index=None, placeholder="Pick the reason - this scores your rules",
             key=f"exit_reason_{kp}_{p.trade_id}")
         if reason == ASSIGNED_EXERCISED:

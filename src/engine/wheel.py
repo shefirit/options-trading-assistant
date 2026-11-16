@@ -25,7 +25,9 @@ from typing import Optional
 # pulling down - so they get the same numbers. Models 1-3 own shares too but
 # are deliberately left out: their protective puts change what the shares can
 # lose, and they have their own protection read on the card.
-BOUGHT_SHARE_STRATEGIES = ("weekly_covered_call",)
+# "shares" (Buy shares, 2026-11-16) is the same thing before any call: once
+# she writes one against them it IS a Buy / Write.
+BOUGHT_SHARE_STRATEGIES = ("weekly_covered_call", "shares")
 
 
 @dataclass(frozen=True)
